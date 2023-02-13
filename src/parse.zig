@@ -41,8 +41,8 @@ pub const Parser = struct {
     infix: ?InfixFn
   };
   const ptable = [_]ExprParseTable{
-    .{.bp = .Term, .prefix = null, .infix = Self.binary},         // TkPlus
-    .{.bp = .Term, .prefix = null, .infix = Self.binary},         // TkMinus
+    .{.bp = .Term, .prefix = Self.unary, .infix = Self.binary},   // TkPlus
+    .{.bp = .Term, .prefix = Self.unary, .infix = Self.binary},   // TkMinus
     .{.bp = .Factor, .prefix = null, .infix = Self.binary},       // TkSlash
     .{.bp = .Factor, .prefix = null, .infix = Self.binary},       // TkStar
     .{.bp = .Term, .prefix = Self.grouping, .infix = null},       // TkLBracket
@@ -59,10 +59,15 @@ pub const Parser = struct {
     .{.bp = .Factor, .prefix = null, .infix = Self.binary},       // TkPerc
     .{.bp = .None, .prefix = null, .infix = null},                // TkComma
     .{.bp = .Unary, .prefix = null, .infix = null},               // TkExMark
+    .{.bp = .BitXor, .prefix = null, .infix = Self.binary},       // TkCaret
+    .{.bp = .BitOr, .prefix = null, .infix = Self.binary},        // TkPipe
+    .{.bp = .Unary, .prefix = Self.unary, .infix = null},         // TkTilde
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},   // TkLeq
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},   // TkGeq
     .{.bp = .Equality, .prefix = null, .infix = Self.binary},     // Tk2Eq
     .{.bp = .Equality, .prefix = null, .infix = Self.binary},     // TkNeq
+    .{.bp = .Shift, .prefix = null, .infix = Self.binary},        // Tk2Lthan
+    .{.bp = .Shift, .prefix = null, .infix = Self.binary},        // Tk2Rthan
     .{.bp = .None, .prefix = null, .infix = null},                // TkIf
     .{.bp = .None, .prefix = null, .infix = null},                // TkFor
     .{.bp = .None, .prefix = null, .infix = null},                // TkElse
@@ -202,6 +207,27 @@ pub const Parser = struct {
   fn string(self: *Self, assignable: bool) *Node {
     _ = assignable;
     return self.literal(.TkStr);
+  }
+
+  fn unary(self: *Self, assignable: bool) *Node {
+    _ = assignable;
+    const bp = ptable[@enumToInt(self.current_tok.ty)].bp;
+    const op = self.current_tok.ty.optype();
+    const line_tok = self.current_tok;
+    self.advance();
+    const expr = self._parse(bp);
+    const node = self.newNode();
+    // rewrite -expr to 0 - expr
+    if (op == .OpSub) {
+      const num = self.newNode();
+      num.* = .{.AstNum = ast.NumberNode.init(0, line_tok)};
+      node.* = .{.AstBinary = ast.BinaryNode.init(num, expr, op, line_tok.line)};
+    } else if (op == .OpAdd) {
+      // rewrite +expr to expr
+      return expr;
+    }
+    node.* = .{.AstUnary = ast.UnaryNode.init(expr, op, line_tok.line)};
+    return node;
   }
 
   fn binary(self: *Self, lhs: *Node, assignable: bool) *Node {

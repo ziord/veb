@@ -64,8 +64,23 @@ pub const Compiler = struct {
   }
 
   fn cUnary(self: *Self, node: *ast.UnaryNode) void {
-    _ = self;
-    _ = node;
+    const inst_op = node.op.toInstOp();
+    const isNum = node.expr.isNum();
+    const rx = self.getScratchReg();
+    // check that we don't exceed the 18 bits of rk/bx (+ 1 for expr)
+    if ((self.code.values.items.len + value.MAX_REGISTERS + 1) < value.Code._18bits) {
+      if (isNum) {
+        const rk = self.code.storeConst(value.numberVal(node.expr.AstNum.value));
+        self.code.write2ArgsInst(inst_op, rx, rk, @intCast(u32, node.line));
+        node.reg = rx;
+        return;
+      }
+    }
+    self.c(node.expr);
+    const rk = node.expr.reg();
+    self.code.write2ArgsInst(inst_op, rx, rk, @intCast(u32, node.line));
+    self.freeScratchReg(rk);
+    node.reg = rx;
   }
 
   fn cBinary(self: *Self, node: *ast.BinaryNode) void {

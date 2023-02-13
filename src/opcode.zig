@@ -22,7 +22,31 @@ pub const OpCode = enum (u8) {
   // [6] [8]  [9]    [9]
   Mod,
 
-  // load rx, memidx
+  // xor rx, rk(x), rk(x)
+  // [6] [8]  [9]    [9]
+  Xor,
+
+  // or rx, rk(x), rk(x)
+  // [6] [8]  [9]    [9]
+  Or,
+
+  // and rx, rk(x), rk(x)
+  // [6] [8]  [9]    [9]
+  And,
+
+  // shr rx, rk(x), rk(x)
+  // [6] [8]  [9]    [9]
+  Shr,
+
+  // shl rx, rk(x), rk(x)
+  // [6] [8]  [9]    [9]
+  Shl,
+
+  // inv rx, rk(x)
+  // [6] [8]  [18]
+  Inv,
+
+  // load rx, bx
   //  [6] [8]  [18]
   Load,
 

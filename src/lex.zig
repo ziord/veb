@@ -28,10 +28,15 @@ pub const TokenType = enum (u8) {
   TkPerc,           // %
   TkComma,          // ,
   TkExMark,         // !
+  TkCaret,          // ^
+  TkPipe,           // |
+  TkTilde,          // ~
   TkLeq,            // <=
   TkGeq,            // >=
   Tk2Eq,            // ==
   TkNeq,            // !=
+  Tk2Lthan,         // <<
+  Tk2Gthan,         // >>
   TkIf,             // if
   TkFor,            // for
   TkElse,           // else
@@ -59,6 +64,12 @@ pub const TokenType = enum (u8) {
       .TkEqual => .OpAssign,
       .TkExMark => .OpNot,
       .TkPerc => .OpMod,
+      .TkCaret => .OpBitXor,
+      .TkPipe => .OpBitOr,
+      .TkAmp => .OpBitAnd,
+      .Tk2Lthan => .OpBitLShift,
+      .Tk2Gthan => .OpBitRShift,
+      .TkTilde => .OpBitInvert,
       else => unreachable,
     };
   }
@@ -84,10 +95,15 @@ pub const TokenType = enum (u8) {
       .TkPerc => "%",
       .TkComma => ",",
       .TkExMark => "!",
+      .TkCaret => "^",
+      .TkPipe => "|",
+      .TkTilde => "~",
       .TkLeq => "<=",
       .TkGeq => ">=",
       .Tk2Eq => "==",
       .TkNeq => "!=",
+      .Tk2Lthan => "<<",
+      .Tk2Gthan => ">>",
       .TkIf => "if",
       .TkFor => "for",
       .TkElse => "else",
@@ -116,6 +132,12 @@ pub const OpType = enum (u8) {
   OpGrt,
   OpAssign,
   OpNot,
+  OpBitXor,
+  OpBitOr,
+  OpBitAnd,
+  OpBitLShift,
+  OpBitRShift,
+  OpBitInvert,
 
   pub fn toInstOp(self: @This()) OpCode {
     return switch (self) {
@@ -124,6 +146,12 @@ pub const OpType = enum (u8) {
       .OpDiv => OpCode.Div,
       .OpMul => OpCode.Mul,
       .OpMod => OpCode.Mod,
+      .OpBitXor => OpCode.Xor,
+      .OpBitOr => OpCode.Or,
+      .OpBitAnd => OpCode.And,
+      .OpBitLShift => OpCode.Shl,
+      .OpBitRShift => OpCode.Shr,
+      .OpBitInvert => OpCode.Inv,
       else => unreachable, // todo
     };
   }
@@ -508,11 +536,14 @@ pub const Lexer = struct {
       ';' => self.newToken(.TkSemic),
       '{' => self.newToken(.TkLCurly),
       '}' => self.newToken(.TkRCurly),
+      '^' => self.newToken(.TkCaret),
+      '|' => self.newToken(.TkPipe),
+      '~' => self.newToken(.TkTilde),
       '"' => self.lexStr(),
       '!' => self.newToken(if (self.match('=')) .TkNeq else .TkExMark),
       '=' => self.newToken(if (self.match('=')) .Tk2Eq else .TkEqual),
-      '<' => self.newToken(if (self.match('=')) .TkLeq else .TkLthan),
-      '>' => self.newToken(if (self.match('=')) .TkGeq else .TkGthan),
+      '<' => self.newToken(if (self.match('=')) .TkLeq else if (self.match('<')) .Tk2Lthan else .TkLthan),
+      '>' => self.newToken(if (self.match('=')) .TkGeq else if (self.match('>')) .Tk2Gthan else .TkGthan),
       else => self.errToken("Unknown token"),
     };
   }

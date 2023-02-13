@@ -152,6 +152,81 @@ pub const VM = struct {
           self.stack[rx] = vl.numberVal(@rem(vl.asNumber(a), vl.asNumber(b)));
           continue;
         },
+        .Xor => {
+          // xor rx, rk(x), rk(x)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          const a = self.RK(rk1);
+          const b = self.RK(rk2);
+          self.assert(vl.isNumber(a));
+          self.assert(vl.isNumber(b));
+          self.stack[rx] = vl.numberVal(@intToFloat(f64, (@floatToInt(i64, vl.asNumber(a)) ^ @floatToInt(i64, vl.asNumber(b)))));
+          continue;
+        },
+        .Or => {
+          // or rx, rk(x), rk(x)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          const a = self.RK(rk1);
+          const b = self.RK(rk2);
+          self.assert(vl.isNumber(a));
+          self.assert(vl.isNumber(b));
+          self.stack[rx] = vl.numberVal(@intToFloat(f64, (@floatToInt(i64, vl.asNumber(a)) | @floatToInt(i64, vl.asNumber(b)))));
+          continue;
+        },
+        .And => {
+          // and rx, rk(x), rk(x)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          const a = self.RK(rk1);
+          const b = self.RK(rk2);
+          self.assert(vl.isNumber(a));
+          self.assert(vl.isNumber(b));
+          self.stack[rx] = vl.numberVal(@intToFloat(f64, (@floatToInt(i64, vl.asNumber(a)) & @floatToInt(i64, vl.asNumber(b)))));
+          continue;
+        },
+        .Shl => {
+          // shl rx, rk(x), rk(x)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          const a = self.RK(rk1);
+          const b = self.RK(rk2);
+          self.assert(vl.isNumber(a));
+          self.assert(vl.isNumber(b));
+          self.stack[rx] = vl.numberVal(@intToFloat(f64, std.math.shl(i64, @floatToInt(i64, vl.asNumber(a)), @floatToInt(i64, vl.asNumber(b)))));
+          continue;
+        },
+        .Shr => {
+          // shr rx, rk(x), rk(x)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          const a = self.RK(rk1);
+          const b = self.RK(rk2);
+          self.assert(vl.isNumber(a));
+          self.assert(vl.isNumber(b));
+          self.stack[rx] = vl.numberVal(@intToFloat(f64, std.math.shr(i64, @floatToInt(i64, vl.asNumber(a)), @floatToInt(i64, vl.asNumber(b)))));
+          continue;
+        },
+        .Inv => {
+          // inv rx, rk(x): rk(x) == bx
+          var rx: u32 = undefined;
+          var rk: u32 = undefined;
+          self.read2Args(inst, &rx, &rk);
+          const a = self.RK(rk);
+          self.assert(vl.isNumber(a));
+          self.stack[rx] = vl.numberVal(@intToFloat(f64, ~@floatToInt(i64, vl.asNumber(a))));
+          continue;
+        },
         .Load => {
           // load rx, bx
           var rx: u32 = undefined;

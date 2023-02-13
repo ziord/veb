@@ -68,7 +68,7 @@ pub const UnaryNode = struct {
   reg: u32,
 
   pub fn init(expr: *AstNode, op: OpType, line: usize) @This() {
-    return @This() {.expr = expr, .op = op, .line = line};
+    return @This() {.expr = expr, .op = op, .line = line, .reg = undefined};
   }
 };
 

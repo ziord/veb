@@ -41,6 +41,12 @@ pub const Disassembler = struct {
       .Mul => _3ArgsInst("mul", word),
       .Div => _3ArgsInst("div", word),
       .Mod => _3ArgsInst("mod", word),
+      .Xor => _3ArgsInst("xor", word),
+      .Or => _3ArgsInst("or", word),
+      .And => _3ArgsInst("and", word),
+      .Shl => _3ArgsInst("shl", word),
+      .Shr => _3ArgsInst("shr", word),
+      .Inv => _2ArgsInst("inv", word),
       .Load => _2ArgsInst("load", word),
       .Ret => plainInst("ret"),
     }

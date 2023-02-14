@@ -31,12 +31,6 @@ pub const VM = struct {
     return self.code.words.items[self.ip - 1];
   }
 
-  inline fn readInstOp(self: *Self, word: u32) OpCode {
-    _ = self;
-    const op = (word >> 26) & Code._6bits;
-    return @intToEnum(OpCode, op);
-  }
-
   inline fn read3Args(self: *Self, word: u32, a1: *u32, a2: *u32, a3: *u32) void {
     _ = self;
     a1.* = (word >> 18) & Code._8bits;
@@ -83,7 +77,7 @@ pub const VM = struct {
   pub fn run(self: *Self) RuntimeError!void {
     while (true) {
       const inst = @call(.always_inline, self.readWord, .{});
-      switch (@call(.always_inline, self.readInstOp, .{inst})) {
+      switch (@call(.always_inline, Code.readInstOp, .{inst})) {
         .Add => {
           // add rx, rk(x), rk(x)
           var rx: u32 = undefined;
@@ -150,6 +144,28 @@ pub const VM = struct {
             return self.runtimeError("Modulo by zero\n", .{});
           }
           self.stack[rx] = vl.numberVal(@rem(vl.asNumber(a), vl.asNumber(b)));
+          continue;
+        },
+        .Cmp => {
+          // cmp rx, rk(x), rk(x) | cmp_op 
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          var next_inst = @call(.always_inline, self.readWord, .{});
+          const cmp_op = @call(.always_inline, Code.readInstOpNoConv, .{next_inst});
+          const a = self.RK(rk1);
+          const b = self.RK(rk2);
+          switch (@intToEnum(vl.OpType, cmp_op)) {
+            .OpLess => self.stack[rx] = vl.boolVal(vl.asNumber(a) < vl.asNumber(b)),
+            .OpGrt => self.stack[rx] = vl.boolVal(vl.asNumber(a) > vl.asNumber(b)),
+            .OpLeq => self.stack[rx] = vl.boolVal(vl.asNumber(a) <= vl.asNumber(b)),
+            .OpGeq => self.stack[rx] = vl.boolVal(vl.asNumber(a) >= vl.asNumber(b)),
+            // todo: type handling?
+            .OpEqq => self.stack[rx] = vl.boolVal(@call(.always_inline, vl.valueEqual, .{a, b})),
+            .OpNeq => self.stack[rx] = vl.boolVal(!@call(.always_inline, vl.valueEqual, .{a, b})),
+            else => unreachable,
+          }
           continue;
         },
         .Xor => {

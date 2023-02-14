@@ -6,11 +6,17 @@ const Code = value.Code;
 pub const Disassembler = struct {
   const Self = @This();
 
-  pub fn _3ArgsInst(name: []const u8, word: u32) void {
+
+  pub fn __3ArgsInst(name: []const u8, word: u32) void {
     const a1 = Code.readRX(word);
     const a2 = Code.readRK1(word);
     const a3 = Code.readRK2(word);
-    std.debug.print("{s} {}, {}, {}\n", .{name, a1, a2, a3});
+    std.debug.print("{s} {}, {}, {}", .{name, a1, a2, a3});
+  }
+
+  pub fn _3ArgsInst(name: []const u8, word: u32) void {
+    __3ArgsInst(name, word);
+    std.debug.print("\n", .{});
   }
 
   pub fn _2ArgsInst(name: []const u8, word: u32) void {
@@ -28,7 +34,8 @@ pub const Disassembler = struct {
     std.debug.print("{s}\n", .{name});
   }
 
-  pub fn disInstruction(code: Code, word: u32, idx: usize) void {
+  pub fn disInstruction(code: Code, word: u32, index: *usize) void {
+    const idx = index.*;
     if (idx > 0 and code.lines.items[idx] == code.lines.items[idx - 1]) {
       std.debug.print("   |\t{d:0>4}\t", .{idx});
     } else {
@@ -49,13 +56,20 @@ pub const Disassembler = struct {
       .Inv => _2ArgsInst("inv", word),
       .Load => _2ArgsInst("load", word),
       .Ret => plainInst("ret"),
+      .Cmp => {
+        __3ArgsInst("cmp", word);
+        index.* = index.* + 1; // cmp_op
+        const cmp_op = Code.readInstOpNoConv(code.words.items[index.*]);
+        std.debug.print(" ({})\n", .{@intToEnum(value.OpType, cmp_op)});
+      },
     }
   }
 
   pub fn disCode(code: Code, name: []const u8) void {
     std.debug.print(">>Disassembly of {s}<<\n", .{name});
-    for (code.words.items) |word, i| {
-      disInstruction(code, word, i);
+    var i: usize = 0;
+    while (i < code.words.items.len): (i += 1) {
+      disInstruction(code, code.words.items[i], &i);
     }
   }
 };

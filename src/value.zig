@@ -1,6 +1,7 @@
 const std = @import("std");
 const util = @import("util.zig");
 const OpCode = @import("opcode.zig").OpCode;
+pub const OpType = @import("lex.zig").OpType;
 
 pub const MAX_REGISTERS = 250;
 
@@ -8,12 +9,12 @@ pub const Value = u64;
 const QNAN = @as(u64, 0x7ffc000000000000);
 const SIGN_BIT = @as(u64, 0x8000000000000000);
 // TAGS
-const TAG_NONE = 0x1;     // 01
+const TAG_NIL = 0x1;      // 01
 const TAG_FALSE = 0x2;    // 10
 const TAG_TRUE = 0x3;     // 11
 const TAG_NOTHING = 0x4;  // 100
 // Values
-pub const NONE_VAL = @as(Value, (QNAN | TAG_NONE));
+pub const NIL_VAL = @as(Value, (QNAN | TAG_NIL));
 pub const FALSE_VAL = @as(Value, (QNAN | TAG_FALSE));
 pub const TRUE_VAL = @as(Value, (QNAN | TAG_TRUE));
 pub const NOTHING_VAL = @as(Value, (QNAN | TAG_NOTHING));
@@ -31,9 +32,28 @@ pub inline fn isNumber(val: Value) bool {
   return (val & QNAN) != QNAN;
 }
 
+pub inline fn boolVal(bl: bool) Value {
+  return if (bl) TRUE_VAL else FALSE_VAL;
+}
+
+pub inline fn asBool(val: Value) bool {
+  return val == TRUE_VAL;
+}
+
+pub inline fn isBool(val: Value) bool {
+  return (val | 1) == TRUE_VAL;
+}
+
+pub inline fn valueEqual(a: Value, b: Value) bool {
+  if (isNumber(a) and isNumber(b)) return asNumber(a) == asNumber(b);
+  return a == b;
+}
+
 pub fn printValue(val: Value) void {
   if (isNumber(val)) {
     std.debug.print("{d}", .{asNumber(val)});
+  } else if (isBool(val)) {
+    std.debug.print("{}", .{asBool(val)});
   }
 }
 
@@ -65,6 +85,11 @@ pub const Code = struct {
     return @intToEnum(OpCode, op);
   }
 
+
+  pub inline fn readInstOpNoConv(word: u32) u32 {
+    return (word >> 26) & Code._6bits;
+  }
+
   pub inline fn readRX(word: u32) u32 {
     // op [rx] rk1 rk2
     // 6   8    9   9
@@ -94,37 +119,37 @@ pub const Code = struct {
     return @intCast(u32, self.values.items.len - 1);
   }
 
-  pub fn writeByte(self: *Self, byte: u8, line: u32) void {
+  pub fn writeByte(self: *Self, byte: u8, line: usize) void {
     util.append(u32, &self.words, (byte & _32bits) << 24);
-    util.append(u32, &self.lines, line);
+    util.append(u32, &self.lines, @intCast(u32, line));
   }
 
-  pub fn write3ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, arg3: u32, line: u32) void {
+  pub fn write3ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, arg3: u32, line: usize) void {
     // [op 6bits][reg 8bits][reg 9bits][reg 9bits]
     const inst = ((@enumToInt(op) & _6bits) << 26) | ((arg1 & _8bits) << 18) | ((arg2 & _9bits) << 9) | ((arg3 & _9bits));
     util.append(u32, &self.words, inst);
-    util.append(u32, &self.lines, line);
+    util.append(u32, &self.lines, @intCast(u32, line));
   }
 
-  pub fn write2ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, line: u32) void {
+  pub fn write2ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, line: usize) void {
     // [op 6bits][reg 8bits][reg 18bits]
     const inst = ((@enumToInt(op) & _6bits) << 26) | ((arg1 & _8bits) << 18) | ((arg2 & _18bits));
     util.append(u32, &self.words, inst);
-    util.append(u32, &self.lines, line);
+    util.append(u32, &self.lines, @intCast(u32, line));
   }
 
-  pub fn write1ArgInst(self: *Self, op: OpCode,  arg: u32, line: u32) void {
+  pub fn write1ArgInst(self: *Self, op: OpCode,  arg: u32, line: usize) void {
     // [op 6bits][reg 26bits]
     const inst = ((@enumToInt(op) & _6bits) << 26) | ((arg & _26bits));
     util.append(u32, &self.words, inst);
-    util.append(u32, &self.lines, line);
+    util.append(u32, &self.lines, @intCast(u32, line));
   }
 
-  pub fn writeNoArgInst(self: *Self, op: OpCode, line: u32) void {
+  pub fn writeNoArgInst(self: *Self, op: OpCode, line: usize) void {
     // [op 6bits]
     const inst = ((@enumToInt(op) & _6bits) << 26);
     util.append(u32, &self.words, inst);
-    util.append(u32, &self.lines, line);
+    util.append(u32, &self.lines, @intCast(u32, line));
   }
 
   pub fn storeConst(self: *Self, value: Value) u32 {

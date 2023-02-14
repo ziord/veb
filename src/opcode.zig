@@ -42,6 +42,10 @@ pub const OpCode = enum (u8) {
   // [6] [8]  [9]    [9]
   Shl,
 
+  // cmp rx, rk(x), rk(x) | cmp_op 
+  // [6] [8]  [9]    [9]     [32]
+  Cmp,
+
   // inv rx, rk(x)
   // [6] [8]  [18]
   Inv,

@@ -3,7 +3,7 @@ const value = @import("value.zig");
 const ast = @import("ast.zig");
 const parse = @import("parse.zig");
 const util = @import("util.zig");
-const OpCode = @import("opcode.zig").Opcode;
+const OpCode = @import("opcode.zig").OpCode;
 
 const Code = value.Code;
 const Node = ast.AstNode;
@@ -83,6 +83,11 @@ pub const Compiler = struct {
     node.reg = rx;
   }
 
+  inline fn cCmp(self: *Self, node: *ast.BinaryNode) void {
+    if (!node.op.isCmpOp()) return;
+    self.code.writeNoArgInst(@intToEnum(OpCode, @enumToInt(node.op)), node.line);
+  }
+
   fn cBinary(self: *Self, node: *ast.BinaryNode) void {
     const lhsIsNum = node.left.isNum();
     const rhsIsNum = node.right.isNum();
@@ -94,6 +99,7 @@ pub const Compiler = struct {
         const rk1 = self.code.storeConst(value.numberVal(node.left.AstNum.value));
         const rk2 = self.code.storeConst(value.numberVal(node.right.AstNum.value));
         self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line));
+        self.cCmp(node);
         node.reg = rx;
         return;
       } else if (lhsIsNum) {
@@ -102,6 +108,7 @@ pub const Compiler = struct {
         const rk2 = node.right.reg();
         self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line));
         self.freeScratchReg(rk2);
+        self.cCmp(node);
         node.reg = rx;
         return;
       } else if (rhsIsNum) {
@@ -110,6 +117,7 @@ pub const Compiler = struct {
         const rk2 = self.code.storeConst(value.numberVal(node.right.AstNum.value));
         self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line));
         self.freeScratchReg(rk1);
+        self.cCmp(node);
         node.reg = rx;
         return;
       }
@@ -122,6 +130,7 @@ pub const Compiler = struct {
     self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line));
     self.freeScratchReg(rk1);
     self.freeScratchReg(rk2);
+    self.cCmp(node);
     node.reg = rx;
   }
 

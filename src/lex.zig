@@ -152,7 +152,15 @@ pub const OpType = enum (u8) {
       .OpBitLShift => OpCode.Shl,
       .OpBitRShift => OpCode.Shr,
       .OpBitInvert => OpCode.Inv,
+      .OpLess, .OpGrt, .OpLeq, .OpGeq, .OpEqq, .OpNeq => OpCode.Cmp,
       else => unreachable, // todo
+    };
+  }
+
+  pub fn isCmpOp(self: @This()) bool {
+    return switch (self) {
+      .OpLess, .OpGrt, .OpLeq, .OpGeq, .OpEqq, .OpNeq => true,
+      else => false,
     };
   }
 };

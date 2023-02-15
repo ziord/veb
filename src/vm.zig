@@ -243,6 +243,34 @@ pub const VM = struct {
           self.stack[rx] = vl.numberVal(@intToFloat(f64, ~@floatToInt(i64, vl.asNumber(a))));
           continue;
         },
+        .Jt => {
+          // jt rx, rk(x): rk(x) == bx
+          var rx: u32 = undefined;
+          var rk: u32 = undefined;
+          self.read2Args(inst, &rx, &rk);
+          if (!vl.valueFalsy(self.stack[rx])) {
+            self.ip += rk;
+          }
+          continue;
+        },
+        .Jf => {
+          // jf rx, rk(x): rk(x) == bx
+          var rx: u32 = undefined;
+          var rk: u32 = undefined;
+          self.read2Args(inst, &rx, &rk);
+          if (vl.valueFalsy(self.stack[rx])) {
+            self.ip += rk;
+          }
+          continue;
+        },
+        .Not => {
+          // not rx, rk(x)
+          var rx: u32 = undefined;
+          var rk: u32 = undefined;
+          self.read2Args(inst, &rx, &rk);
+          self.stack[rx] = vl.boolVal(vl.valueFalsy(self.RK(rk)));
+          continue;
+        },
         .Load => {
           // load rx, bx
           var rx: u32 = undefined;

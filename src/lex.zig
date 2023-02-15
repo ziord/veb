@@ -7,6 +7,10 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"else", .TkElse},
   .{"for", .TkFor},
   .{"while", .TkWhile},
+  .{"and", .TkAnd},
+  .{"or", .TkOr},
+  .{"true", .TkTrue},
+  .{"false", .TkFalse},
 });
 
 pub const TokenType = enum (u8) {
@@ -38,8 +42,12 @@ pub const TokenType = enum (u8) {
   Tk2Lthan,         // <<
   Tk2Gthan,         // >>
   TkIf,             // if
+  TkOr,             // or
   TkFor,            // for
+  TkAnd,            // and
   TkElse,           // else
+  TkTrue,           // true
+  TkFalse,          // false
   TkWhile,          // while
   TkReturn,         // return
   TkNum,            // <number>
@@ -70,6 +78,8 @@ pub const TokenType = enum (u8) {
       .Tk2Lthan => .OpBitLShift,
       .Tk2Gthan => .OpBitRShift,
       .TkTilde => .OpBitInvert,
+      .TkAnd => .OpAnd,
+      .TkOr => .OpOr,
       else => unreachable,
     };
   }
@@ -105,8 +115,12 @@ pub const TokenType = enum (u8) {
       .Tk2Lthan => "<<",
       .Tk2Gthan => ">>",
       .TkIf => "if",
+      .TkOr => "or",
       .TkFor => "for",
+      .TkAnd => "and",
       .TkElse => "else",
+      .TkTrue => "true",
+      .TkFalse => "false",
       .TkWhile => "while",
       .TkReturn => "return",
       .TkNum => "<number>",
@@ -138,6 +152,8 @@ pub const OpType = enum (u8) {
   OpBitLShift,
   OpBitRShift,
   OpBitInvert,
+  OpAnd,
+  OpOr,
 
   pub fn toInstOp(self: @This()) OpCode {
     return switch (self) {
@@ -152,6 +168,9 @@ pub const OpType = enum (u8) {
       .OpBitLShift => OpCode.Shl,
       .OpBitRShift => OpCode.Shr,
       .OpBitInvert => OpCode.Inv,
+      .OpAnd => OpCode.Jf,
+      .OpOr => OpCode.Jt,
+      .OpNot => OpCode.Not,
       .OpLess, .OpGrt, .OpLeq, .OpGeq, .OpEqq, .OpNeq => OpCode.Cmp,
       else => unreachable, // todo
     };
@@ -160,6 +179,13 @@ pub const OpType = enum (u8) {
   pub fn isCmpOp(self: @This()) bool {
     return switch (self) {
       .OpLess, .OpGrt, .OpLeq, .OpGeq, .OpEqq, .OpNeq => true,
+      else => false,
+    };
+  }
+
+  pub fn isLgcOp(self: @This()) bool {
+    return switch (self) {
+      .OpAnd, .OpOr => true,
       else => false,
     };
   }
@@ -190,13 +216,9 @@ pub const Token = struct {
       const ty = self.value[1];
       if (ty == 'x' or ty == 'o' or ty == 'b') {
         return @intToFloat(f64, try std.fmt.parseInt(i64, self.value, 0));
-      } else {
-        // invalid digit
-        return try std.fmt.parseFloat(f64, "-");
       }
-    } else {
-      return try std.fmt.parseFloat(f64, self.value);
     }
+    return try std.fmt.parseFloat(f64, self.value);
   }
 };
 

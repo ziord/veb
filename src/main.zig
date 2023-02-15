@@ -16,9 +16,9 @@ fn doTest(src: []const u8, allocator: std.mem.Allocator) !value.Value {
   var compiler = compile.Compiler.init(node, "test.nova", allocator);
   compiler.compile();
   var code = compiler.code;
+  debug.Disassembler.disCode(code, "test");
   var cpu = vm.VM.init(allocator, code);
   try cpu.run();
-  debug.Disassembler.disCode(code, "test");
   return cpu.stack[0];
 }
 
@@ -55,6 +55,45 @@ test "comparison ops" {
       "0xdeadbeef == 0o33653337357",
   };
   const exp = [_]bool{false, false, true, false, true, true};
+  for (srcs) |src, i| {
+    const got = try doTest(src, allocator);
+    try std.testing.expect(value.asBool(got) == exp[i]);
+  }
+}
+
+test "booleans" {
+  var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+  defer arena.deinit();
+  const allocator = arena.allocator();
+  const srcs = [_][]const u8{
+      "0x123 < 4 and 1 < 5",
+      "123.45 > 12_40 or 2 == 2",
+      "0b111_000 <= 0o12_12 or 1 > 0.5",
+      "123.e-2 >= 0x12_34_5 and 6 and 7 > 2",
+      "123.e-2 != 0x12_34_5 and 0 or 6 > 2",
+      "(1 or 2) == 1",
+      "(1 and 2) == 2",
+      "(0b00 and 2) == 0o0",
+      "(0x0 or 2) == 2",
+      "true or false",
+      "false or true",
+      "false or false",
+      "true or true",
+      "true and false",
+      "false and true",
+      "false and false",
+      "!false",
+      "!true",
+      "!0x0_0",
+      "!!1",
+      "!1",
+  };
+  const exp = [_]bool{
+    false, true, true, false, true, 
+    true, true, true, true, true, 
+    true, false, true, false, false, false,
+    true, false, true, true, false
+  };
   for (srcs) |src, i| {
     const got = try doTest(src, allocator);
     try std.testing.expect(value.asBool(got) == exp[i]);

@@ -6,49 +6,61 @@ pub const OpCode = enum (u8) {
   // [6] [8]  [9]    [9]
   Add,
 
-  // sub rx, rk(x), rk(x)
+  // sub rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
   Sub,
 
-  // div rx, rk(x), rk(x)
+  // div rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
   Div,
 
-  // mul rx, rk(x), rk(x)
+  // mul rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
   Mul,
 
-  // mod rx, rk(x), rk(x)
+  // mod rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
   Mod,
 
-  // xor rx, rk(x), rk(x)
+  // xor rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
   Xor,
 
-  // or rx, rk(x), rk(x)
+  // or rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
   Or,
 
-  // and rx, rk(x), rk(x)
+  // and rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
   And,
 
-  // shr rx, rk(x), rk(x)
+  // shr rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
   Shr,
 
-  // shl rx, rk(x), rk(x)
+  // shl rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
   Shl,
 
-  // cmp rx, rk(x), rk(x) | cmp_op 
+  // cmp rx, rk(x), rk(y) | cmp_op 
   // [6] [8]  [9]    [9]     [32]
   Cmp,
 
   // inv rx, rk(x)
   // [6] [8]  [18]
   Inv,
+
+  // jt rx, rk(x)
+  // [6] [8]  [18]
+  Jt,
+
+  // jf rx, rk(x)
+  // [6] [8]  [18]
+  Jf,
+
+  // not rx, rk(x)
+  // [6] [8] [18]
+  Not,
 
   // load rx, bx
   //  [6] [8]  [18]

@@ -58,7 +58,7 @@ pub const Parser = struct {
     .{.bp = .BitAnd, .prefix = null, .infix = Self.binary},       // TkAmp
     .{.bp = .Factor, .prefix = null, .infix = Self.binary},       // TkPerc
     .{.bp = .None, .prefix = null, .infix = null},                // TkComma
-    .{.bp = .Unary, .prefix = null, .infix = null},               // TkExMark
+    .{.bp = .Unary, .prefix = Self.unary, .infix = null},         // TkExMark
     .{.bp = .BitXor, .prefix = null, .infix = Self.binary},       // TkCaret
     .{.bp = .BitOr, .prefix = null, .infix = Self.binary},        // TkPipe
     .{.bp = .Unary, .prefix = Self.unary, .infix = null},         // TkTilde
@@ -69,8 +69,12 @@ pub const Parser = struct {
     .{.bp = .Shift, .prefix = null, .infix = Self.binary},        // Tk2Lthan
     .{.bp = .Shift, .prefix = null, .infix = Self.binary},        // Tk2Rthan
     .{.bp = .None, .prefix = null, .infix = null},                // TkIf
+    .{.bp = .Or, .prefix = null, .infix = Self.binary},           // TkOr
     .{.bp = .None, .prefix = null, .infix = null},                // TkFor
+    .{.bp = .And, .prefix = null, .infix = Self.binary},          // TkAnd
     .{.bp = .None, .prefix = null, .infix = null},                // TkElse
+    .{.bp = .None, .prefix = Self.boolean, .infix = null},        // TkTrue
+    .{.bp = .None, .prefix = Self.boolean, .infix = null},        // TkFalse
     .{.bp = .None, .prefix = null, .infix = null},                // TkWhile
     .{.bp = .None, .prefix = null, .infix = null},                // TkReturn
     .{.bp = .None, .prefix = Self.number, .infix = null},         // TkNum
@@ -179,34 +183,36 @@ pub const Parser = struct {
     return node;
   }
 
-  fn literal(self: *Self, kind: lex.TokenType) *Node {
-    if (kind == lex.TokenType.TkNum) {
-      const token = self.current_tok;
-      self.consume(kind);
-      const node = self.newNode();
-      node.* = .{.AstNum = ast.NumberNode.init(
-        token.parseNum() catch self.err(token), 
-        token
-      )};
-      return node;
-    } else if (kind == lex.TokenType.TkStr) {
-      self.consume(kind);
-      const node = self.newNode();
-      node.* = .{.AstStr = ast.StringNode.init(self.previous_tok)};
-      return node;
-    } else {
-      self.err(self.current_tok);
-    }
+  fn literal(self: *Self, kind: lex.TokenType) ast.LiteralNode {
+    self.consume(kind);
+    return  ast.LiteralNode.init(self.previous_tok);
   }
 
   fn number(self: *Self, assignable: bool) *Node {
     _ = assignable;
-    return self.literal(.TkNum);
+    const node = self.newNode();
+    node.* = .{.AstNum = self.literal(.TkNum)};
+    var token = node.AstNum.token;
+    node.AstNum.value = token.parseNum() catch {
+      token.msg = "Invalid number token";
+      self.err(token);
+    };
+    return node;
   }
 
   fn string(self: *Self, assignable: bool) *Node {
     _ = assignable;
-    return self.literal(.TkStr);
+    const node = self.newNode();
+    node.* = .{.AstStr = self.literal(.TkStr)};
+    return node;
+  }
+
+  fn boolean(self: *Self, assignable: bool) *Node {
+    _ = assignable;
+    var ty: lex.TokenType = if (self.check(.TkTrue)) .TkTrue else .TkFalse;
+    const node = self.newNode();
+    node.* = .{.AstBool = self.literal(ty)};
+    return node;
   }
 
   fn unary(self: *Self, assignable: bool) *Node {
@@ -220,7 +226,9 @@ pub const Parser = struct {
     // rewrite -expr to 0 - expr
     if (op == .OpSub) {
       const num = self.newNode();
-      num.* = .{.AstNum = ast.NumberNode.init(0, line_tok)};
+      var lit = ast.LiteralNode.init(line_tok);
+      lit.value = 0;
+      num.* = .{.AstNum = lit};
       node.* = .{.AstBinary = ast.BinaryNode.init(num, expr, op, line_tok.line)};
     } else if (op == .OpAdd) {
       // rewrite +expr to expr

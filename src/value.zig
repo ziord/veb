@@ -44,9 +44,17 @@ pub inline fn isBool(val: Value) bool {
   return (val | 1) == TRUE_VAL;
 }
 
+pub inline fn isNil(val: Value) bool {
+  return val == NIL_VAL;
+}
+
 pub inline fn valueEqual(a: Value, b: Value) bool {
   if (isNumber(a) and isNumber(b)) return asNumber(a) == asNumber(b);
   return a == b;
+}
+
+pub inline fn valueFalsy(val: Value) bool {
+  return (isBool(val) and !asBool(val)) or isNil(val) or (isNumber(val) and asNumber(val) == 0);
 }
 
 pub fn printValue(val: Value) void {
@@ -54,6 +62,8 @@ pub fn printValue(val: Value) void {
     std.debug.print("{d}", .{asNumber(val)});
   } else if (isBool(val)) {
     std.debug.print("{}", .{asBool(val)});
+  } else if (isNil(val)) {
+    std.debug.print("nil", .{});
   }
 }
 
@@ -76,6 +86,13 @@ pub const Code = struct {
       .values = std.ArrayList(Value).init(allocator),
       .lines = std.ArrayList(u32).init(allocator)
     };
+  }
+
+  fn checkOffset(offset: usize, max: u32, err_msg: []const u8) void {
+    if (offset > max) {
+      std.debug.print("{s}", .{err_msg});
+      std.os.exit(1);
+    }
   }
 
   pub inline fn readInstOp(word: u32) OpCode {
@@ -150,6 +167,26 @@ pub const Code = struct {
     const inst = ((@enumToInt(op) & _6bits) << 26);
     util.append(u32, &self.words, inst);
     util.append(u32, &self.lines, @intCast(u32, line));
+  }
+
+  pub fn write2ArgsJmp(self: *Self, op: OpCode, arg1: u32, line: usize) usize {
+    // jmp_inst, arg1, dummy_offset
+    //   [6]      [8]     [18]
+    const offset = 0x40000;
+    self.write2ArgsInst(op, arg1, offset, line);
+    // return instruction offset
+    return self.words.items.len - 1;
+  }
+
+  pub fn patch2ArgsJmp(self: *Self, index: usize) void {
+    const inst = self.words.items[index];
+    // get jmp_inst, arg1
+    const first = (inst >> 26) & _6bits;
+    const second = (inst >> 18) & _8bits;
+    const real_offset = self.words.items.len - index - 1;
+    checkOffset(real_offset, _18bits, "max jump offset exceeded");
+    const new = (first << 26) | (second << 18) | real_offset;
+    self.words.items[index] = @intCast(u32, new);
   }
 
   pub fn storeConst(self: *Self, value: Value) u32 {

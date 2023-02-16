@@ -470,11 +470,13 @@ pub const Lexer = struct {
     return ch - 'A' + 10;
   }
 
-  fn lexStr(self: *Self) Token {
-    while (!self.atEnd() and self.peek() != '"') {
+  fn lexStr(self: *Self, start: u8) Token {
+    var escapes: u32 = 0;
+    while (!self.atEnd() and self.peek() != start) {
       if (self.peek() == '\\') {
         // skip - so next char is skipped.
         self.adv();
+        escapes += 1;
       }
       self.adv();
     }
@@ -486,7 +488,7 @@ pub const Lexer = struct {
     self.adv(); // skip closing quot `"`
     // check for escape sequences
     if (std.mem.indexOf(u8, token.value, "\\") == null) return token;
-    var buf = self.allocator.alloc(u8, token.value.len) catch {
+    var buf = self.allocator.alloc(u8, token.value.len - escapes) catch {
       return self.errToken("could not allocate string with escape sequence");
     };
     std.mem.set(u8, buf, 0);
@@ -569,7 +571,7 @@ pub const Lexer = struct {
       '^' => self.newToken(.TkCaret),
       '|' => self.newToken(.TkPipe),
       '~' => self.newToken(.TkTilde),
-      '"' => self.lexStr(),
+      '"', '\'' => self.lexStr(ch),
       '!' => self.newToken(if (self.match('=')) .TkNeq else .TkExMark),
       '=' => self.newToken(if (self.match('=')) .Tk2Eq else .TkEqual),
       '<' => self.newToken(if (self.match('=')) .TkLeq else if (self.match('<')) .Tk2Lthan else .TkLthan),

@@ -10,14 +10,15 @@ pub fn main() !void {
 }
 
 fn doTest(src: []const u8, allocator: std.mem.Allocator) !value.Value {
-  var parser = parse.Parser.init(src, "", allocator);
+  const filename = "test.nova";
+  var parser = parse.Parser.init(src, filename, allocator);
   const node = parser.parse();
   std.debug.print("node: {}\n", .{node});
-  var compiler = compile.Compiler.init(node, "test.nova", allocator);
+  var code = value.Code.init(allocator);
+  var cpu = vm.VM.init(allocator, &code);
+  var compiler = compile.Compiler.init(node, filename, &cpu, &code, allocator);
   compiler.compile();
-  var code = compiler.code;
   debug.Disassembler.disCode(code, "test");
-  var cpu = vm.VM.init(allocator, code);
   try cpu.run();
   return cpu.stack[0];
 }
@@ -87,15 +88,39 @@ test "booleans" {
       "!0x0_0",
       "!!1",
       "!1",
+      "'foxes and pirates' == 'foxes and pirates'",
+      "'foxes and pirates' != 'fishes and pirates'",
   };
   const exp = [_]bool{
     false, true, true, false, true, 
     true, true, true, true, true, 
     true, false, true, false, false, false,
-    true, false, true, true, false
+    true, false, true, true, false, 
+    true, true
   };
   for (srcs) |src, i| {
     const got = try doTest(src, allocator);
     try std.testing.expect(value.asBool(got) == exp[i]);
+  }
+}
+
+test "strings" {
+  var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+  defer arena.deinit();
+  const allocator = arena.allocator();
+  const srcs = [_][]const u8{
+      "'foxes'",
+      \\"the quick brown fox runs over the lazy dog,\nthe quick brown fox runs over the lazy dog,\nthe quick brown fox runs over the lazy dog,\nthe quick brown fox runs over the lazy dog\n
+       ++
+      \\the quick brown fox runs over the lazy dog,\nthe quick brown fox runs over the lazy dog,\nthe quick brown fox runs over the lazy dog,\nthe quick brown fox runs over the lazy dog"
+  };
+  const exp = [_][]const u8{
+    "foxes", 
+    "the quick brown fox runs over the lazy dog,\nthe quick brown fox runs over the lazy dog,\nthe quick brown fox runs over the lazy dog,\nthe quick brown fox runs over the lazy dog\n" ++
+    "the quick brown fox runs over the lazy dog,\nthe quick brown fox runs over the lazy dog,\nthe quick brown fox runs over the lazy dog,\nthe quick brown fox runs over the lazy dog"
+  };
+  for (srcs) |src, i| {
+    const got = try doTest(src, allocator);
+    try std.testing.expect(std.mem.eql(u8, value.asString(got).str, exp[i]));
   }
 }

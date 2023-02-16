@@ -1,27 +1,33 @@
 const std = @import("std");
 const vl = @import("value.zig");
 const OpCode = @import("opcode.zig").OpCode;
+const Mem = @import("mem.zig").Mem;
 
 const Value = vl.Value;
 const Code = vl.Code;
+const StringHashMap = vl.StringHashMap;
 
 pub const VM = struct {
   sp: usize,
   ip: usize,
   stack: [STACK_MAX]Value,
-  code: Code,
-  allocator: std.mem.Allocator,
+  code: *Code,
+  strings: StringHashMap,
+  objects: ?*vl.Obj,
+  mem: Mem,
 
   const Self = @This();
   const STACK_MAX = 0x15;
   const RuntimeError = error{RuntimeError};
 
-  pub fn init(allocator: std.mem.Allocator, code: Code) Self {
+  pub fn init(allocator: std.mem.Allocator, code: *Code) Self {
     return Self {
       .sp = 0, 
       .ip = 0, 
       .stack = undefined, 
-      .allocator = allocator, 
+      .mem = Mem.init(allocator),
+      .strings = StringHashMap.init(allocator),
+      .objects = null,
       .code = code
     };
   }

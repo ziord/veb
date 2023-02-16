@@ -4,15 +4,17 @@ const ast = @import("ast.zig");
 const parse = @import("parse.zig");
 const util = @import("util.zig");
 const OpCode = @import("opcode.zig").OpCode;
+const VM = @import("vm.zig").VM;
 
 const Code = value.Code;
 const Node = ast.AstNode;
 
 pub const Compiler = struct {
-  code: Code,
+  code: *Code,
   node: *Node,
   filename: []const u8,
   registers: std.ArrayList(u32),
+  vm: *VM,
   
   const Self = @This();
 
@@ -24,12 +26,13 @@ pub const Compiler = struct {
     return list;
   }
 
-  pub fn init(node: *Node, filename: []const u8, allocator: std.mem.Allocator) Self {
+  pub fn init(node: *Node, filename: []const u8, vm: *VM, code: *Code, allocator: std.mem.Allocator) Self {
     var self = Self {
-      .code = Code.init(allocator), 
+      .code = code, 
       .node = node, 
       .filename = filename,
       .registers = initRegisters(allocator),
+      .vm = vm,
     };
     return self;
   }
@@ -75,8 +78,12 @@ pub const Compiler = struct {
   }
 
   fn cStr(self: *Self, node: *ast.LiteralNode) void {
-    _ = self;
-    _ = node;
+    node.reg = self.getScratchReg();
+    self.cConst(
+      node.reg,
+      value.objVal(value.createString(self.vm, &self.vm.strings, node.token.value, node.token.is_alloc)),
+      node.line
+    );
   }
 
   fn cUnary(self: *Self, node: *ast.UnaryNode) void {

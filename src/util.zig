@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub fn append(comptime T: type, list: *std.ArrayList(T), val: T) void {
   list.append(val) catch |e| {
@@ -15,4 +16,8 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
 pub fn error_(comptime fmt: []const u8, args: anytype) noreturn {
   std.debug.print(fmt, args);
   std.os.exit(1);
+}
+
+pub inline fn getMode() std.builtin.Mode {
+  return builtin.mode;
 }

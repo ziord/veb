@@ -1,7 +1,8 @@
 const std = @import("std");
 const vl = @import("value.zig");
 const OpCode = @import("opcode.zig").OpCode;
-const Mem = @import("mem.zig").Mem;
+const GC = @import("gc.zig");
+const NovaAllocator = @import("allocator.zig");
 
 const Value = vl.Value;
 const Code = vl.Code;
@@ -14,22 +15,35 @@ pub const VM = struct {
   code: *Code,
   strings: StringHashMap,
   objects: ?*vl.Obj,
-  mem: Mem,
+  gc: GC,
 
   const Self = @This();
   const STACK_MAX = 0x15;
   const RuntimeError = error{RuntimeError};
 
-  pub fn init(allocator: std.mem.Allocator, code: *Code) Self {
+  pub fn init(allocator: *NovaAllocator, code: *Code) Self {
     return Self {
       .sp = 0, 
       .ip = 0, 
       .stack = undefined, 
-      .mem = Mem.init(allocator),
-      .strings = StringHashMap.init(allocator),
+      .gc = GC.init(allocator),
+      .strings = StringHashMap.init(allocator.getAllocator()),
       .objects = null,
       .code = code
     };
+  }
+
+  pub fn deinit(self: *Self) void {
+    self.strings.clearAndFree();
+    var curr = self.objects;
+    while (curr) |cur| {
+      var next = cur.next;
+      self.gc.freeObject(cur, self);
+      curr = next;
+    }
+    // TODO: move this when functions are implemented
+    self.code.deinit();
+    self.gc.deinit();
   }
 
   inline fn readWord(self: *Self) u32 {

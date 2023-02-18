@@ -3,6 +3,7 @@ const value = @import("value.zig");
 const ast = @import("ast.zig");
 const parse = @import("parse.zig");
 const util = @import("util.zig");
+const NovaAllocator = @import("allocator.zig");
 const OpCode = @import("opcode.zig").OpCode;
 const VM = @import("vm.zig").VM;
 
@@ -14,6 +15,7 @@ pub const Compiler = struct {
   node: *Node,
   filename: []const u8,
   registers: std.ArrayList(u32),
+  allocator: *NovaAllocator,
   vm: *VM,
   
   const Self = @This();
@@ -26,12 +28,13 @@ pub const Compiler = struct {
     return list;
   }
 
-  pub fn init(node: *Node, filename: []const u8, vm: *VM, code: *Code, allocator: std.mem.Allocator) Self {
+  pub fn init(node: *Node, filename: []const u8, vm: *VM, code: *Code, allocator: *NovaAllocator) Self {
     var self = Self {
-      .code = code, 
+      .code = code,
       .node = node, 
       .filename = filename,
-      .registers = initRegisters(allocator),
+      .allocator = allocator,
+      .registers = initRegisters(allocator.getArenaAllocator()),
       .vm = vm,
     };
     return self;
@@ -193,6 +196,8 @@ pub const Compiler = struct {
     self.c(self.node);
     const last_line = self.code.lines.items[self.code.lines.items.len - 1];
     self.code.writeNoArgInst(.Ret, last_line);
+    // release memory associated with the arena, since we're done with it at this point.
+    self.allocator.deinitArena();
   }
 
 };

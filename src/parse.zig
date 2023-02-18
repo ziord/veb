@@ -1,6 +1,7 @@
 const std = @import("std");
 const lex = @import("lex.zig");
 const ast = @import("ast.zig");
+const NovaAllocator = @import("allocator.zig");
 
 const Node = ast.AstNode;
 const exit = std.os.exit;
@@ -11,6 +12,7 @@ pub const Parser = struct {
   previous_tok: lex.Token,
   lexer: lex.Lexer,
   allocator: std.mem.Allocator,
+  nva: *NovaAllocator,
   filename: []const u8,
 
   const Self = @This();
@@ -84,13 +86,15 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                // TkEof
   };
 
-  pub fn init(src: []const u8, filename: []const u8, allocator: std.mem.Allocator) Self {
+  pub fn init(src: []const u8, filename: []const u8, allocator: *NovaAllocator) Self {
     return Self {
       .current_tok = undefined,
       .previous_tok = undefined,
       .lexer = lex.Lexer.init(src, allocator),
-      .allocator = allocator,
+      .nva = allocator,
       .filename = filename,
+      // use the arena allocator for allocating general nodes.
+      .allocator = allocator.getArenaAllocator(),
     };
   }
 
@@ -149,10 +153,10 @@ pub const Parser = struct {
   }
 
   inline fn newNode(self: *Self) *Node {
-    return @ptrCast(*Node, self.allocator.alloc(Node, 1) catch {
+    return self.allocator.create(Node) catch {
       _ = std.io.getStdErr().write("Allocation failed\n") catch exit(1);
       exit(1);
-    });
+    };
   }
 
   inline fn check(self: *Self, ty: lex.TokenType) bool {

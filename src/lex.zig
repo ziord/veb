@@ -1,5 +1,6 @@
 const std = @import("std");
 const OpCode = @import("opcode.zig").OpCode;
+const NovaAllocator = @import("allocator.zig");
 
 const keywords = std.ComptimeStringMap(TokenType, .{
   .{"return", .TkReturn},
@@ -233,7 +234,7 @@ pub const Lexer = struct {
 
   const Self = @This();
 
-  pub fn init(src: []const u8, allocator: std.mem.Allocator) Self {
+  pub fn init(src: []const u8, allocator: *NovaAllocator) Self {
     return Self {
       .line = 1,
       .column = 1,
@@ -241,7 +242,7 @@ pub const Lexer = struct {
       .current = 0,
       .at_error = false,
       .src = src,
-      .allocator = allocator,
+      .allocator = allocator.getAllocator(),
     };
   }
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const util = @import("util.zig");
 const OpCode = @import("opcode.zig").OpCode;
+const Mem = @import("mem.zig");
 pub const OpType = @import("lex.zig").OpType;
 
 
@@ -23,6 +24,12 @@ pub const Code = struct {
       .values = std.ArrayList(Value).init(allocator),
       .lines = std.ArrayList(u32).init(allocator)
     };
+  }
+
+  pub fn deinit(self: *Self) void {
+    self.words.clearAndFree();
+    self.values.clearAndFree();
+    self.lines.clearAndFree();
   }
 
   fn checkOffset(offset: usize, max: u32, err_msg: []const u8) void {
@@ -211,9 +218,14 @@ pub inline fn isObjType(val: Value, ty: ObjTy) bool {
   return asObj(val).ty == ty;
 }
 
-/// convert to specified object type
-pub inline fn toSpecObject(comptime T: type, val: Value) *T {
+/// convert a `Value` type to a specified Object type
+pub inline fn valToSpecObject(comptime T: type, val: Value) *T {
   return @ptrCast(*T, asObj(val));
+}
+
+/// convert an `Obj` type to a specified Object type
+pub inline fn objToSpecObject(comptime T: type, obj: *Obj) *T {
+  return @ptrCast(*T, obj);
 }
 
 pub inline fn isString(val: Value) bool {
@@ -304,7 +316,7 @@ pub fn hashString(str: []const u8) u64 {
 pub const VM = @import("vm.zig").VM;
 
 pub fn createObject(vm: *VM, ty: ObjTy, comptime T: type) *T {
-  var mem = @ptrCast(*T, vm.mem.vmAlloc(T, vm, null, 0, @sizeOf(T)).?);
+  var mem = vm.gc.mem.alloc(T, vm);
   mem.obj.ty = ty;
   mem.obj.next = vm.objects;
   vm.objects = &mem.obj;
@@ -319,14 +331,15 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
     tmp.str = str;
     tmp.hash = hash;
     if (!is_alloc) {
-      var s = vm.mem.alloc(u8, null, str.len);
+      var s = vm.gc.mem.allocBuf(u8, vm, null, 0, str.len);
       std.mem.copy(u8, s, str);
       tmp.str = s;
+    } else {
+      vm.gc.bytes_allocated += str.len;
     }
     strmapPut(map, tmp, FALSE_VAL);
     string = tmp;
     return tmp;
   }
-  // TODO: how to free is_alloc?
   return string.?;
 }

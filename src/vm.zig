@@ -42,7 +42,7 @@ pub const VM = struct {
       curr = next;
     }
     // TODO: move this when functions are implemented
-    self.code.deinit();
+    self.code.deinit(self);
     self.gc.deinit();
   }
 

@@ -1,14 +1,15 @@
 const std = @import("std");
 const util = @import("util.zig");
-const OpCode = @import("opcode.zig").OpCode;
 const Mem = @import("mem.zig");
+const Vec = @import("vec.zig").Vec;
+const OpCode = @import("opcode.zig").OpCode;
 pub const OpType = @import("lex.zig").OpType;
 
 
 pub const Code = struct {
-  words: std.ArrayList(u32),
-  values: std.ArrayList(Value),
-  lines: std.ArrayList(u32),
+  words: Vec(u32),
+  values: Vec(Value),
+  lines: Vec(u32),
 
   const Self = @This();
   pub const _6bits: u32 = 0x3f;
@@ -18,18 +19,18 @@ pub const Code = struct {
   pub const _26bits: u32 = 0x3ffffff;
   pub const _32bits: u32 = 0xffffffff;
 
-  pub fn init(allocator: std.mem.Allocator) Self {
+  pub fn init() Self {
     return Self {
-      .words = std.ArrayList(u32).init(allocator),
-      .values = std.ArrayList(Value).init(allocator),
-      .lines = std.ArrayList(u32).init(allocator)
+      .words = Vec(u32).init(),
+      .values = Vec(Value).init(),
+      .lines = Vec(u32).init()
     };
   }
 
-  pub fn deinit(self: *Self) void {
-    self.words.clearAndFree();
-    self.values.clearAndFree();
-    self.lines.clearAndFree();
+  pub fn deinit(self: *Self, vm: *VM) void {
+    self.words.clearAndFree(vm);
+    self.values.clearAndFree(vm);
+    self.lines.clearAndFree(vm);
   }
 
   fn checkOffset(offset: usize, max: u32, err_msg: []const u8) void {
@@ -75,49 +76,44 @@ pub const Code = struct {
     return word & _18bits;
   }
 
-  pub fn writeValue(self: *Self, value: Value) u32 {
-    util.append(Value, &self.values, value);
+  pub fn writeValue(self: *Self, value: Value, vm: *VM) u32 {
+    self.values.push(value, vm);
     return @intCast(u32, self.values.items.len - 1);
   }
 
-  pub fn writeByte(self: *Self, byte: u8, line: usize) void {
-    util.append(u32, &self.words, (byte & _32bits) << 24);
-    util.append(u32, &self.lines, @intCast(u32, line));
-  }
-
-  pub fn write3ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, arg3: u32, line: usize) void {
+  pub fn write3ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, arg3: u32, line: usize, vm: *VM) void {
     // [op 6bits][reg 8bits][reg 9bits][reg 9bits]
     const inst = ((@enumToInt(op) & _6bits) << 26) | ((arg1 & _8bits) << 18) | ((arg2 & _9bits) << 9) | ((arg3 & _9bits));
-    util.append(u32, &self.words, inst);
-    util.append(u32, &self.lines, @intCast(u32, line));
+    self.words.push(inst, vm);
+    self.lines.push(@intCast(u32, line), vm);
   }
 
-  pub fn write2ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, line: usize) void {
+  pub fn write2ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, line: usize, vm: *VM) void {
     // [op 6bits][reg 8bits][reg 18bits]
     const inst = ((@enumToInt(op) & _6bits) << 26) | ((arg1 & _8bits) << 18) | ((arg2 & _18bits));
-    util.append(u32, &self.words, inst);
-    util.append(u32, &self.lines, @intCast(u32, line));
+    self.words.push(inst, vm);
+    self.lines.push(@intCast(u32, line), vm);
   }
 
-  pub fn write1ArgInst(self: *Self, op: OpCode,  arg: u32, line: usize) void {
+  pub fn write1ArgInst(self: *Self, op: OpCode,  arg: u32, line: usize, vm: *VM) void {
     // [op 6bits][reg 26bits]
     const inst = ((@enumToInt(op) & _6bits) << 26) | ((arg & _26bits));
-    util.append(u32, &self.words, inst);
-    util.append(u32, &self.lines, @intCast(u32, line));
+    self.words.push(inst, vm);
+    self.lines.push(@intCast(u32, line), vm);
   }
 
-  pub fn writeNoArgInst(self: *Self, op: OpCode, line: usize) void {
+  pub fn writeNoArgInst(self: *Self, op: OpCode, line: usize, vm: *VM) void {
     // [op 6bits]
     const inst = ((@enumToInt(op) & _6bits) << 26);
-    util.append(u32, &self.words, inst);
-    util.append(u32, &self.lines, @intCast(u32, line));
+    self.words.push(inst, vm);
+    self.lines.push(@intCast(u32, line), vm);
   }
 
-  pub fn write2ArgsJmp(self: *Self, op: OpCode, arg1: u32, line: usize) usize {
+  pub fn write2ArgsJmp(self: *Self, op: OpCode, arg1: u32, line: usize, vm: *VM) usize {
     // jmp_inst, arg1, dummy_offset
     //   [6]      [8]     [18]
     const offset = 0x40000;
-    self.write2ArgsInst(op, arg1, offset, line);
+    self.write2ArgsInst(op, arg1, offset, line, vm);
     // return instruction offset
     return self.words.items.len - 1;
   }
@@ -133,8 +129,8 @@ pub const Code = struct {
     self.words.items[index] = @intCast(u32, new);
   }
 
-  pub fn storeConst(self: *Self, value: Value) u32 {
-    const idx = self.writeValue(value);
+  pub fn storeConst(self: *Self, value: Value, vm: *VM) u32 {
+    const idx = self.writeValue(value, vm);
     return idx + MAX_REGISTERS;
   }
 };
@@ -331,7 +327,7 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
     tmp.str = str;
     tmp.hash = hash;
     if (!is_alloc) {
-      var s = vm.gc.mem.allocBuf(u8, vm, null, 0, str.len);
+      var s = vm.gc.mem.allocBuf(u8, vm, str.len);
       std.mem.copy(u8, s, str);
       tmp.str = s;
     } else {

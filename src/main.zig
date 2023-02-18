@@ -5,6 +5,7 @@ const vm = @import("vm.zig");
 const debug = @import("debug.zig");
 const value = @import("value.zig");
 const NovaAllocator = @import("allocator.zig");
+const Vec = @import("vec.zig").Vec;
 
 pub fn main() !void {
   std.debug.print("hello nova!\n", .{});
@@ -17,7 +18,7 @@ fn doTest(src: []const u8) !value.Value {
   var parser = parse.Parser.init(src, filename, &nva);
   const node = parser.parse();
   std.debug.print("node: {}\n", .{node});
-  var code = value.Code.init(nva.getAllocator());
+  var code = value.Code.init();
   var cpu = vm.VM.init(&nva, &code);
   defer cpu.deinit(); // don't deinit for now.
   var compiler = compile.Compiler.init(node, filename, &cpu, &code, &nva);

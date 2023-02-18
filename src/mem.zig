@@ -4,6 +4,18 @@ const value = @import("value.zig");
 const VM = @import("vm.zig").VM;
 const Obj = value.Obj;
 
+pub const BUFFER_INIT_SIZE = 8;
+
+pub inline fn growCapacity(cap: usize) usize {
+  return if (cap < BUFFER_INIT_SIZE) BUFFER_INIT_SIZE else cap << 2;
+}
+
+pub inline fn alignTo(n: usize, align_: usize) usize {
+  return (n + align_ - 1) / align_ * align_;
+}
+
+// Mem-struct related thingies:
+
 allocator: std.mem.Allocator,
 
 const Self = @This();
@@ -27,7 +39,17 @@ pub fn alloc(self: *Self, comptime T: type, vm: *VM) *T {
   };
 }
 
-pub fn allocBuf(self: *Self, comptime T: type, vm: *VM, ptr: ?[]T, old_len: usize, new_len: usize) []T {
+pub fn allocBuf(self: *Self, comptime T: type, vm: *VM, len: usize) []T {
+  vm.gc.bytes_allocated += @sizeOf(T) * len;
+  // TODO: refactor this.
+  vm.gc.forceCollect(vm, (util.getMode() == .Debug));
+  vm.gc.tryCollect(vm);
+  return self.allocator.alloc(T, len) catch |e| {
+    util.error_("AllocationError: {}", .{e});
+  };
+}
+
+pub fn resizeBuf(self: *Self, comptime T: type, vm: *VM, ptr: []T, old_len: usize, new_len: usize) []T {
   const old_size = @sizeOf(T) * old_len;
   const new_size = @sizeOf(T) * new_len;
   vm.gc.bytes_allocated += (new_size - old_size);
@@ -36,17 +58,9 @@ pub fn allocBuf(self: *Self, comptime T: type, vm: *VM, ptr: ?[]T, old_len: usiz
     vm.gc.forceCollect(vm, (util.getMode() == .Debug));
     vm.gc.tryCollect(vm);
   }
-  var tmp: []T = undefined;
-  if (ptr) |c_ptr| {
-    tmp = self.allocator.realloc(c_ptr, new_len) catch |e| {
-      util.error_("AllocationError: {}", .{e});
-    };
-  } else {
-    tmp = self.allocator.alloc(T, new_len) catch |e| {
-      util.error_("AllocationError: {}", .{e});
-    };
-  }
-  return tmp;
+  return self.allocator.realloc(ptr, new_len) catch |e| {
+    util.error_("AllocationError: {}", .{e});
+  };
 }
 
 pub fn free(self: *Self, comptime T: type, vm: *VM, ptr: *T) void {

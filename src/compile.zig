@@ -64,8 +64,8 @@ pub const Compiler = struct {
 
   fn cConst(self: *Self, reg: u32, val: value.Value, line: usize) void {
     // load rx, memidx
-    const memidx = self.code.writeValue(val);
-    self.code.write2ArgsInst(.Load, reg, memidx, @intCast(u32, line));
+    const memidx = self.code.writeValue(val, self.vm);
+    self.code.write2ArgsInst(.Load, reg, memidx, @intCast(u32, line), self.vm);
   }
 
   fn cNum(self: *Self, node: *ast.LiteralNode) void {
@@ -98,30 +98,30 @@ pub const Compiler = struct {
       // for now, only numbers and booleans are recognized as consts
       var rk: u32 = undefined;
       if (node.expr.isNum()) {
-        rk = self.code.storeConst(value.numberVal(node.expr.AstNum.value));
+        rk = self.code.storeConst(value.numberVal(node.expr.AstNum.value), self.vm);
       } else {
-        rk = self.code.storeConst(value.boolVal(node.expr.AstBool.token.is(.TkTrue)));
+        rk = self.code.storeConst(value.boolVal(node.expr.AstBool.token.is(.TkTrue)), self.vm);
       }
-      self.code.write2ArgsInst(inst_op, rx, rk, @intCast(u32, node.line));
+      self.code.write2ArgsInst(inst_op, rx, rk, @intCast(u32, node.line), self.vm);
       node.reg = rx;
       return;
     }
     self.c(node.expr);
     const rk = node.expr.reg();
-    self.code.write2ArgsInst(inst_op, rx, rk, @intCast(u32, node.line));
+    self.code.write2ArgsInst(inst_op, rx, rk, @intCast(u32, node.line), self.vm);
     self.freeScratchReg(rk);
     node.reg = rx;
   }
 
   inline fn cCmp(self: *Self, node: *ast.BinaryNode) void {
     if (!node.op.isCmpOp()) return;
-    self.code.writeNoArgInst(@intToEnum(OpCode, @enumToInt(node.op)), node.line);
+    self.code.writeNoArgInst(@intToEnum(OpCode, @enumToInt(node.op)), node.line, self.vm);
   }
 
   inline fn cLgc(self: *Self, node: *ast.BinaryNode) void {
     self.c(node.left);
     const rx = node.left.reg();
-    const end_jmp = self.code.write2ArgsJmp(node.op.toInstOp(), rx, self.lastLine());
+    const end_jmp = self.code.write2ArgsJmp(node.op.toInstOp(), rx, self.lastLine(), self.vm);
     self.freeScratchReg(rx);
     self.c(node.right);
     self.code.patch2ArgsJmp(end_jmp);
@@ -139,17 +139,17 @@ pub const Compiler = struct {
     // check that we don't exceed the 9 bits of rk (+ 2 for lhs and rhs)
     if ((self.code.values.items.len + value.MAX_REGISTERS + 2) < value.Code._9bits) {
       if (lhsIsNum and rhsIsNum) {
-        const rk1 = self.code.storeConst(value.numberVal(node.left.AstNum.value));
-        const rk2 = self.code.storeConst(value.numberVal(node.right.AstNum.value));
-        self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line));
+        const rk1 = self.code.storeConst(value.numberVal(node.left.AstNum.value), self.vm);
+        const rk2 = self.code.storeConst(value.numberVal(node.right.AstNum.value), self.vm);
+        self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line), self.vm);
         self.cCmp(node);
         node.reg = rx;
         return;
       } else if (lhsIsNum) {
-        const rk1 = self.code.storeConst(value.numberVal(node.left.AstNum.value));
+        const rk1 = self.code.storeConst(value.numberVal(node.left.AstNum.value), self.vm);
         self.c(node.right);
         const rk2 = node.right.reg();
-        self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line));
+        self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line), self.vm);
         self.freeScratchReg(rk2);
         self.cCmp(node);
         node.reg = rx;
@@ -157,8 +157,8 @@ pub const Compiler = struct {
       } else if (rhsIsNum) {
         self.c(node.left);
         const rk1 = node.left.reg();
-        const rk2 = self.code.storeConst(value.numberVal(node.right.AstNum.value));
-        self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line));
+        const rk2 = self.code.storeConst(value.numberVal(node.right.AstNum.value), self.vm);
+        self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line), self.vm);
         self.freeScratchReg(rk1);
         self.cCmp(node);
         node.reg = rx;
@@ -170,7 +170,7 @@ pub const Compiler = struct {
     const rk1 = node.left.reg();
     self.c(node.right);
     const rk2 = node.right.reg();
-    self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line));
+    self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line), self.vm);
     self.freeScratchReg(rk1);
     self.freeScratchReg(rk2);
     self.cCmp(node);
@@ -195,7 +195,7 @@ pub const Compiler = struct {
   pub fn compile(self: *Self) void {
     self.c(self.node);
     const last_line = self.code.lines.items[self.code.lines.items.len - 1];
-    self.code.writeNoArgInst(.Ret, last_line);
+    self.code.writeNoArgInst(.Ret, last_line, self.vm);
     // release memory associated with the arena, since we're done with it at this point.
     self.allocator.deinitArena();
   }

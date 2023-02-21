@@ -27,14 +27,14 @@ pub const VM = struct {
       .ip = 0, 
       .stack = undefined, 
       .gc = GC.init(allocator),
-      .strings = StringHashMap.init(allocator.getAllocator()),
+      .strings = StringHashMap.init(),
       .objects = null,
       .code = code
     };
   }
 
   pub fn deinit(self: *Self) void {
-    self.strings.clearAndFree();
+    self.strings.free(self);
     var curr = self.objects;
     while (curr) |cur| {
       var next = cur.next;

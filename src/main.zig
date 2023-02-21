@@ -25,6 +25,9 @@ fn doTest(src: []const u8) !value.Value {
   compiler.compile();
   debug.Disassembler.disCode(code, "test");
   try cpu.run();
+  value.printValue(cpu.stack[0]);
+  std.debug.print("\n", .{});
+  // TODO: refactor testing, as it currently uses invalidated data
   return cpu.stack[0]; // !!invalidated!!
 }
 

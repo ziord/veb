@@ -2,6 +2,7 @@ const std = @import("std");
 const util = @import("util.zig");
 const Mem = @import("mem.zig");
 const Vec = @import("vec.zig").Vec;
+const Map = @import("map.zig").Map;
 const OpCode = @import("opcode.zig").OpCode;
 pub const OpType = @import("lex.zig").OpType;
 
@@ -198,6 +199,10 @@ pub inline fn isNil(val: Value) bool {
   return val == NIL_VAL;
 }
 
+pub inline fn isNothing(val: Value) bool {
+  return val == NOTHING_VAL;
+}
+
 pub inline fn objVal(ptr: anytype) Value {
   return @intCast(Value, @intCast(u64, @ptrToInt(ptr)) | TAG_OBJECT);
 }
@@ -262,36 +267,38 @@ pub fn printObject(val: Value) void {
   }
 }
 
+const StringNullKey = ObjString {.obj = .{.ty = .ObjStr, .next = null}, .hash = 0, .str = ""};
+
 //**StringHashMap**//
 pub const StringContext = struct {
-  pub fn hash(self: @This(), k: *ObjString) u64 {
+  const K = *const ObjString;
+  pub fn hash(self: @This(), k: K) u64 {
     _ = self;
     return k.hash;
   }
 
-  pub fn eql(self: @This(), k1: *ObjString, k2: *ObjString) bool {
+  pub fn eql(self: @This(), k1: K, k2: K) bool {
     _ = self;
     return k1 == k2;
   }
+
+  pub inline fn isNullKey(self: @This(), key: K) bool {
+    _ = self;
+    return key == &StringNullKey;
+  }
+
+  pub inline fn isNullVal(self: @This(), value: Value) bool {
+    _ = self;
+    return value == NOTHING_VAL;
+  }
+
+  pub inline fn cmpInterned(self: @This(), key: K, str: []const u8, str_hash: u64) bool {
+    _ = self;
+    return (key.hash == str_hash and std.mem.eql(u8, key.str, str));
+  }
 };
 
-pub const StringHashMap = std.HashMap(*ObjString, Value, StringContext, LOAD_FACTOR);
-
-pub fn strmapPut(map: *StringHashMap, key: *ObjString, val: Value) void {
-  map.put(key, val) catch |e| {
-    util.error_("Map put error: {}", .{e});
-  };
-}
-
-fn strmapFindInterned(map: *StringHashMap, str: []const u8, hash: u64) ?*ObjString {
-  var it = map.keyIterator();
-  while (it.next()) |k| {
-    if (k.*.hash == hash and std.mem.eql(u8, k.*.str, str)) {
-      return k.*;
-    }
-  }
-  return null;
-}
+pub const StringHashMap = Map(*const ObjString, Value, StringContext, &StringNullKey);
 
 pub fn hashString(str: []const u8) u64 {
   // FNV-1a hashing algorithm
@@ -319,9 +326,9 @@ pub fn createObject(vm: *VM, ty: ObjTy, comptime T: type) *T {
   return mem;
 }
 
-pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: bool) *ObjString {
+pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: bool) *const ObjString {
   const hash = hashString(str);
-  var string = strmapFindInterned(map, str, hash);
+  var string = map.findInterned(str, hash);
   if (string == null) {
     var tmp = @call(.always_inline, createObject, .{vm, .ObjStr, ObjString});
     tmp.str = str;
@@ -333,7 +340,7 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
     } else {
       vm.gc.bytes_allocated += str.len;
     }
-    strmapPut(map, tmp, FALSE_VAL);
+    _ = map.put(tmp, FALSE_VAL, vm);
     string = tmp;
     return tmp;
   }

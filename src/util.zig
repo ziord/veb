@@ -21,3 +21,9 @@ pub fn error_(comptime fmt: []const u8, args: anytype) noreturn {
 pub inline fn getMode() std.builtin.Mode {
   return builtin.mode;
 }
+
+pub inline fn assert(check: bool, msg: []const u8) void {
+  if (!check) {
+    @panic(msg);
+  }
+}

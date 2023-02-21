@@ -177,6 +177,25 @@ pub const Compiler = struct {
     node.reg = rx;
   }
 
+  fn cList(self: *Self, node: *ast.ListNode) void {
+    var reg = self.getScratchReg();
+    const size = @intCast(u32, node.elems.items.len);
+    if (size > 0) {
+      // free to allow reuse by the first element
+      self.freeScratchReg(reg);
+    }
+    for (node.elems.items) |elem| {
+      self.c(elem);
+    }
+    if (size > 1) {
+      for (node.elems.items[1..]) |elem| {
+        self.freeScratchReg(elem.reg());
+      }
+    }
+    // blst rx, elem-count
+    self.code.write2ArgsInst(.Blst, reg, size, node.line, self.vm);
+  }
+
   fn cExprStmt(self: *Self, node: *ast.ExprStmtNode) void {
     self.c(node.expr);
   }
@@ -188,6 +207,7 @@ pub const Compiler = struct {
       .AstBool => |*nd| self.cBool(nd),
       .AstUnary => |*nd| self.cUnary(nd),
       .AstBinary => |*nd| self.cBinary(nd),
+      .AstList => |*nd| self.cList(nd),
       .AstExprStmt => |*nd| self.cExprStmt(nd),
     }
   }

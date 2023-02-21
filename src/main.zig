@@ -126,3 +126,15 @@ test "strings" {
     _ = exp;
   }
 }
+
+test "lists" {
+  const srcs = [_][]const u8{
+    "[1, 2, 3, 4]",
+    "[1, 'fox', 3, 'cat']",
+    "[1]",
+    "[]",
+  };
+  for (srcs) |src| {
+    _ = try doTest(src);
+  }
+}

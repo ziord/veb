@@ -39,7 +39,7 @@ pub fn alloc(self: *Self, comptime T: type, vm: *VM) *T {
   };
 }
 
-pub fn allocBuf(self: *Self, comptime T: type, vm: *VM, len: usize) []T {
+pub fn allocBuf(self: *Self, comptime T: type, len: usize, vm: *VM) []T {
   vm.gc.bytes_allocated += @sizeOf(T) * len;
   // TODO: refactor this.
   vm.gc.forceCollect(vm, (util.getMode() == .Debug));

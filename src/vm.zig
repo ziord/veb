@@ -9,7 +9,6 @@ const Code = vl.Code;
 const StringHashMap = vl.StringHashMap;
 
 pub const VM = struct {
-  sp: usize,
   ip: usize,
   stack: [STACK_MAX]Value,
   code: *Code,
@@ -23,7 +22,6 @@ pub const VM = struct {
 
   pub fn init(allocator: *NovaAllocator, code: *Code) Self {
     return Self {
-      .sp = 0, 
       .ip = 0, 
       .stack = undefined, 
       .gc = GC.init(allocator),
@@ -298,6 +296,18 @@ pub const VM = struct {
           self.read2Args(inst, &rx, &bx);
           self.stack[rx] = self.code.values.items[bx];
           continue;
+        },
+        .Blst => {
+          // blst rx, count
+          var rx: u32 = undefined;
+          var count: u32 = undefined;
+          self.read2Args(inst, &rx, &count);
+          var list = vl.createList(self, @as(usize, count));
+          var i: usize = 0;
+          while (i < count): (i += 1) {
+            list.items[i] = self.stack[rx + i];
+          }
+          self.stack[rx] = vl.objVal(list);
         },
         .Ret => {
           std.debug.print("stack: \n", .{});

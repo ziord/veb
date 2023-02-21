@@ -50,17 +50,21 @@ pub const OpCode = enum (u8) {
   // [6] [8]  [18]
   Inv,
 
-  // jt rx, rk(x)
+  // jt rx, bx
   // [6] [8]  [18]
   Jt,
 
-  // jf rx, rk(x)
+  // jf rx, bx
   // [6] [8]  [18]
   Jf,
 
-  // not rx, rk(x)
+  // not rx, bx
   // [6] [8] [18]
   Not,
+
+  // blst rx, size
+  // [6] [8] [18]
+  Blst,
 
   // load rx, bx
   //  [6] [8]  [18]

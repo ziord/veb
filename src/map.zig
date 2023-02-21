@@ -45,7 +45,7 @@ pub fn Map(
 
   fn resizeMap(self: *Self, vm: *VM) void {
     const new_capacity = Mem.growCapacity(self.capacity);
-    var tmp = vm.gc.mem.allocBuf(KVEntry, vm, new_capacity);
+    var tmp = vm.gc.mem.allocBuf(KVEntry, new_capacity, vm);
     std.debug.assert(new_capacity == tmp.len);
     for (tmp) |*entry| {
       entry.key = null_key;
@@ -196,6 +196,6 @@ pub fn Map(
       return null;
     }
   };
-  
+
   };
 }

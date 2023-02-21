@@ -155,28 +155,40 @@ pub const FALSE_VAL = @as(Value, (QNAN | TAG_FALSE));
 pub const TRUE_VAL = @as(Value, (QNAN | TAG_TRUE));
 pub const NOTHING_VAL = @as(Value, (QNAN | TAG_NOTHING));
 
-pub const ObjTy = enum(u8) {
+pub const ObjId = enum(u8) {
   ObjStr,
+  ObjLst,
 };
 
-pub const Obj = packed struct {
-  ty: ObjTy,
+pub const Obj = extern struct {
+  id: ObjId,
   next: ?*Obj,
 };
 
-pub const ObjString = struct {
+pub const ObjString = extern struct {
   obj: Obj,
   hash: u64,
-  str: []const u8,
+  len: usize,
+  str: [*]const u8,
 };
 
+pub const ObjList = extern struct {
+  obj: Obj,
+  len: usize,
+  capacity: usize,
+  items: [*]Value,
+};
 
 pub inline fn numberVal(num: f64) Value {
   return @ptrCast(*const Value, &num).*;
 }
 
 pub inline fn asNumber(val: Value) f64 {
-  return @ptrCast(*const f64, &val).*;
+  return @bitCast(f64, val);
+}
+
+pub inline fn asIntNumber(comptime T: type, val: Value) T {
+  return @floatToInt(T, asNumber(val));
 }
 
 pub inline fn isNumber(val: Value) bool {
@@ -208,33 +220,31 @@ pub inline fn objVal(ptr: anytype) Value {
 }
 
 pub inline fn asObj(val: Value) *Obj {
-  return @intToPtr(*Obj, @intCast(usize, (val & ~TAG_OBJECT)));
+  return @intToPtr(*Obj, @intCast(u64, (val & ~TAG_OBJECT)));
 }
 
 pub inline fn isObj(val: Value) bool {
   return (val & TAG_OBJECT) == TAG_OBJECT;
 }
 
-pub inline fn isObjType(val: Value, ty: ObjTy) bool {
-  return asObj(val).ty == ty;
-}
-
-/// convert a `Value` type to a specified Object type
-pub inline fn valToSpecObject(comptime T: type, val: Value) *T {
-  return @ptrCast(*T, asObj(val));
-}
-
-/// convert an `Obj` type to a specified Object type
-pub inline fn objToSpecObject(comptime T: type, obj: *Obj) *T {
-  return @ptrCast(*T, obj);
+pub inline fn isObjType(val: Value, id: ObjId) bool {
+  return isObj(val) and asObj(val).id == id;
 }
 
 pub inline fn isString(val: Value) bool {
   return isObjType(val, .ObjStr);
 }
 
+pub inline fn isList(val: Value) bool {
+  return isObjType(val, .ObjList);
+}
+
 pub inline fn asString(val: Value) *ObjString {
   return @ptrCast(*ObjString, asObj(val));
+}
+
+pub inline fn asList(val: Value) *ObjList {
+  return @ptrCast(*ObjList, asObj(val));
 }
 
 pub inline fn valueEqual(a: Value, b: Value) bool {
@@ -260,14 +270,34 @@ pub fn printValue(val: Value) void {
 
 pub fn printObject(val: Value) void {
   const obj = asObj(val);
-  switch (obj.ty) {
+  switch (obj.id) {
     .ObjStr => {
-      util.print("{s}", .{asString(val).str});
+      var tmp = asString(val);
+      util.print("{s}", .{tmp.str[0..tmp.len]});
+    },
+    .ObjLst => {
+      var list = asList(val);
+      var add_comma = list.len > 1;
+      var comma_end = if (add_comma) list.len - 1 else 0;
+      util.print("[", .{});
+      var tmp: *ObjString = undefined;
+      for (list.items[0..list.len]) |item, i| {
+        if (isString(item)) {
+          tmp = asString(item);
+          util.print("\"{s}\"", .{tmp.str[0..tmp.len]});
+        } else {
+          printValue(item);
+        }
+        if (add_comma and i < comma_end) {
+          util.print(", ", .{});
+        }
+      }
+      util.print("]", .{});
     }
   }
 }
 
-const StringNullKey = ObjString {.obj = .{.ty = .ObjStr, .next = null}, .hash = 0, .str = ""};
+const StringNullKey = ObjString {.obj = .{.id = .ObjStr, .next = null}, .hash = 0, .str = "", .len = 0};
 
 //**StringHashMap**//
 pub const StringContext = struct {
@@ -294,7 +324,7 @@ pub const StringContext = struct {
 
   pub inline fn cmpInterned(self: @This(), key: K, str: []const u8, str_hash: u64) bool {
     _ = self;
-    return (key.hash == str_hash and std.mem.eql(u8, key.str, str));
+    return (key.hash == str_hash and std.mem.eql(u8, key.str[0..key.len], str));
   }
 };
 
@@ -318,9 +348,9 @@ pub fn hashString(str: []const u8) u64 {
 
 pub const VM = @import("vm.zig").VM;
 
-pub fn createObject(vm: *VM, ty: ObjTy, comptime T: type) *T {
+pub fn createObject(vm: *VM, id: ObjId, comptime T: type) *T {
   var mem = vm.gc.mem.alloc(T, vm);
-  mem.obj.ty = ty;
+  mem.obj.id = id;
   mem.obj.next = vm.objects;
   vm.objects = &mem.obj;
   return mem;
@@ -331,12 +361,13 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
   var string = map.findInterned(str, hash);
   if (string == null) {
     var tmp = @call(.always_inline, createObject, .{vm, .ObjStr, ObjString});
-    tmp.str = str;
+    tmp.str = @ptrCast([*]const u8, str);
     tmp.hash = hash;
+    tmp.len = str.len;
     if (!is_alloc) {
-      var s = vm.gc.mem.allocBuf(u8, vm, str.len);
+      var s = vm.gc.mem.allocBuf(u8, str.len, vm);
       std.mem.copy(u8, s, str);
-      tmp.str = s;
+      tmp.str = @ptrCast([*]const u8, s);
     } else {
       vm.gc.bytes_allocated += str.len;
     }
@@ -345,4 +376,13 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
     return tmp;
   }
   return string.?;
+}
+
+pub fn createList(vm: *VM, len: usize) *ObjList {
+  const cap = Mem.alignTo(Mem.growCapacity(len), Mem.BUFFER_INIT_SIZE);
+  var list = @call(.always_inline, createObject, .{vm, .ObjLst, ObjList});
+  list.items = @ptrCast([*]Value, vm.gc.mem.allocBuf(Value, cap, vm));
+  list.capacity = cap;
+  list.len = len;
+  return list;
 }

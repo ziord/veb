@@ -47,12 +47,18 @@ pub inline fn forceCollect(self: *Self, vm: *VM, likely: bool) void {
 }
 
 pub fn freeObject(self: *Self, obj: *Obj, vm: *VM) void {
-  switch (obj.ty) {
+  switch (obj.id) {
     .ObjStr => {
       const T = value.ObjString;
-      var string = @ptrCast(*value.ObjString, obj);
-      self.mem.freeBuf(u8, vm, string.str);
-      self.mem.free(T, vm, value.objToSpecObject(T, obj));
+      var string = @ptrCast(*T, obj);
+      self.mem.freeBuf(u8, vm, string.str[0..string.len]);
+      self.mem.free(T, vm, string);
+    },
+    .ObjLst => {
+      const T = value.ObjList;
+      var list = @ptrCast(*T, obj);
+      self.mem.freeBuf(value.Value, vm, list.items[0..list.capacity]);
+      self.mem.free(T, vm, list);
     }
   }
 }

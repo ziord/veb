@@ -12,6 +12,7 @@ pub const AstType = enum {
   AstBool,
   AstBinary,
   AstUnary,
+  AstList,
   AstExprStmt,
 };
 
@@ -61,6 +62,16 @@ pub const UnaryNode = struct {
   }
 };
 
+pub const ListNode = struct {
+  elems: AstNodeList,
+  line: usize,
+  reg: u32,
+
+  pub fn init(allocator: std.mem.Allocator, line: usize) @This() {
+    return @This() {.elems = AstNodeList.init(allocator), .line = line, .reg = undefined};
+  }
+};
+
 pub const ExprStmtNode = struct {
   expr: *AstNode,
   line: usize,
@@ -77,6 +88,7 @@ pub const AstNode = union(AstType) {
   AstBool: LiteralNode,
   AstBinary: BinaryNode,
   AstUnary: UnaryNode,
+  AstList: ListNode,
   AstExprStmt: ExprStmtNode,
 
   pub fn line(self: *@This()) usize {
@@ -84,6 +96,7 @@ pub const AstNode = union(AstType) {
       .AstNum, .AstStr, .AstBool => |lit| lit.line,
       .AstBinary => |bin| bin.line,
       .AstUnary => |una| una.line,
+      .AstList => |lst| lst.line,
       .AstExprStmt => |expr| expr.line,
     };
   }
@@ -93,6 +106,7 @@ pub const AstNode = union(AstType) {
       .AstNum, .AstStr, .AstBool => |lit| lit.reg,
       .AstBinary => |bin| bin.reg,
       .AstUnary => |una| una.reg,
+      .AstList => |lst| lst.reg,
       .AstExprStmt => |expr| expr.reg,
     };
   }

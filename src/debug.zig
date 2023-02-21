@@ -19,10 +19,15 @@ pub const Disassembler = struct {
     std.debug.print("\n", .{});
   }
 
-  pub fn _2ArgsInst(name: []const u8, word: u32) void {
+  pub fn __2ArgsInst(name: []const u8, word: u32) void {
     const a1 = Code.readRX(word);
     const a2 = Code.readBX(word);
-    std.debug.print("{s} {}, {}\n", .{name, a1, a2});
+    std.debug.print("{s} {}, {}", .{name, a1, a2});
+  }
+
+  pub fn _2ArgsInst(name: []const u8, word: u32) void {
+    __2ArgsInst(name, word);
+    std.debug.print("\n", .{});
   }
 
   pub fn _1ArgInst(name: []const u8, word: u32) void {
@@ -55,10 +60,17 @@ pub const Disassembler = struct {
       .Shr => _3ArgsInst("shr", word),
       .Not => _3ArgsInst("not", word),
       .Inv => _2ArgsInst("inv", word),
-      .Load => _2ArgsInst("load", word),
       .Jt => _2ArgsInst("jt", word),
       .Jf => _2ArgsInst("jf", word),
+      .Blst => _2ArgsInst("blst", word),
       .Ret => plainInst("ret"),
+      .Load => {
+        __2ArgsInst("load", word);
+        var bx = Code.readBX(word);
+        std.debug.print("   ( ", .{});
+        value.printValue(code.values.items[bx]);
+        std.debug.print(" )\n", .{});
+      },
       .Cmp => {
         __3ArgsInst("cmp", word);
         index.* = index.* + 1; // cmp_op

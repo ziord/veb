@@ -1,10 +1,14 @@
 const std = @import("std");
 const lex = @import("lex.zig");
 const ast = @import("ast.zig");
+const util = @import("util.zig");
 const NovaAllocator = @import("allocator.zig");
 
 const Node = ast.AstNode;
 const exit = std.os.exit;
+
+// maximum number of elements of a list literal 
+const MAX_LISTING_ELEMS = 0xfff;
 
 
 pub const Parser = struct {
@@ -49,7 +53,7 @@ pub const Parser = struct {
     .{.bp = .Factor, .prefix = null, .infix = Self.binary},       // TkStar
     .{.bp = .Term, .prefix = Self.grouping, .infix = null},       // TkLBracket
     .{.bp = .None, .prefix = null, .infix = null},                // TkRBracket
-    .{.bp = .Term, .prefix = null, .infix = null},                // TkLSqrBracket
+    .{.bp = .Term, .prefix = Self.listing, .infix = null},        // TkLSqrBracket
     .{.bp = .None, .prefix = null, .infix = null},                // TkRSqrBracket
     .{.bp = .Term, .prefix = null, .infix = null},                // TkSemic
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},   // TkLthan
@@ -254,16 +258,36 @@ pub const Parser = struct {
     return node;
   }
 
-  fn parseExpr(self: *Self) *Node {
-    return self._parse(.Assignment);
-  }
-
   fn grouping(self: *Self, assignable: bool) *Node {
     _ = assignable;
     self.consume(.TkLBracket);
     const node = self.parseExpr();
     self.consume(.TkRBracket);
     return node;
+  }
+
+  fn listing(self: *Self, assignable: bool) *Node {
+    _ = assignable;
+    var node = self.newNode();
+    node.* = .{.AstList = ast.ListNode.init(self.allocator, self.current_tok.line)};
+    self.consume(.TkLSqrBracket);
+    var list = &node.*.AstList.elems;
+    while (!self.check(.TkEof) and !self.check(.TkRSqrBracket)) {
+      if (list.items.len > 0) {
+        self.consume(.TkComma);
+      }
+      if (list.items.len > MAX_LISTING_ELEMS) {
+        self.current_tok.msg = "Maximum number of list elements exceeded";
+        self.err(self.current_tok);
+      }
+      util.append(*Node, list, self.parseExpr());
+    }
+    self.consume(.TkRSqrBracket);
+    return node;
+  }
+
+  fn parseExpr(self: *Self) *Node {
+    return self._parse(.Assignment);
   }
 
   fn exprStmt(self: *Self) *Node {

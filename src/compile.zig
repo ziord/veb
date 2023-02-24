@@ -196,6 +196,30 @@ pub const Compiler = struct {
     self.code.write2ArgsInst(.Blst, reg, size, node.line, self.vm);
   }
 
+  fn cMap(self: *Self, node: *ast.MapNode) void {
+    var reg = self.getScratchReg();
+    const size = @intCast(u32, node.pairs.items.len);
+    if (size > 0) {
+      // free to allow reuse by the first element
+      self.freeScratchReg(reg);
+    }
+    for (node.pairs.items) |pair| {
+      self.c(pair.key);
+      self.c(pair.value);
+    }
+    if (size >= 1) {
+      for (node.pairs.items[1..]) |elem| {
+        self.freeScratchReg(elem.key.reg());
+        self.freeScratchReg(elem.value.reg());
+      }
+      // also free the `value` reg of the first key-value pair, 
+      // since we only need the `key`'s reg for the map.
+      self.freeScratchReg(node.pairs.items[0].value.reg());
+    }
+    // bmap rx, elem-count
+    self.code.write2ArgsInst(.Bmap, reg, size, node.line, self.vm);
+  }
+
   fn cExprStmt(self: *Self, node: *ast.ExprStmtNode) void {
     self.c(node.expr);
   }
@@ -208,6 +232,7 @@ pub const Compiler = struct {
       .AstUnary => |*nd| self.cUnary(nd),
       .AstBinary => |*nd| self.cBinary(nd),
       .AstList => |*nd| self.cList(nd),
+      .AstMap => |*nd| self.cMap(nd),
       .AstExprStmt => |*nd| self.cExprStmt(nd),
     }
   }

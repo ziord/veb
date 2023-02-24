@@ -309,6 +309,22 @@ pub const VM = struct {
           }
           self.stack[rx] = vl.objVal(list);
         },
+        .Bmap => {
+          // TODO: map specialization
+          // bmap rx, count
+          var rx: u32 = undefined;
+          var count: u32 = undefined;
+          self.read2Args(inst, &rx, &count);
+          var map = vl.createMap(self, @as(usize, count));
+          var i: usize = 0;
+          count *= 2; // KV-pairs
+          while (i < count): (i += 2) { // skip key, val.
+            var key = self.stack[rx + i];
+            var val = self.stack[rx + i + 1];
+            _ = map.meta.put(key, val, self);
+          }
+          self.stack[rx] = vl.objVal(map);
+        },
         .Ret => {
           std.debug.print("stack: \n", .{});
           self.printStack();

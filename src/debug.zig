@@ -63,6 +63,7 @@ pub const Disassembler = struct {
       .Jt => _2ArgsInst("jt", word),
       .Jf => _2ArgsInst("jf", word),
       .Blst => _2ArgsInst("blst", word),
+      .Bmap => _2ArgsInst("bmap", word),
       .Ret => plainInst("ret"),
       .Load => {
         __2ArgsInst("load", word);

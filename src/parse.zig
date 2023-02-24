@@ -8,7 +8,7 @@ const Node = ast.AstNode;
 const exit = std.os.exit;
 
 // maximum number of elements of a list literal 
-const MAX_LISTING_ELEMS = 0xfff;
+const MAX_LISTING_ELEMS = 0xff;
 
 
 pub const Parser = struct {
@@ -53,13 +53,14 @@ pub const Parser = struct {
     .{.bp = .Factor, .prefix = null, .infix = Self.binary},       // TkStar
     .{.bp = .Term, .prefix = Self.grouping, .infix = null},       // TkLBracket
     .{.bp = .None, .prefix = null, .infix = null},                // TkRBracket
-    .{.bp = .Term, .prefix = Self.listing, .infix = null},        // TkLSqrBracket
+    .{.bp = .None, .prefix = Self.listing, .infix = null},        // TkLSqrBracket
     .{.bp = .None, .prefix = null, .infix = null},                // TkRSqrBracket
-    .{.bp = .Term, .prefix = null, .infix = null},                // TkSemic
+    .{.bp = .None, .prefix = null, .infix = null},                // TkSemic
+    .{.bp = .None, .prefix = null, .infix = null},                // TkColon
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},   // TkLthan
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},   // TkGthan
     .{.bp = .None, .prefix = null, .infix = null},                // TkEqual
-    .{.bp = .None, .prefix = null, .infix = null},                // TkLCurly
+    .{.bp = .None, .prefix = Self.mapping, .infix = null},        // TkLCurly
     .{.bp = .None, .prefix = null, .infix = null},                // TkRCurly
     .{.bp = .BitAnd, .prefix = null, .infix = Self.binary},       // TkAmp
     .{.bp = .Factor, .prefix = null, .infix = Self.binary},       // TkPerc
@@ -78,6 +79,7 @@ pub const Parser = struct {
     .{.bp = .Or, .prefix = null, .infix = Self.binary},           // TkOr
     .{.bp = .None, .prefix = null, .infix = null},                // TkFor
     .{.bp = .And, .prefix = null, .infix = Self.binary},          // TkAnd
+    .{.bp = .None, .prefix = null, .infix = null},                // TkLet
     .{.bp = .None, .prefix = null, .infix = null},                // TkElse
     .{.bp = .None, .prefix = Self.boolean, .infix = null},        // TkTrue
     .{.bp = .None, .prefix = Self.boolean, .infix = null},        // TkFalse
@@ -130,6 +132,8 @@ pub const Parser = struct {
       self.printSquig(token.value.len);
       std.debug.print("\n", .{});
     }
+    // free only arena for now.
+    self.nva.deinitArena();
     exit(1);
   }
 
@@ -285,6 +289,34 @@ pub const Parser = struct {
     self.consume(.TkRSqrBracket);
     return node;
   }
+
+  fn mapping(self: *Self, assignable: bool) *Node {
+    _ = assignable;
+    var node = self.newNode();
+    node.* = .{.AstMap = ast.MapNode.init(self.allocator, self.current_tok.line)};
+    self.consume(.TkLCurly);
+    var pairs = &node.*.AstMap.pairs;
+    const max_items: usize = MAX_LISTING_ELEMS / 2;
+    while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
+      if (pairs.items.len > 0) {
+        self.consume(.TkComma);
+      }
+      if (pairs.items.len > max_items) {
+        self.current_tok.msg = "Maximum number of map items exceeded";
+        self.err(self.current_tok);
+      }
+      var key = self.parseExpr();
+      self.consume(.TkColon);
+      var val = self.parseExpr();
+      util.append(ast.MapNode.Pair, pairs, .{.key = key, .value = val});
+    }
+    self.consume(.TkRCurly);
+    return node;
+  }
+
+  // fn vardecl(self: *Self) *Node {
+  //   // let var (: type)? = expr
+  // }
 
   fn parseExpr(self: *Self) *Node {
     return self._parse(.Assignment);

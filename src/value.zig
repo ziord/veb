@@ -158,6 +158,8 @@ pub const NOTHING_VAL = @as(Value, (QNAN | TAG_NOTHING));
 pub const ObjId = enum(u8) {
   ObjStr,
   ObjLst,
+  ObjValMap,
+  // ObjStrMap,
 };
 
 pub const Obj = extern struct {
@@ -178,6 +180,22 @@ pub const ObjList = extern struct {
   capacity: usize,
   items: [*]Value,
 };
+
+pub const ObjMap = extern struct {
+  obj: Obj,
+  meta: ValueHashMap
+};
+
+pub const ObjSMap = extern struct {
+  obj: Obj,
+  meta: StringHashMap,
+};
+
+pub const StringNullKey = ObjString {.obj = .{.id = .ObjStr, .next = null}, .hash = 0, .str = "", .len = 0};
+
+pub const StringHashMap = Map(*const ObjString, Value);
+
+pub const ValueHashMap = Map(Value, Value);
 
 pub inline fn numberVal(num: f64) Value {
   return @ptrCast(*const Value, &num).*;
@@ -236,7 +254,11 @@ pub inline fn isString(val: Value) bool {
 }
 
 pub inline fn isList(val: Value) bool {
-  return isObjType(val, .ObjList);
+  return isObjType(val, .ObjLst);
+}
+
+pub inline fn isMap(val: Value) bool {
+  return isObjType(val, .ObjValMap);
 }
 
 pub inline fn asString(val: Value) *ObjString {
@@ -247,13 +269,32 @@ pub inline fn asList(val: Value) *ObjList {
   return @ptrCast(*ObjList, asObj(val));
 }
 
+pub inline fn asMap(val: Value) *ObjMap {
+  return @ptrCast(*ObjMap, asObj(val));
+}
+
 pub inline fn valueEqual(a: Value, b: Value) bool {
   if (isNumber(a) and isNumber(b)) return asNumber(a) == asNumber(b);
   return a == b;
 }
 
 pub inline fn valueFalsy(val: Value) bool {
-  return (isBool(val) and !asBool(val)) or isNil(val) or (isNumber(val) and asNumber(val) == 0);
+  return (
+    (isBool(val) and !asBool(val)) or isNil(val) or 
+    (isNumber(val) and asNumber(val) == 0) or 
+    (isString(val) and asString(val).len > 0) or
+    (isList(val) and asList(val).len > 0) or
+    (isMap(val) and asMap(val).meta.len > 0)
+  );
+}
+
+pub fn display(val: Value) void {
+  if (isString(val)) {
+    var tmp = asString(val);
+    util.print("\"{s}\"", .{tmp.str[0..tmp.len]});
+  } else {
+    printValue(val);
+  }
 }
 
 pub fn printValue(val: Value) void {
@@ -280,55 +321,19 @@ pub fn printObject(val: Value) void {
       var add_comma = list.len > 1;
       var comma_end = if (add_comma) list.len - 1 else 0;
       util.print("[", .{});
-      var tmp: *ObjString = undefined;
       for (list.items[0..list.len]) |item, i| {
-        if (isString(item)) {
-          tmp = asString(item);
-          util.print("\"{s}\"", .{tmp.str[0..tmp.len]});
-        } else {
-          printValue(item);
-        }
+        @call(.always_inline, display, .{item});
         if (add_comma and i < comma_end) {
           util.print(", ", .{});
         }
       }
       util.print("]", .{});
+    },
+    .ObjValMap => {
+      asMap(val).meta.display();
     }
   }
 }
-
-const StringNullKey = ObjString {.obj = .{.id = .ObjStr, .next = null}, .hash = 0, .str = "", .len = 0};
-
-//**StringHashMap**//
-pub const StringContext = struct {
-  const K = *const ObjString;
-  pub fn hash(self: @This(), k: K) u64 {
-    _ = self;
-    return k.hash;
-  }
-
-  pub fn eql(self: @This(), k1: K, k2: K) bool {
-    _ = self;
-    return k1 == k2;
-  }
-
-  pub inline fn isNullKey(self: @This(), key: K) bool {
-    _ = self;
-    return key == &StringNullKey;
-  }
-
-  pub inline fn isNullVal(self: @This(), value: Value) bool {
-    _ = self;
-    return value == NOTHING_VAL;
-  }
-
-  pub inline fn cmpInterned(self: @This(), key: K, str: []const u8, str_hash: u64) bool {
-    _ = self;
-    return (key.hash == str_hash and std.mem.eql(u8, key.str[0..key.len], str));
-  }
-};
-
-pub const StringHashMap = Map(*const ObjString, Value, StringContext, &StringNullKey);
 
 pub fn hashString(str: []const u8) u64 {
   // FNV-1a hashing algorithm
@@ -343,8 +348,32 @@ pub fn hashString(str: []const u8) u64 {
   }
   return @truncate(u64, hash);
 }
-//**End StringHashMap**//
 
+pub fn hashBits(val: Value) u64 {
+  // from Wren,
+  // adapted from http://web.archive.org/web/20071223173210/http://www.concentric.net/~Ttwang/tech/inthash.htm
+  @setRuntimeSafety(false);
+  var hash = val;
+  hash = ~hash + (hash << 18);
+  hash = hash ^ (hash >> 31);
+  hash = hash * 21;
+  hash = hash ^ (hash >> 11);
+  hash = hash + (hash << 6);
+  hash = hash ^ (hash >> 22);
+  return @truncate(u64, (hash & 0x3fffffff));
+}
+
+pub fn hashObject(val: Value) u64 {
+  return switch (asObj(val).id) {
+    .ObjStr => asString(val).hash,
+    else => |id| std.debug.panic("unhashable type: '{}'", .{id})
+  };
+}
+
+pub fn hashValue(val: Value) u64 {
+  if (isObj(val)) return hashObject(val);
+  return hashBits(val);
+}
 
 pub const VM = @import("vm.zig").VM;
 
@@ -385,4 +414,11 @@ pub fn createList(vm: *VM, len: usize) *ObjList {
   list.capacity = cap;
   list.len = len;
   return list;
+}
+
+pub fn createMap(vm: *VM, len: usize) *ObjMap {
+  var map = @call(.always_inline, createObject, .{vm, .ObjValMap, ObjMap});
+  map.meta = ValueHashMap.init();
+  map.meta.ensureCapacity(vm, len);
+  return map;
 }

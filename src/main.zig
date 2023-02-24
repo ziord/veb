@@ -133,6 +133,21 @@ test "lists" {
     "[1, 'fox', 3, 'cat']",
     "[1]",
     "[]",
+    "[1, 'fox', 3, 'cat', [1, 'fox', 3, 'cat']]",
+    "[1, 2, {'a': 'set'}]"
+  };
+  for (srcs) |src| {
+    _ = try doTest(src);
+  }
+}
+
+test "maps" {
+  const srcs = [_][]const u8{
+   "{'abc': 123}",
+   "{'abc': 123, true: 0xff, 'obs': 'fin'}",
+   "{}",
+   "{'abc': 123, true: 0xff, 'obs': 'fin', 0.123: {'abc': 123, true: 0xff, 'obs': 'fin'}}",
+   "{24: [1, 2, 3]}",
   };
   for (srcs) |src| {
     _ = try doTest(src);

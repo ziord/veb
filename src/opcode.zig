@@ -66,6 +66,10 @@ pub const OpCode = enum (u8) {
   // [6] [8] [18]
   Blst,
 
+  // bmap rx, size
+  // [6] [8] [18]
+  Bmap,
+
   // load rx, bx
   //  [6] [8]  [18]
   Load,

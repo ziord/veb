@@ -9,6 +9,7 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"for", .TkFor},
   .{"while", .TkWhile},
   .{"and", .TkAnd},
+  .{"let", .TkLet},
   .{"or", .TkOr},
   .{"true", .TkTrue},
   .{"false", .TkFalse},
@@ -24,6 +25,7 @@ pub const TokenType = enum (u8) {
   TkLSqrBracket,    // [
   TkRSqrBracket,    // ]
   TkSemic,          // ;
+  TkColon,          // :
   TkLthan,          // <
   TkGthan,          // >
   TkEqual,          // =
@@ -46,6 +48,7 @@ pub const TokenType = enum (u8) {
   TkOr,             // or
   TkFor,            // for
   TkAnd,            // and
+  TkLet,            // let
   TkElse,           // else
   TkTrue,           // true
   TkFalse,          // false
@@ -97,6 +100,7 @@ pub const TokenType = enum (u8) {
       .TkLSqrBracket => "[",
       .TkRSqrBracket => "]",
       .TkSemic => ";",
+      .TkColon => ":",
       .TkLthan => "<",
       .TkGthan => ">",
       .TkEqual => "=",
@@ -119,6 +123,7 @@ pub const TokenType = enum (u8) {
       .TkOr => "or",
       .TkFor => "for",
       .TkAnd => "and",
+      .TkLet => "let",
       .TkElse => "else",
       .TkTrue => "true",
       .TkFalse => "false",
@@ -567,6 +572,7 @@ pub const Lexer = struct {
       '%' => self.newToken(.TkPerc),
       ',' => self.newToken(.TkComma),
       ';' => self.newToken(.TkSemic),
+      ':' => self.newToken(.TkColon),
       '{' => self.newToken(.TkLCurly),
       '}' => self.newToken(.TkRCurly),
       '^' => self.newToken(.TkCaret),

@@ -59,6 +59,12 @@ pub fn freeObject(self: *Self, obj: *Obj, vm: *VM) void {
       var list = @ptrCast(*T, obj);
       self.mem.freeBuf(value.Value, vm, list.items[0..list.capacity]);
       self.mem.free(T, vm, list);
+    },
+    .ObjValMap => {
+      const T = value.ObjMap;
+      var map = @ptrCast(*T, obj);
+      map.meta.free(vm);
+      self.mem.free(T, vm, map);
     }
   }
 }

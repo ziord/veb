@@ -13,6 +13,7 @@ pub const AstType = enum {
   AstBinary,
   AstUnary,
   AstList,
+  AstMap,
   AstExprStmt,
 };
 
@@ -72,6 +73,34 @@ pub const ListNode = struct {
   }
 };
 
+pub const MapNode = struct {
+  pairs: std.ArrayList(Pair),
+  line: usize,
+  reg: u32,
+
+  pub const Pair = struct {key: *AstNode, value: *AstNode};
+
+  pub fn init(allocator: std.mem.Allocator, line: usize) @This() {
+    return @This() {.pairs = std.ArrayList(Pair).init(allocator), .line = line, .reg = undefined};
+  }
+};
+
+pub const VarNode = struct {
+  token: lex.Token,
+  line: usize,
+  type: IType,
+  reg: u32,
+
+  pub fn init(token: Token) @This() {
+    return @This() {
+      .token = token,
+      .line = token.line,
+      .type = undefined,
+      .reg = undefined,
+    };
+  }
+};
+
 pub const ExprStmtNode = struct {
   expr: *AstNode,
   line: usize,
@@ -89,6 +118,7 @@ pub const AstNode = union(AstType) {
   AstBinary: BinaryNode,
   AstUnary: UnaryNode,
   AstList: ListNode,
+  AstMap: MapNode,
   AstExprStmt: ExprStmtNode,
 
   pub fn line(self: *@This()) usize {
@@ -97,6 +127,7 @@ pub const AstNode = union(AstType) {
       .AstBinary => |bin| bin.line,
       .AstUnary => |una| una.line,
       .AstList => |lst| lst.line,
+      .AstMap => |map| map.line,
       .AstExprStmt => |expr| expr.line,
     };
   }
@@ -107,6 +138,7 @@ pub const AstNode = union(AstType) {
       .AstBinary => |bin| bin.reg,
       .AstUnary => |una| una.reg,
       .AstList => |lst| lst.reg,
+      .AstMap => |map| map.reg,
       .AstExprStmt => |expr| expr.reg,
     };
   }
@@ -124,5 +156,25 @@ pub const AstNode = union(AstType) {
       .AstNum, .AstBool, => true,
       else => false,
     };
+  }
+};
+
+pub const ITypeKind = enum (u8) {
+  TyBool,
+  TyNumber,
+  TyString,
+  TyList,
+  TyMap,
+};
+
+pub const IType = struct {
+  kind: ITypeKind,
+  list: ? struct {
+    len: usize,
+    base: IType,
+  },
+
+  pub fn init() @This() {
+    // TODO
   }
 };

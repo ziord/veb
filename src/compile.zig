@@ -10,23 +10,67 @@ const VM = @import("vm.zig").VM;
 const Code = value.Code;
 const Node = ast.AstNode;
 
+const VRegister = struct {
+  regs: [value.MAX_REGISTERS]Reg,
+  reg: ?u8,
+
+  const Reg = struct {
+    val: u8, 
+    free: bool,
+
+    pub inline fn setFree(self: *@This(), free: bool) void {
+      self.free = free;
+    }
+  };
+
+  const Self = @This();
+
+  pub fn init() Self {
+    var regs: [value.MAX_REGISTERS]Reg = undefined;
+    var i: u8 = 0;
+    while (i < value.MAX_REGISTERS): (i += 1) {
+      regs[i] = .{.val = i, .free = true};
+    }
+    return Self {.regs = regs, .reg = null};
+  }
+
+  pub fn setReg(self: *Self, reg: u32) void {
+    self.reg = @intCast(u8, reg);
+  }
+
+  pub fn getReg(self: *Self) error{RegistersExhausted}!u32 {
+    if (self.reg) |reg| {
+      return reg;
+    }
+    for (self.regs) |*reg| {
+      if (reg.free) {
+        reg.setFree(false);
+        return @as(u32, reg.val);
+      }
+    }
+    return error.RegistersExhausted;
+  }
+
+  pub fn releaseReg(self: *Self, reg: u32) void {
+    for (self.regs) |*_reg| {
+      if (_reg.val == reg) {
+        std.debug.assert(!_reg.free);
+        _reg.setFree(true);
+        return;
+      }
+    }
+  }
+};
+
 pub const Compiler = struct {
   code: *Code,
   node: *Node,
   filename: []const u8,
-  registers: std.ArrayList(u32),
+  registers: VRegister,
   allocator: *NovaAllocator,
   vm: *VM,
   
   const Self = @This();
-
-  fn initRegisters(allocator: std.mem.Allocator) std.ArrayList(u32) {
-    var list = std.ArrayList(u32).init(allocator);
-    var i: u32 = value.MAX_REGISTERS - 1;
-    while (i > 0): (i -= 1) util.append(u32, &list, i);
-    util.append(u32, &list, 0);
-    return list;
-  }
 
   pub fn init(node: *Node, filename: []const u8, vm: *VM, code: *Code, allocator: *NovaAllocator) Self {
     var self = Self {
@@ -34,7 +78,7 @@ pub const Compiler = struct {
       .node = node, 
       .filename = filename,
       .allocator = allocator,
-      .registers = initRegisters(allocator.getArenaAllocator()),
+      .registers = VRegister.init(),
       .vm = vm,
     };
     return self;
@@ -46,20 +90,14 @@ pub const Compiler = struct {
     std.os.exit(1);
   }
 
-  fn getScratchReg(self: *Self) u32 {
-    // todo: augment
-    if (self.registers.items.len > 0) {
-      return self.registers.pop();
-    }
-    self.compileError("registers exhausted");
-  }
-
-  fn freeScratchReg(self: *Self, reg: u32) void {
-    util.append(u32, &self.registers, reg);
-  }
-
   fn lastLine(self: *Self) u32 {
     return self.code.lines.items[self.code.lines.items.len - 1];
+  }
+
+  fn getReg(self: *Self) u32 {
+    return self.registers.getReg() catch {
+      self.compileError("registers exhausted");
+    };
   }
 
   fn cConst(self: *Self, reg: u32, val: value.Value, line: usize) void {
@@ -70,18 +108,18 @@ pub const Compiler = struct {
 
   fn cNum(self: *Self, node: *ast.LiteralNode) void {
     // load rx, memidx
-    node.reg = self.getScratchReg();
+    node.reg = self.getReg();
     self.cConst(node.reg, value.numberVal(node.value), node.line);
   }
 
   fn cBool(self: *Self, node: *ast.LiteralNode) void {
     // load rx, memidx
-    node.reg = self.getScratchReg();
+    node.reg = self.getReg();
     self.cConst(node.reg, value.boolVal(node.token.is(.TkTrue)), node.line);
   }
 
   fn cStr(self: *Self, node: *ast.LiteralNode) void {
-    node.reg = self.getScratchReg();
+    node.reg = self.getReg();
     self.cConst(
       node.reg,
       value.objVal(value.createString(self.vm, &self.vm.strings, node.token.value, node.token.is_alloc)),
@@ -92,7 +130,7 @@ pub const Compiler = struct {
   fn cUnary(self: *Self, node: *ast.UnaryNode) void {
     const inst_op = node.op.toInstOp();
     const isConst = node.expr.isConst();
-    const rx = self.getScratchReg();
+    const rx = self.getReg();
     // check that we don't exceed the 18 bits of rk/bx (+ 1 for expr)
     if ((self.code.values.items.len + value.MAX_REGISTERS + 1) < value.Code._18bits and isConst) {
       // for now, only numbers and booleans are recognized as consts
@@ -109,7 +147,7 @@ pub const Compiler = struct {
     self.c(node.expr);
     const rk = node.expr.reg();
     self.code.write2ArgsInst(inst_op, rx, rk, @intCast(u32, node.line), self.vm);
-    self.freeScratchReg(rk);
+    self.registers.releaseReg(rk);
     node.reg = rx;
   }
 
@@ -122,7 +160,7 @@ pub const Compiler = struct {
     self.c(node.left);
     const rx = node.left.reg();
     const end_jmp = self.code.write2ArgsJmp(node.op.toInstOp(), rx, self.lastLine(), self.vm);
-    self.freeScratchReg(rx);
+    self.registers.releaseReg(rx);
     self.c(node.right);
     self.code.patch2ArgsJmp(end_jmp);
     node.reg = node.right.reg();
@@ -135,7 +173,7 @@ pub const Compiler = struct {
     const lhsIsNum = node.left.isNum();
     const rhsIsNum = node.right.isNum();
     const inst_op = node.op.toInstOp();
-    const rx = self.getScratchReg();
+    const rx = self.getReg();
     // check that we don't exceed the 9 bits of rk (+ 2 for lhs and rhs)
     if ((self.code.values.items.len + value.MAX_REGISTERS + 2) < value.Code._9bits) {
       if (lhsIsNum and rhsIsNum) {
@@ -150,7 +188,7 @@ pub const Compiler = struct {
         self.c(node.right);
         const rk2 = node.right.reg();
         self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line), self.vm);
-        self.freeScratchReg(rk2);
+        self.registers.releaseReg(rk2);
         self.cCmp(node);
         node.reg = rx;
         return;
@@ -159,7 +197,7 @@ pub const Compiler = struct {
         const rk1 = node.left.reg();
         const rk2 = self.code.storeConst(value.numberVal(node.right.AstNum.value), self.vm);
         self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line), self.vm);
-        self.freeScratchReg(rk1);
+        self.registers.releaseReg(rk1);
         self.cCmp(node);
         node.reg = rx;
         return;
@@ -171,37 +209,38 @@ pub const Compiler = struct {
     self.c(node.right);
     const rk2 = node.right.reg();
     self.code.write3ArgsInst(inst_op, rx, rk1, rk2, @intCast(u32, node.line), self.vm);
-    self.freeScratchReg(rk1);
-    self.freeScratchReg(rk2);
+    self.registers.releaseReg(rk1);
+    self.registers.releaseReg(rk2);
     self.cCmp(node);
     node.reg = rx;
   }
 
   fn cList(self: *Self, node: *ast.ListNode) void {
-    var reg = self.getScratchReg();
+    var reg = self.getReg();
     const size = @intCast(u32, node.elems.items.len);
     if (size > 0) {
       // free to allow reuse by the first element
-      self.freeScratchReg(reg);
+      self.registers.releaseReg(reg);
     }
     for (node.elems.items) |elem| {
       self.c(elem);
     }
     if (size > 1) {
       for (node.elems.items[1..]) |elem| {
-        self.freeScratchReg(elem.reg());
+        self.registers.releaseReg(elem.reg());
       }
     }
+    node.reg = reg;
     // blst rx, elem-count
     self.code.write2ArgsInst(.Blst, reg, size, node.line, self.vm);
   }
 
   fn cMap(self: *Self, node: *ast.MapNode) void {
-    var reg = self.getScratchReg();
+    var reg = self.getReg();
     const size = @intCast(u32, node.pairs.items.len);
     if (size > 0) {
       // free to allow reuse by the first element
-      self.freeScratchReg(reg);
+      self.registers.releaseReg(reg);
     }
     for (node.pairs.items) |pair| {
       self.c(pair.key);
@@ -209,13 +248,14 @@ pub const Compiler = struct {
     }
     if (size >= 1) {
       for (node.pairs.items[1..]) |elem| {
-        self.freeScratchReg(elem.key.reg());
-        self.freeScratchReg(elem.value.reg());
+        self.registers.releaseReg(elem.key.reg());
+        self.registers.releaseReg(elem.value.reg());
       }
       // also free the `value` reg of the first key-value pair, 
       // since we only need the `key`'s reg for the map.
-      self.freeScratchReg(node.pairs.items[0].value.reg());
+      self.registers.releaseReg(node.pairs.items[0].value.reg());
     }
+    node.reg = reg;
     // bmap rx, elem-count
     self.code.write2ArgsInst(.Bmap, reg, size, node.line, self.vm);
   }

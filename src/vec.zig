@@ -21,7 +21,7 @@ pub fn Vec(comptime T: type) type {
     pub fn push(self: *Self, item: T, vm: *VM) void {
       if (self.items.len >= self.capacity) {
         const new_capacity = Mem.growCapacity(self.capacity);
-        self.items.ptr = vm.gc.mem.resizeBuf(T, vm, self.allocatedSlice(),  self.capacity, new_capacity).ptr;
+        self.items.ptr = vm.mem.resizeBuf(T, vm, self.allocatedSlice(),  self.capacity, new_capacity).ptr;
         self.capacity = new_capacity;
       }
       self.items.len += 1;
@@ -41,7 +41,7 @@ pub fn Vec(comptime T: type) type {
     pub fn clearAndFree(self: *Self, vm: *VM) void {
       // expand len (if not already at max cap) for freeing
       self.items.len = self.capacity;
-      vm.gc.mem.freeBuf(T, vm, self.items);
+      vm.mem.freeBuf(T, vm, self.items);
       self.items.len = 0;
       self.capacity = 0;
     }

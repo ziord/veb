@@ -1,6 +1,7 @@
 const std = @import("std");
 const vl = @import("value.zig");
 const OpCode = @import("opcode.zig").OpCode;
+const Mem = @import("mem.zig");
 const GC = @import("gc.zig");
 const NovaAllocator = @import("allocator.zig");
 
@@ -14,6 +15,7 @@ pub const VM = struct {
   code: *Code,
   strings: StringHashMap,
   objects: ?*vl.Obj,
+  mem: Mem,
   gc: GC,
 
   const Self = @This();
@@ -22,8 +24,9 @@ pub const VM = struct {
 
   pub fn init(allocator: *NovaAllocator, code: *Code) Self {
     return Self {
-      .ip = 0, 
-      .stack = undefined, 
+      .ip = 0,
+      .stack = undefined,
+      .mem = Mem.init(allocator.getAllocator()),
       .gc = GC.init(allocator),
       .strings = StringHashMap.init(),
       .objects = null,
@@ -42,6 +45,7 @@ pub const VM = struct {
     // TODO: move this when functions are implemented
     self.code.deinit(self);
     self.gc.deinit();
+    self.mem.deinit();
   }
 
   inline fn readWord(self: *Self) u32 {

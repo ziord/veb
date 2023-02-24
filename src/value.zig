@@ -378,7 +378,7 @@ pub fn hashValue(val: Value) u64 {
 pub const VM = @import("vm.zig").VM;
 
 pub fn createObject(vm: *VM, id: ObjId, comptime T: type) *T {
-  var mem = vm.gc.mem.alloc(T, vm);
+  var mem = vm.mem.alloc(T, vm);
   mem.obj.id = id;
   mem.obj.next = vm.objects;
   vm.objects = &mem.obj;
@@ -394,7 +394,7 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
     tmp.hash = hash;
     tmp.len = str.len;
     if (!is_alloc) {
-      var s = vm.gc.mem.allocBuf(u8, str.len, vm);
+      var s = vm.mem.allocBuf(u8, str.len, vm);
       std.mem.copy(u8, s, str);
       tmp.str = @ptrCast([*]const u8, s);
     } else {
@@ -410,7 +410,7 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
 pub fn createList(vm: *VM, len: usize) *ObjList {
   const cap = Mem.alignTo(Mem.growCapacity(len), Mem.BUFFER_INIT_SIZE);
   var list = @call(.always_inline, createObject, .{vm, .ObjLst, ObjList});
-  list.items = @ptrCast([*]Value, vm.gc.mem.allocBuf(Value, cap, vm));
+  list.items = @ptrCast([*]Value, vm.mem.allocBuf(Value, cap, vm));
   list.capacity = cap;
   list.len = len;
   return list;

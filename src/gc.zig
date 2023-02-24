@@ -1,5 +1,4 @@
 const std = @import("std");
-const Mem = @import("mem.zig");
 const value = @import("value.zig");
 const VM = @import("vm.zig").VM;
 const NovaAllocator = @import("allocator.zig");
@@ -9,7 +8,6 @@ const Obj = value.Obj;
 bytes_allocated: usize,
 next_collection: usize,
 gray_stack: std.ArrayList(*Obj),
-mem: Mem,
 allocator: *NovaAllocator,
 
 const Self = @This();
@@ -19,14 +17,12 @@ pub fn init(allocator: *NovaAllocator) Self {
     .gray_stack = std.ArrayList(*Obj).init(allocator.getArenaAllocator()),
     .bytes_allocated = 0,
     .next_collection = 0,
-    .mem = Mem.init(allocator.getAllocator()),
     .allocator = allocator,
   };
 }
 
 pub fn deinit(self: *Self) void {
   self.gray_stack.deinit();
-  self.mem.deinit();
 }
 
 pub fn collect(self: *Self, vm: *VM) void {
@@ -47,24 +43,25 @@ pub inline fn forceCollect(self: *Self, vm: *VM, likely: bool) void {
 }
 
 pub fn freeObject(self: *Self, obj: *Obj, vm: *VM) void {
+  _ = self;
   switch (obj.id) {
     .ObjStr => {
       const T = value.ObjString;
       var string = @ptrCast(*T, obj);
-      self.mem.freeBuf(u8, vm, string.str[0..string.len]);
-      self.mem.free(T, vm, string);
+      vm.mem.freeBuf(u8, vm, string.str[0..string.len]);
+      vm.mem.free(T, vm, string);
     },
     .ObjLst => {
       const T = value.ObjList;
       var list = @ptrCast(*T, obj);
-      self.mem.freeBuf(value.Value, vm, list.items[0..list.capacity]);
-      self.mem.free(T, vm, list);
+      vm.mem.freeBuf(value.Value, vm, list.items[0..list.capacity]);
+      vm.mem.free(T, vm, list);
     },
     .ObjValMap => {
       const T = value.ObjMap;
       var map = @ptrCast(*T, obj);
       map.meta.free(vm);
-      self.mem.free(T, vm, map);
+      vm.mem.free(T, vm, map);
     }
   }
 }

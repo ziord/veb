@@ -67,7 +67,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
 
     fn resizeMap(self: *Self, vm: *VM, ensure: usize) void {
       const new_capacity = Mem.growCapacity(self.capacity) + ensure;
-      var tmp = vm.gc.mem.allocBuf(KVEntry, new_capacity, vm);
+      var tmp = vm.mem.allocBuf(KVEntry, new_capacity, vm);
       std.debug.assert(new_capacity == tmp.len);
       for (tmp) |*entry| {
         entry.key = NullKey;
@@ -82,7 +82,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
           self.len += 1;
         }
       }
-      vm.gc.mem.freeBuf(KVEntry, vm, self.entries[0..self.capacity]);
+      vm.mem.freeBuf(KVEntry, vm, self.entries[0..self.capacity]);
       self.entries = new_entries;
       self.capacity = new_capacity;
     }
@@ -203,11 +203,11 @@ pub fn Map(comptime K: type, comptime V: type) type {
     }
 
     pub fn free(self: *Self, vm: *VM) void {
-      vm.gc.mem.freeBuf(KVEntry, vm, self.entries[0..self.capacity]);
+      vm.mem.freeBuf(KVEntry, vm, self.entries[0..self.capacity]);
     }
 
     pub fn clearAndFree(self: *Self, vm: *VM) void {
-      vm.gc.mem.freeBuf(KVEntry, vm, self.entries);
+      vm.mem.freeBuf(KVEntry, vm, self.entries);
       self.capacity = 0;
       self.len = 0;
     }

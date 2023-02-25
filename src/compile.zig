@@ -42,7 +42,7 @@ const VRegister = struct {
     if (self.reg) |reg| {
       return reg;
     }
-    for (self.regs) |*reg| {
+    for (&self.regs) |*reg| {
       if (reg.free) {
         reg.setFree(false);
         return @as(u32, reg.val);
@@ -52,7 +52,7 @@ const VRegister = struct {
   }
 
   pub fn releaseReg(self: *Self, reg: u32) void {
-    for (self.regs) |*_reg| {
+    for (&self.regs) |*_reg| {
       if (_reg.val == reg) {
         std.debug.assert(!_reg.free);
         _reg.setFree(true);

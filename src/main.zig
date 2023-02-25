@@ -42,7 +42,7 @@ test "arithmetic ops" {
     "~0x123 ++ --2",
   };
   const exp = [_]f64{449.09846153846155, 6, 2, 1, 962, -290, -290};
-  for (srcs) |src, i| {
+  for (srcs, 0..) |src, i| {
     const got = try doTest(src);
     try std.testing.expect(value.asNumber(got) == exp[i]);
   }
@@ -58,7 +58,7 @@ test "comparison ops" {
       "0xdeadbeef == 0o33653337357",
   };
   const exp = [_]bool{false, false, true, false, true, true};
-  for (srcs) |src, i| {
+  for (srcs, 0..) |src, i| {
     const got = try doTest(src);
     try std.testing.expect(value.asBool(got) == exp[i]);
   }

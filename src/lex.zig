@@ -529,7 +529,7 @@ pub const Lexer = struct {
   pub fn getLine(self: *Self, line: usize) []const u8 {
     var curr_line: usize = 0;
     var start_col: usize = 0;
-    for (self.src) |ch, idx| {
+    for (self.src, 0..) |ch, idx| {
       if (curr_line == line - 1) {
         start_col = idx;
         break; 

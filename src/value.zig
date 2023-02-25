@@ -321,7 +321,7 @@ pub fn printObject(val: Value) void {
       var add_comma = list.len > 1;
       var comma_end = if (add_comma) list.len - 1 else 0;
       util.print("[", .{});
-      for (list.items[0..list.len]) |item, i| {
+      for (list.items[0..list.len], 0..) |item, i| {
         @call(.always_inline, display, .{item});
         if (add_comma and i < comma_end) {
           util.print(", ", .{});

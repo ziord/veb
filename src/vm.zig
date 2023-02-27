@@ -19,7 +19,7 @@ pub const VM = struct {
   gc: GC,
 
   const Self = @This();
-  const STACK_MAX = 0x15;
+  const STACK_MAX = 0xffff;
   const RuntimeError = error{RuntimeError};
 
   pub fn init(allocator: *NovaAllocator, code: *Code) Self {
@@ -200,7 +200,7 @@ pub const VM = struct {
           const b = self.RK(rk2);
           self.assert(vl.isNumber(a));
           self.assert(vl.isNumber(b));
-          self.stack[rx] = vl.numberVal(@intToFloat(f64, (@floatToInt(i64, vl.asNumber(a)) ^ @floatToInt(i64, vl.asNumber(b)))));
+          self.stack[rx] = vl.numberVal(@intToFloat(f64, (vl.asIntNumber(i64, a) ^ vl.asIntNumber(i64, b))));
           continue;
         },
         .Or => {
@@ -213,7 +213,7 @@ pub const VM = struct {
           const b = self.RK(rk2);
           self.assert(vl.isNumber(a));
           self.assert(vl.isNumber(b));
-          self.stack[rx] = vl.numberVal(@intToFloat(f64, (@floatToInt(i64, vl.asNumber(a)) | @floatToInt(i64, vl.asNumber(b)))));
+          self.stack[rx] = vl.numberVal(@intToFloat(f64, (vl.asIntNumber(i64, a) | vl.asIntNumber(i64, b))));
           continue;
         },
         .And => {
@@ -226,7 +226,7 @@ pub const VM = struct {
           const b = self.RK(rk2);
           self.assert(vl.isNumber(a));
           self.assert(vl.isNumber(b));
-          self.stack[rx] = vl.numberVal(@intToFloat(f64, (@floatToInt(i64, vl.asNumber(a)) & @floatToInt(i64, vl.asNumber(b)))));
+          self.stack[rx] = vl.numberVal(@intToFloat(f64, (vl.asIntNumber(i64, a) & vl.asIntNumber(i64, b))));
           continue;
         },
         .Shl => {
@@ -239,7 +239,7 @@ pub const VM = struct {
           const b = self.RK(rk2);
           self.assert(vl.isNumber(a));
           self.assert(vl.isNumber(b));
-          self.stack[rx] = vl.numberVal(@intToFloat(f64, std.math.shl(i64, @floatToInt(i64, vl.asNumber(a)), @floatToInt(i64, vl.asNumber(b)))));
+          self.stack[rx] = vl.numberVal(@intToFloat(f64, std.math.shl(i64, vl.asIntNumber(i64, a), vl.asIntNumber(i64, b))));
           continue;
         },
         .Shr => {
@@ -252,7 +252,7 @@ pub const VM = struct {
           const b = self.RK(rk2);
           self.assert(vl.isNumber(a));
           self.assert(vl.isNumber(b));
-          self.stack[rx] = vl.numberVal(@intToFloat(f64, std.math.shr(i64, @floatToInt(i64, vl.asNumber(a)), @floatToInt(i64, vl.asNumber(b)))));
+          self.stack[rx] = vl.numberVal(@intToFloat(f64, std.math.shr(i64, vl.asIntNumber(i64, a), vl.asIntNumber(i64, b))));
           continue;
         },
         .Inv => {
@@ -262,7 +262,7 @@ pub const VM = struct {
           self.read2Args(inst, &rx, &rk);
           const a = self.RK(rk);
           self.assert(vl.isNumber(a));
-          self.stack[rx] = vl.numberVal(@intToFloat(f64, ~@floatToInt(i64, vl.asNumber(a))));
+          self.stack[rx] = vl.numberVal(@intToFloat(f64, ~vl.asIntNumber(i64, a)));
           continue;
         },
         .Jt => {
@@ -301,37 +301,44 @@ pub const VM = struct {
           self.stack[rx] = self.code.values.items[bx];
           continue;
         },
-        .Blst => {
-          // blst rx, count
+        .Nlst => {
+          // nlst rx, count
           var rx: u32 = undefined;
           var count: u32 = undefined;
           self.read2Args(inst, &rx, &count);
-          var list = vl.createList(self, @as(usize, count));
-          var i: usize = 0;
-          while (i < count): (i += 1) {
-            list.items[i] = self.stack[rx + i];
-          }
-          self.stack[rx] = vl.objVal(list);
+          self.stack[rx] = vl.objVal(vl.createList(self, @as(usize, count)));
         },
-        .Bmap => {
+        .Slst => {
+          // slst rx, rk(idx), rk(val)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          var list = vl.asList(self.stack[rx]);
+          const idx = vl.asIntNumber(usize, self.RK(rk1));
+          if (idx >= list.len) {
+            return self.runtimeError("IndexError: list index out of range: {}", .{idx});
+          }
+          list.items[idx] = self.RK(rk2);
+        },
+        .Nmap => {
           // TODO: map specialization
-          // bmap rx, count
+          // nmap rx, count
           var rx: u32 = undefined;
           var count: u32 = undefined;
           self.read2Args(inst, &rx, &count);
-          var map = vl.createMap(self, @as(usize, count));
-          var i: usize = 0;
-          count *= 2; // KV-pairs
-          while (i < count): (i += 2) { // skip key, val.
-            var key = self.stack[rx + i];
-            var val = self.stack[rx + i + 1];
-            _ = map.meta.put(key, val, self);
-          }
-          self.stack[rx] = vl.objVal(map);
+          self.stack[rx] = vl.objVal(vl.createMap(self, @as(usize, count)));
+        },
+        .Smap => {
+          // nmap rx, rk(key), rk(val)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          var map = vl.asMap(self.stack[rx]);
+          _ = map.meta.put(self.RK(rk1), self.RK(rk2), self);
         },
         .Ret => {
-          std.debug.print("stack: \n", .{});
-          self.printStack();
           break;
         },
       }

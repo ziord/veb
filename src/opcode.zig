@@ -62,13 +62,21 @@ pub const OpCode = enum (u8) {
   // [6] [8] [18]
   Not,
 
-  // blst rx, size
+  // nlst rx, size
   // [6] [8] [18]
-  Blst,
+  Nlst,
 
-  // bmap rx, size
+  // slst rx, rk(idx), rk(val)
+  // [6]  [8]   [9]      [9]
+  Slst,
+
+  // nmap rx, size
   // [6] [8] [18]
-  Bmap,
+  Nmap,
+
+  // smap rx, rk(key), rk(val)
+  // [6]  [8]   [9]      [9]
+  Smap,
 
   // load rx, bx
   //  [6] [8]  [18]

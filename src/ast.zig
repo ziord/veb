@@ -22,13 +22,11 @@ pub const LiteralNode = struct {
   token: Token,
   value: f64,
   line: usize,
-  reg: u32,
 
   pub fn init(token: Token) @This() {
     return @This() {
       .token = token,
       .value = undefined,
-      .reg = undefined,
       .line = token.line,
     };
   }
@@ -39,7 +37,6 @@ pub const BinaryNode = struct {
   right: *AstNode,
   op: OpType,
   line: usize,
-  reg: u32,
 
   pub fn init(left: *AstNode, right: *AstNode, op: OpType, line: usize) @This() {
     return @This() {
@@ -47,7 +44,6 @@ pub const BinaryNode = struct {
       .right = right,
       .op = op,
       .line = line,
-      .reg = undefined,
     };
   }
 };
@@ -56,47 +52,42 @@ pub const UnaryNode = struct {
   expr: *AstNode,
   op: OpType,
   line: usize,
-  reg: u32,
 
   pub fn init(expr: *AstNode, op: OpType, line: usize) @This() {
-    return @This() {.expr = expr, .op = op, .line = line, .reg = undefined};
+    return @This() {.expr = expr, .op = op, .line = line,};
   }
 };
 
 pub const ListNode = struct {
   elems: AstNodeList,
   line: usize,
-  reg: u32,
 
   pub fn init(allocator: std.mem.Allocator, line: usize) @This() {
-    return @This() {.elems = AstNodeList.init(allocator), .line = line, .reg = undefined};
+    return @This() {.elems = AstNodeList.init(allocator), .line = line,};
   }
 };
 
 pub const MapNode = struct {
   pairs: std.ArrayList(Pair),
   line: usize,
-  reg: u32,
 
   pub const Pair = struct {key: *AstNode, value: *AstNode};
 
   pub fn init(allocator: std.mem.Allocator, line: usize) @This() {
-    return @This() {.pairs = std.ArrayList(Pair).init(allocator), .line = line, .reg = undefined};
+    return @This() {.pairs = std.ArrayList(Pair).init(allocator), .line = line};
   }
 };
 
 pub const VarNode = struct {
   token: lex.Token,
   line: usize,
-  type: IType,
-  reg: u32,
+  // type: IType,
 
   pub fn init(token: Token) @This() {
     return @This() {
       .token = token,
       .line = token.line,
-      .type = undefined,
-      .reg = undefined,
+      // .type = undefined,
     };
   }
 };
@@ -104,10 +95,9 @@ pub const VarNode = struct {
 pub const ExprStmtNode = struct {
   expr: *AstNode,
   line: usize,
-  reg: u32,
 
   pub fn init(expr: *AstNode, line: usize) @This() {
-    return @This() {.expr = expr, .line = line, .reg = undefined,};
+    return @This() {.expr = expr, .line = line,};
   }
 };
 
@@ -129,17 +119,6 @@ pub const AstNode = union(AstType) {
       .AstList => |lst| lst.line,
       .AstMap => |map| map.line,
       .AstExprStmt => |expr| expr.line,
-    };
-  }
-
-  pub fn reg(self: *@This()) u32 {
-    return switch (self.*) {
-      .AstNum, .AstStr, .AstBool => |lit| lit.reg,
-      .AstBinary => |bin| bin.reg,
-      .AstUnary => |una| una.reg,
-      .AstList => |lst| lst.reg,
-      .AstMap => |map| map.reg,
-      .AstExprStmt => |expr| expr.reg,
     };
   }
 

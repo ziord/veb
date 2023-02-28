@@ -29,9 +29,8 @@ const VRegister = struct {
 
   pub fn init() Self {
     var regs: [value.MAX_REGISTERS]Reg = undefined;
-    var i: u8 = 0;
-    while (i < value.MAX_REGISTERS): (i += 1) {
-      regs[i] = .{.val = i, .free = true};
+    for (0..value.MAX_REGISTERS) |i| {
+      regs[i] = .{.val = @intCast(u8, i), .free = true};
     }
     return Self {.regs = regs, .reg = null};
   }
@@ -58,15 +57,51 @@ const VRegister = struct {
   }
 };
 
+const GlobalVar = struct {
+  name: []const u8,
+  mempos: u32,
+  index: u32, // index into compiler's `globals`
+  initialized: bool = false,
+  patched: bool = false,
+};
+
+/// like a GlobalVar but with more efficient read/write access
+const GSymVar = struct {
+  name: []const u8,
+  initialized: bool = false,
+  patched: bool = false,
+};
+
+const LocalVar = struct {
+  scope: i32,
+  name: []const u8,
+  reg: u32,
+  index: u32,
+  initialized: bool = false,
+
+  pub fn init(scope: i32, name: []const u8, reg: u32, index: u32) @This() {
+    return @This() {.scope = scope, .name = name, .reg = reg, .index = index};
+  }
+};
+
 pub const Compiler = struct {
   code: *Code,
   node: *Node,
   filename: []const u8,
+  gsyms: [VM.MAX_GSYM_ITEMS]GSymVar,
+  locals: [VM.MAX_LOCAL_ITEMS]LocalVar,
+  globals: std.ArrayList(GlobalVar),
   vreg: VRegister,
   allocator: *NovaAllocator,
+  scope: i32 = GLOBAL_SCOPE, // defaults to global scope
+  locals_count: u32 = 0,
+  gsyms_count: u32 = 0,
   vm: *VM,
   
   const Self = @This();
+
+  const GLOBAL_SCOPE = 0;
+  const GlobalVarInfo = struct {pos: u32, isGSym: bool, gvar: ?GlobalVar};
 
   pub fn init(node: *Node, filename: []const u8, vm: *VM, code: *Code, allocator: *NovaAllocator) Self {
     var self = Self {
@@ -74,15 +109,19 @@ pub const Compiler = struct {
       .node = node, 
       .filename = filename,
       .allocator = allocator,
+      .gsyms = undefined,
+      .locals = undefined,
+      .globals = std.ArrayList(GlobalVar).init(allocator.getArenaAllocator()),
       .vreg = VRegister.init(),
       .vm = vm,
     };
     return self;
   }
 
-  fn compileError(self: *Self, msg: []const u8) noreturn {
+  fn compileError(self: *Self, comptime fmt: []const u8, msg: anytype) noreturn {
     _ = self;
-    std.debug.print("CompileError: {s}\n", .{msg});
+    std.debug.print("CompileError: ", .{});
+    std.debug.print(fmt ++ "\n", msg);
     std.os.exit(1);
   }
 
@@ -92,7 +131,7 @@ pub const Compiler = struct {
 
   fn getReg(self: *Self) u32 {
     return self.vreg.getReg() catch {
-      self.compileError("registers exhausted");
+      self.compileError("registers exhausted", .{});
     };
   }
 
@@ -108,10 +147,181 @@ pub const Compiler = struct {
     return ((self.code.values.items.len + 1) <= value.Code._18bits);
   }
 
+  fn addLocal(self: *Self, node: *ast.VarNode) u32 {
+    // add a local and return its register.
+    if (self.locals_count >= self.locals.len) {
+      self.compileError("Too many locals", .{});
+    }
+    var reg = self.getReg();
+    self.locals[self.locals_count] = LocalVar.init(self.scope, node.token.value, reg, self.locals_count);
+    self.locals_count += 1;
+    return reg;
+  }
+
+  /// add gsym and return its index/pos
+  fn addGSymVar(self: *Self, node: *ast.VarNode) struct {pos: u32, isGSym: bool} {
+    // Deduplicate globals. If a spot is already allocated for a global 'a', 
+    // a redefinition of 'a' should not allocate a new spot.
+    if (self.findGlobal(node)) |info| {
+      return .{.pos = info.pos, .isGSym = info.isGSym};
+    }
+    if (self.gsyms_count >= self.gsyms.len) {
+      std.log.debug("gsyms exceeded..using globals list\n", .{});
+      return .{.pos = self.addGlobalVar(node), .isGSym = false};
+    }
+    var idx = self.gsyms_count;
+    self.gsyms_count += 1;
+    self.gsyms[idx] = GSymVar {.name = node.token.value};
+    return .{.pos = idx, .isGSym = true};
+  }
+
+  fn addGlobalVar(self: *Self, node: *ast.VarNode) u32 {
+    var gvar = GlobalVar {
+      .name = node.token.value, 
+      .mempos = self.storeVar(node),
+      .index = @intCast(u32, self.globals.items.len),
+    };
+    util.append(GlobalVar, &self.globals, gvar);
+    return gvar.mempos;
+  }
+
+  fn findLocalVar(self: *Self, node: *ast.VarNode) ?LocalVar {
+    if (self.locals_count == 0) return null;
+    var lvar: LocalVar = undefined;
+    var i = self.locals_count;
+    while (i > 0): (i -= 1) {
+      lvar = self.locals[i - 1];
+      if (self.scope < lvar.scope) break;
+      if (std.mem.eql(u8, lvar.name, node.token.value)) {
+        return lvar;
+      }
+    }
+    return null;
+  }
+
+  fn findGSymVar(self: *Self, node: *ast.VarNode) ?u32 {
+    if (self.gsyms_count == 0) return null;
+    var gsym: *GSymVar = undefined;
+    var i: u32 = self.gsyms_count;
+    while (i > 0): (i -= 1) {
+      var idx = i - 1;
+      gsym = &self.gsyms[idx];
+      if (std.mem.eql(u8, gsym.name, node.token.value)) {
+        return idx;
+      }
+    }
+    return null;
+  }
+
+  fn findGlobalVar(self: *Self, node: *ast.VarNode) ?GlobalVar {
+    if (self.globals.items.len == 0) return null;
+    var gvar: GlobalVar = undefined;
+    var i: usize = self.globals.items.len;
+    while (i > 0): (i -= 1) {
+      gvar = self.globals.items[i - 1];
+      if (std.mem.eql(u8, gvar.name, node.token.value)) {
+        return gvar;
+      }
+    }
+    return null;
+  }
+
+  fn findGlobal(self: *Self, node: *ast.VarNode) ?GlobalVarInfo {
+    if (self.findGSymVar(node)) |pos| {
+      return .{.pos = pos, .isGSym = true, .gvar = null};
+    } else if (self.findGlobalVar(node)) |gvar| {
+      return .{.pos = gvar.mempos, .isGSym = false, .gvar = gvar};
+    }
+    return null;
+  }
+
+  fn popLocalVars(self: *Self) void {
+    if (self.locals_count == 0) return;
+    var lvar: LocalVar = undefined;
+    var i: usize = self.locals_count;
+    while (i > 0): (i -= 1) {
+      lvar = self.locals[i - 1];
+      if (lvar.scope > self.scope) {
+        self.vreg.releaseReg(lvar.reg);
+        self.locals_count -= 1;
+      }
+    }
+  }
+
+  /// preallocate all globals in `gsyms` or `globals`
+  fn preallocateGlobals(self: *Self, toplevels: *ast.AstNodeList) void {
+    // TODO: update
+    if (self.scope > GLOBAL_SCOPE) return;
+    for (toplevels.items) |decl| {
+      switch (decl.*) {
+        .AstVarDecl => |vd| {
+          _ = self.addGSymVar(vd.ident);
+        },
+        else => {},
+      }
+    }
+  }
+
+  /// patch a preallocated global entry
+  fn patchGlobal(self: *Self, node: *ast.VarNode) GlobalVarInfo {
+    if (self.findGlobal(node)) |info| {
+      if (info.isGSym) {
+        // GSyms use `pos` as a direct index into the `gsyms` array
+        // so we can reach this GSym directly
+        self.gsyms[info.pos].patched = true;
+      } else {
+        self.globals.items[info.gvar.?.index].patched = true;
+      }
+      return info;
+    } else {
+      self.compileError("cannot patch variable '{s}'", .{node.token.value});
+    }
+  }
+
+  fn validateNoUnpatchedGlobals(self: *Self) void {
+    const fmt = "Use of unpached global '{s}'";
+    for (0..self.gsyms_count) |i| {
+      var gsym = &self.gsyms[i];
+      if (!gsym.patched) {
+        self.compileError(fmt, .{gsym.name});
+      }
+    }
+    for (self.globals.items) |glob| {
+      if (!glob.patched) {
+        self.compileError(fmt, .{glob.name});
+      }
+    }
+  }
+
+  fn validateLocalVarUse(self: *Self, slot: u32, node: *ast.VarNode) void {
+    if (!self.locals[slot].initialized) {
+      self.compileError("cannot use variable '{s}' in its own initializer", .{node.token.value});
+    }
+  }
+
+  fn validateGlobalVarUse(self: *Self, info: GlobalVarInfo, node: *ast.VarNode) void {
+    if (info.isGSym) {
+      var gsym = self.gsyms[info.pos];
+      if (gsym.patched and !gsym.initialized) {
+        self.compileError("cannot use variable '{s}' in its own initializer", .{node.token.value});
+      }
+    } else {
+      var gvar = info.gvar.?;
+      if (gvar.patched and !gvar.initialized) {
+        self.compileError("cannot use variable '{s}' in its own initializer", .{node.token.value});
+      }
+    }
+  }
+
   fn cConst(self: *Self, reg: u32, val: value.Value, line: usize) void {
     // load rx, memidx
     const memidx = self.code.writeValue(val, self.vm);
     self.code.write2ArgsInst(.Load, reg, memidx, @intCast(u32, line), self.vm);
+  }
+
+  fn storeVar(self: *Self, node: *ast.VarNode) u32 {
+    var val = value.objVal(value.createString(self.vm, &self.vm.strings, node.token.value, false));
+    return self.code.writeValue(val, self.vm);
   }
 
   fn cNum(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
@@ -212,11 +422,11 @@ pub const Compiler = struct {
   fn cList(self: *Self, node: *ast.ListNode, dst: u32) u32 {
     const size = @intCast(u32, node.elems.items.len);
     self.code.write2ArgsInst(.Nlst, dst, size, node.line, self.vm);
+    var idx: u32 = undefined;
     for (node.elems.items, 0..) |elem, i| {
       var reg = self.getReg();
-      _ = self.c(elem, reg);
+      var rk_val = self.c(elem, reg);
       var val = value.numberVal(@intToFloat(f64, i));
-      var idx: u32 = undefined;
       if (self.withinRKLimit(1)) {
         idx = self.code.storeConst(val, self.vm);
       } else {
@@ -224,7 +434,7 @@ pub const Compiler = struct {
         self.cConst(idx, val, node.line);
         self.vreg.releaseReg(idx);
       }
-      self.code.write3ArgsInst(.Slst, dst, idx, reg, node.line, self.vm);
+      self.code.write3ArgsInst(.Slst, dst, idx, rk_val, node.line, self.vm);
       self.vreg.releaseReg(reg);
     }
     return dst;
@@ -232,13 +442,14 @@ pub const Compiler = struct {
 
   fn cMap(self: *Self, node: *ast.MapNode, dst: u32) u32 {
     const size = @intCast(u32, node.pairs.items.len);
+    // TODO: specialize map with k-v types
     self.code.write2ArgsInst(.Nmap, dst, size, node.line, self.vm);
     for (node.pairs.items) |pair| {
       var reg1 = self.getReg();
       var reg2 = self.getReg();
-      _ = self.c(pair.key, reg1);
-      _ = self.c(pair.value, reg2);
-      self.code.write3ArgsInst(.Smap, dst, reg1, reg2, node.line, self.vm);
+      var rk_key = self.c(pair.key, reg1);
+      var rk_val = self.c(pair.value, reg2);
+      self.code.write3ArgsInst(.Smap, dst, rk_key, rk_val, node.line, self.vm);
       self.vreg.releaseReg(reg1);
       self.vreg.releaseReg(reg2);
     }
@@ -253,6 +464,108 @@ pub const Compiler = struct {
     return reg;
   }
 
+  fn cVar(self: *Self, node: *ast.VarNode, dst: u32) u32 {
+    if (self.findLocalVar(node)) |lvar| {
+      self.validateLocalVarUse(lvar.index, node);
+      return lvar.reg;
+    } else if (self.findGlobal(node)) |info| {
+      self.validateGlobalVarUse(info, node);
+      const inst: OpCode = if(info.isGSym) .Ggsym else .Gglb;
+      self.code.write2ArgsInst(inst, dst, info.pos, node.line, self.vm);
+      return dst;
+    } else {
+      self.compileError("use of undefined variable '{s}'", .{node.token.value});
+    }
+  }
+
+  fn cVarAssign(self: *Self, node: *ast.VarNode, expr: *Node, reg: u32) u32 {
+    if (self.findLocalVar(node)) |lvar| {
+      // use lvar's reg as dst for expr
+      var ret = self.c(expr, lvar.reg);
+      if (ret != lvar.reg) {
+        // this implies the result of expr was stored in a different register.
+        // Move it to lvar's register.
+        self.code.write3ArgsInst(.Mov, lvar.reg, ret, 0, node.line, self.vm);
+      }
+      return lvar.reg;
+    } else if (self.findGlobal(node)) |info| {
+      // sgsym/sglb rx, bx -> GS[bx] = r(x) | G[K(bx)] = r(x)
+      var rx = self.c(expr, reg);
+      const inst: OpCode = if (info.isGSym) .Sgsym else .Sglb;
+      self.code.write2ArgsInst(inst, rx, info.pos, node.line, self.vm);
+      return rx;
+    } else {
+      self.compileError("undefined variable '{s}'", .{node.token.value});
+    }
+  }
+
+  fn cAssign(self: *Self, node: *ast.BinaryNode, reg: u32) u32 {
+    return switch (node.left.*) {
+      .AstVar => |*vr| {
+        return self.cVarAssign(vr, node.right, reg);
+      },
+      // would be unreachable after type checking
+      else => self.compileError("invalid assignment target", .{}),
+    };
+  }
+
+  fn cVarDecl(self: *Self, node: *ast.VarDeclNode, reg: u32) u32 {
+    // let var = expr
+    // local
+    if (self.scope > GLOBAL_SCOPE) {
+      var dst = self.addLocal(node.ident);
+      var lvar_pos = self.locals_count - 1;
+      _ = self.c(node.value, dst);
+      // initialize the local after its rhs has been compiled successfully
+      self.locals[lvar_pos].initialized = true;
+    }
+    // global
+    else {
+      var info = self.patchGlobal(node.ident);
+      // first, deinitialize the global just in case it was initialized by
+      // some other code (since globals are deduplicated/shared)
+      if (info.isGSym) {
+        self.gsyms[info.pos].initialized = false;
+      } else {
+        self.globals.items[info.gvar.?.index].initialized = false;
+      }
+      var dst = self.getReg();
+      var rx = self.c(node.value, dst);
+      // now, initialize this global after its rhs has been compiled successfully
+      const inst: OpCode = blk: {
+        if(info.isGSym) {
+          self.gsyms[info.pos].initialized = true;
+          break :blk .Sgsym;
+        } else {
+          self.globals.items[info.gvar.?.index].initialized = true;
+          break :blk .Sglb;
+        }
+      };
+      // sgsym rx, bx -> GS[bx] = r(x)
+      // sglb rx, bx -> G[K(bx)] = r(x)
+      // info.pos is GSym pos or index into valuepool storing GlobalVar name
+      self.code.write2ArgsInst(inst, rx, info.pos, node.line, self.vm);
+      self.vreg.releaseReg(dst);
+    }
+    return reg;
+  }
+
+  fn cBlock(self: *Self, node: *ast.BlockNode, reg: u32) u32 {
+    self.scope += 1;
+    for (node.nodes.items) |nd| {
+      _ = self.c(nd, reg);
+    }
+    self.scope -= 1;
+    return reg;
+  }
+
+  fn cProgram(self: *Self, node: *ast.ProgramNode, reg: u32) u32 {
+    for (node.decls.items) |nd| {
+      _ = self.c(nd, reg);
+    }
+    return reg;
+  }
+
   fn c(self: *Self, node: *Node, reg: u32) u32 {
     return switch (node.*) {
       .AstNum => |*nd| self.cNum(nd, reg),
@@ -263,13 +576,20 @@ pub const Compiler = struct {
       .AstList => |*nd| self.cList(nd, reg),
       .AstMap => |*nd| self.cMap(nd, reg),
       .AstExprStmt => |*nd| self.cExprStmt(nd, reg),
+      .AstVar => |*nd| self.cVar(nd, reg),
+      .AstVarDecl => |*nd| self.cVarDecl(nd, reg),
+      .AstAssign => |*nd| self.cAssign(nd, reg),
+      .AstBlock => |*nd| self.cBlock(nd, reg),
+      .AstProgram => |*nd| self.cProgram(nd, reg),
     };
   }
 
   pub fn compile(self: *Self) void {
+    self.preallocateGlobals(&self.node.AstProgram.decls);
     util.assert(self.c(self.node, VRegister.DummyReg) == VRegister.DummyReg, "should be a dummy register");
     const last_line = self.code.lines.items[self.code.lines.items.len - 1];
     self.code.writeNoArgInst(.Ret, last_line, self.vm);
+    self.validateNoUnpatchedGlobals();
     // release memory associated with the arena, since we're done with it at this point.
     self.allocator.deinitArena();
   }

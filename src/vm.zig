@@ -14,12 +14,16 @@ pub const VM = struct {
   stack: [STACK_MAX]Value,
   code: *Code,
   strings: StringHashMap,
+  gsyms: [MAX_GSYM_ITEMS]Value,
+  globals: StringHashMap,
   objects: ?*vl.Obj,
   mem: Mem,
   gc: GC,
 
   const Self = @This();
   const STACK_MAX = 0xffff;
+  pub const MAX_GSYM_ITEMS = vl.MAX_REGISTERS << 1;
+  pub const MAX_LOCAL_ITEMS = vl.MAX_REGISTERS << 1;
   const RuntimeError = error{RuntimeError};
 
   pub fn init(allocator: *NovaAllocator, code: *Code) Self {
@@ -29,6 +33,8 @@ pub const VM = struct {
       .mem = Mem.init(allocator.getAllocator()),
       .gc = GC.init(allocator),
       .strings = StringHashMap.init(),
+      .gsyms = undefined,
+      .globals = StringHashMap.init(),
       .objects = null,
       .code = code
     };
@@ -36,6 +42,7 @@ pub const VM = struct {
 
   pub fn deinit(self: *Self) void {
     self.strings.free(self);
+    self.globals.free(self);
     var curr = self.objects;
     while (curr) |cur| {
       var next = cur.next;
@@ -71,6 +78,10 @@ pub const VM = struct {
     a.* = word & Code._26bits;
   }
 
+  inline fn readConst(self: *Self, pos: u32) Value {
+    return self.code.values.items[pos];
+  }
+
   inline fn RK(self: *Self, x: u32) Value {
     // rk(x) = r(x) if x < MAX_REGISTERS else k(x - MAX_REGISTERS)
     return if (x < vl.MAX_REGISTERS) self.stack[x] else self.code.values.items[x - vl.MAX_REGISTERS];
@@ -100,6 +111,46 @@ pub const VM = struct {
     while (true) {
       const inst = @call(.always_inline, self.readWord, .{});
       switch (@call(.always_inline, Code.readInstOp, .{inst})) {
+        .Gglb => {
+          // gglb rx, bx -> r(x) = G[K(bx)]
+          var rx: u32 = undefined;
+          var bx: u32 = undefined;
+          self.read2Args(inst, &rx, &bx);
+          var glb = vl.asString(self.readConst(bx));
+          var val = self.globals.get(glb);
+          self.assert(val != null);
+          self.stack[rx] = val.?;
+        },
+        .Sglb => {
+          // sglb rx, bx -> G[K(bx)] = r(x)
+          var rx: u32 = undefined;
+          var bx: u32 = undefined;
+          self.read2Args(inst, &rx, &bx);
+          var glb = vl.asString(self.readConst(bx));
+          _ = self.globals.put(glb, self.stack[rx], self);
+        },
+        .Ggsym => {
+          // ggsym rx, bx -> r(x) = GS[K(bx)]
+          var rx: u32 = undefined;
+          var bx: u32 = undefined;
+          self.read2Args(inst, &rx, &bx);
+          self.stack[rx] = self.gsyms[bx];
+        },
+        .Sgsym => {
+          // sgsym rx, bx -> GS[bx] = r(x)
+          var rx: u32 = undefined;
+          var bx: u32 = undefined;
+          self.read2Args(inst, &rx, &bx);
+          self.gsyms[bx] = self.stack[rx];
+        },
+        .Mov => {
+          // mov rx, ry
+          var rx: u32 = undefined;
+          var ry: u32 = undefined;
+          var dum: u32 = undefined;
+          self.read3Args(inst, &rx, &ry, &dum);
+          self.stack[rx] = self.stack[ry];
+        },
         .Add => {
           // add rx, rk(x), rk(x)
           var rx: u32 = undefined;

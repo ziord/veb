@@ -340,9 +340,8 @@ pub fn hashString(str: []const u8) u64 {
   @setRuntimeSafety(false);
   var hash: u128 = 2166136261;
   const fnv_prime: u32 = 16777619;
-  var i: usize = 0;
   const len = if (str.len > MAX_STR_HASHING_LEN) MAX_STR_HASHING_LEN else str.len;
-  while (i < len): (i += 1) {
+  for (0..len) |i| {
     hash = hash ^ @as(u8, str[i]);
     hash = hash * fnv_prime;
   }

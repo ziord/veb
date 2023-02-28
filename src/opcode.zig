@@ -78,6 +78,26 @@ pub const OpCode = enum (u8) {
   // [6]  [8]   [9]      [9]
   Smap,
 
+  // gglb rx, bx -> r(x) = G[K(bx)]
+  // [6] [8] [18]
+  Gglb,
+
+  // sglb rx, bx -> G[K(bx)] = r(x)
+  // [6] [8] [18]
+  Sglb,
+
+  // ggsym rx, bx -> r(x) = GS[bx]
+  // [6] [8] [18]
+  Ggsym,
+
+  // sgsym rx, bx -> GS[bx] = r(x)
+  // [6] [8] [18]
+  Sgsym,
+
+  // mov rx, ry
+  // [6] [8]  [9]
+  Mov,
+
   // load rx, bx
   //  [6] [8]  [18]
   Load,

@@ -168,3 +168,40 @@ test "regs" {
 ;
   _ = try doTest(src);
 }
+
+test "vars" {
+  var src = 
+  \\ let x = 5 * 0xff - 2
+  \\ let k = 10
+  \\ let p = (k = 5)
+  \\ [p, k]
+  \\ let y = (
+  \\     x - 5
+  \\ )
+  \\ let z = [
+  \\     x,
+  \\ y,
+  \\ {
+  \\     x: y
+  \\ }
+  \\ ]
+  \\ {123: "foxlike"}
+  \\ #let y = 10
+  \\ #[x, y]
+  \\ z
+  ;
+  _ = try doTest(src);
+  var src2 =
+  \\ let x = 5
+  \\ x += 10
+  \\ x -= 3
+  \\ x /= 2
+  \\ x *= 2
+  \\ x &= 1
+  \\ x ^= 3
+  \\ x |= 4
+  \\ x
+  ;
+  var got = try doTest(src2);
+  try std.testing.expect(value.asNumber(got) == 7);
+}

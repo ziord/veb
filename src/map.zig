@@ -139,7 +139,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
         return null;
       }
       var entry = self.findEntry(self.entries, self.capacity, key);
-      return if (self.isNullKey(entry.value)) null else entry.value;
+      return if (self.isNullKey(entry.key)) null else entry.value;
     }
 
     pub fn del(self: *Self, key: K) bool {

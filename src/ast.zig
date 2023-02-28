@@ -15,6 +15,11 @@ pub const AstType = enum {
   AstList,
   AstMap,
   AstExprStmt,
+  AstVarDecl,
+  AstVar,
+  AstAssign,
+  AstBlock,
+  AstProgram,
 };
 
 // ast nodes
@@ -101,6 +106,39 @@ pub const ExprStmtNode = struct {
   }
 };
 
+pub const VarDeclNode = struct {
+  ident: *VarNode,
+  value: *AstNode,
+  line: usize,
+
+  pub fn init(ident: *VarNode, value: *AstNode) @This() {
+    return @This() {
+      .ident = ident,
+      .value = value,
+      .line = ident.line,
+    };
+  }
+};
+
+pub const BlockNode = struct {
+  nodes: AstNodeList,
+  line: usize,
+
+  pub fn init(allocator: std.mem.Allocator, line: usize) @This() {
+    return @This() {.nodes = AstNodeList.init(allocator), .line = line};
+  }
+};
+
+// TODO: refactor to BlockNode if no other useful info needs to be added.
+pub const ProgramNode = struct {
+  decls: AstNodeList,
+  line: usize,
+
+  pub fn init(allocator: std.mem.Allocator, line: usize) @This() {
+    return @This() {.decls = AstNodeList.init(allocator), .line = line};
+  }
+};
+
 pub const AstNode = union(AstType) {
   AstNum: LiteralNode,
   AstStr: LiteralNode,
@@ -110,6 +148,11 @@ pub const AstNode = union(AstType) {
   AstList: ListNode,
   AstMap: MapNode,
   AstExprStmt: ExprStmtNode,
+  AstVarDecl: VarDeclNode,
+  AstVar: VarNode,
+  AstAssign: BinaryNode,
+  AstBlock: BlockNode,
+  AstProgram: ProgramNode,
 
   pub fn line(self: *@This()) usize {
     return switch (self.*) {
@@ -119,6 +162,11 @@ pub const AstNode = union(AstType) {
       .AstList => |lst| lst.line,
       .AstMap => |map| map.line,
       .AstExprStmt => |expr| expr.line,
+      .AstVarDecl => |decl| decl.line,
+      .AstVar => |id| id.line,
+      .AstAssign => |asi| asi.line,
+      .AstBlock => |blk| blk.line,
+      .AstProgram => |prog| prog.line,
     };
   }
 

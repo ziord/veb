@@ -18,6 +18,7 @@ pub const Parser = struct {
   allocator: std.mem.Allocator,
   nva: *NovaAllocator,
   filename: []const u8,
+  allowNl: usize = 0,
 
   const Self = @This();
 
@@ -69,6 +70,7 @@ pub const Parser = struct {
     .{.bp = .BitXor, .prefix = null, .infix = Self.binary},       // TkCaret
     .{.bp = .BitOr, .prefix = null, .infix = Self.binary},        // TkPipe
     .{.bp = .Unary, .prefix = Self.unary, .infix = null},         // TkTilde
+    .{.bp = .None, .prefix = null, .infix = null},                // TkNewline
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},   // TkLeq
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},   // TkGeq
     .{.bp = .Equality, .prefix = null, .infix = Self.binary},     // Tk2Eq
@@ -87,7 +89,7 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                // TkReturn
     .{.bp = .None, .prefix = Self.number, .infix = null},         // TkNum
     .{.bp = .None, .prefix = Self.string, .infix = null},         // TkStr
-    .{.bp = .None, .prefix = null, .infix = null},                // TkIdent
+    .{.bp = .None, .prefix = Self.variable, .infix = null},       // TkIdent
     .{.bp = .None, .prefix = null, .infix = null},                // TkErr
     .{.bp = .None, .prefix = null, .infix = null},                // TkEof
   };
@@ -179,6 +181,26 @@ pub const Parser = struct {
     return false;
   }
 
+  inline fn incNl(self: *Self) void {
+    self.allowNl += 1;
+    self.lexer.allowNl = self.allowNl;
+  }
+
+  inline fn decNl(self: *Self) void {
+    self.allowNl -= 1;
+    self.lexer.allowNl = self.allowNl;
+  }
+
+  inline fn consumeNlOrEof(self: *Self) void {
+    // Try to consume Newline. 
+    // If not, check that the current token is Eof, else error
+    if (!self.match(.TkNewline)) {
+      if (!self.check(.TkEof)) {
+        self.consume(.TkNewline);
+      }
+    }
+  }
+
   fn _parse(self: *Self, bp: BindingPower) *Node {
     const prefix = ptable[@enumToInt(self.current_tok.ty)].prefix;
     if (prefix == null) {
@@ -264,8 +286,10 @@ pub const Parser = struct {
 
   fn grouping(self: *Self, assignable: bool) *Node {
     _ = assignable;
+    self.incNl();
     self.consume(.TkLBracket);
     const node = self.parseExpr();
+    self.decNl();
     self.consume(.TkRBracket);
     return node;
   }
@@ -274,6 +298,7 @@ pub const Parser = struct {
     _ = assignable;
     var node = self.newNode();
     node.* = .{.AstList = ast.ListNode.init(self.allocator, self.current_tok.line)};
+    self.incNl();
     self.consume(.TkLSqrBracket);
     var list = &node.*.AstList.elems;
     while (!self.check(.TkEof) and !self.check(.TkRSqrBracket)) {
@@ -286,6 +311,7 @@ pub const Parser = struct {
       }
       util.append(*Node, list, self.parseExpr());
     }
+    self.decNl();
     self.consume(.TkRSqrBracket);
     return node;
   }
@@ -294,6 +320,7 @@ pub const Parser = struct {
     _ = assignable;
     var node = self.newNode();
     node.* = .{.AstMap = ast.MapNode.init(self.allocator, self.current_tok.line)};
+    self.incNl();
     self.consume(.TkLCurly);
     var pairs = &node.*.AstMap.pairs;
     const max_items: usize = MAX_LISTING_ELEMS / 2;
@@ -310,13 +337,57 @@ pub const Parser = struct {
       var val = self.parseExpr();
       util.append(ast.MapNode.Pair, pairs, .{.key = key, .value = val});
     }
+    self.decNl();
     self.consume(.TkRCurly);
     return node;
   }
 
-  // fn vardecl(self: *Self) *Node {
-  //   // let var (: type)? = expr
-  // }
+  fn handleAugAssign(self: *Self, left: *Node, assignable: bool) *Node {
+    if (!assignable) return left;
+    var node = left;
+    if (self.current_tok.ty.isAssignLikeOp() and self.lexer.currentChar() == '=') {
+      // +=, -=, ...=
+      // e.g. var += expr => var = var + expr;
+      var tok = self.current_tok;
+      var op = self.current_tok.ty.optype();
+      self.advance(); // skip assignlike op
+      self.advance(); // skip '=' op
+      var value = self.parseExpr();
+      var right = self.newNode();
+      right.* = .{.AstBinary = ast.BinaryNode.init(left, value, op, tok.line)};
+      node = self.newNode();
+      node.* = .{.AstAssign = ast.BinaryNode.init(left, right, .OpAssign, tok.line)};
+    } else if (self.match(.TkEqual)) {
+      var token = self.previous_tok;
+      var value = self.parseExpr();
+      node = self.newNode();
+      node.* = .{.AstAssign = ast.BinaryNode.init(left, value, .OpAssign, token.line)};
+    }
+    return node;
+  }
+
+  fn variable(self: *Self, assignable: bool) *Node {
+    self.consume(.TkIdent);
+    var ident = self.previous_tok;
+    var node = self.newNode();
+    node.* = .{.AstVar = ast.VarNode.init(ident)};
+    return self.handleAugAssign(node, assignable);
+  }
+
+  fn vardecl(self: *Self) *Node {
+    // let var (: type)? = expr
+    self.consume(.TkLet);
+    self.consume(.TkIdent);
+    var name = self.previous_tok;
+    var ident = self.newNode();
+    ident.* = .{.AstVar = ast.VarNode.init(name)};
+    self.consume(.TkEqual);
+    var val = self.parseExpr();
+    var decl = self.newNode();
+    decl.* = .{.AstVarDecl = ast.VarDeclNode.init(&ident.AstVar, val)};
+    self.consumeNlOrEof();
+    return decl;
+  }
 
   fn parseExpr(self: *Self) *Node {
     return self._parse(.Assignment);
@@ -327,13 +398,24 @@ pub const Parser = struct {
     const expr = self.parseExpr();
     const node = self.newNode();
     node.* = .{.AstExprStmt = ast.ExprStmtNode.init(expr, line)};
+    self.consumeNlOrEof();
     return node;
+  }
+
+  fn statement(self: *Self) *Node {
+    if (self.check(.TkLet)) {
+      return self.vardecl();
+    }
+    return self.exprStmt();
   }
 
   pub fn parse(self: *Self) *Node {
     self.advance();
-    const node = self.exprStmt();
-    self.consume(.TkEof);
-    return node;
+    var program = self.newNode();
+    program.* = .{.AstProgram = ast.ProgramNode.init(self.allocator, self.current_tok.line)};
+    while (!self.match(.TkEof)) {
+      util.append(*Node, &program.AstProgram.decls, self.statement());
+    }
+    return program;
   }
 };

@@ -66,7 +66,18 @@ pub const Disassembler = struct {
       .Jf => _2ArgsInst("jf", word),
       .Nlst => _2ArgsInst("nlst", word),
       .Nmap => _2ArgsInst("nmap", word),
+      .Gglb => _2ArgsInst("gglb", word),
+      .Sglb => _2ArgsInst("sglb", word),
+      .Ggsym => _2ArgsInst("ggsym", word),
+      .Sgsym => _2ArgsInst("sgsym", word),
       .Ret => plainInst("ret"),
+      .Mov => {
+        // mov is a 2-arg inst using a 3-arg format.
+        const a1 = Code.readRX(word);
+        const a2 = Code.readRK1(word);
+        std.debug.assert(Code.readRK2(word) == 0);
+        std.debug.print("mov {}, {}\n", .{a1, a2});
+      },
       .Load => {
         __2ArgsInst("load", word);
         var bx = Code.readBX(word);

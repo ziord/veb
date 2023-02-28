@@ -38,6 +38,7 @@ pub const TokenType = enum (u8) {
   TkCaret,          // ^
   TkPipe,           // |
   TkTilde,          // ~
+  TkNewline,        // \n
   TkLeq,            // <=
   TkGeq,            // >=
   Tk2Eq,            // ==
@@ -88,6 +89,22 @@ pub const TokenType = enum (u8) {
     };
   }
 
+  pub fn isAssignLikeOp(self: @This()) bool {
+    return switch (self) {
+      .TkPlus,
+      .TkMinus,
+      .TkStar,
+      .TkSlash,
+      .TkPerc,
+      .TkAmp,
+      .TkCaret,
+      .TkPipe,
+      .Tk2Lthan,
+      .Tk2Gthan => true,
+      else => false,
+    };
+  }
+
   // TokenType to string
   pub fn str(self: @This()) []const u8 {
     return switch (self) {
@@ -113,6 +130,7 @@ pub const TokenType = enum (u8) {
       .TkCaret => "^",
       .TkPipe => "|",
       .TkTilde => "~",
+      .TkNewline => "\n",
       .TkLeq => "<=",
       .TkGeq => ">=",
       .Tk2Eq => "==",
@@ -236,6 +254,7 @@ pub const Lexer = struct {
   at_error: bool,
   src: []const u8,
   allocator: std.mem.Allocator,
+  allowNl: usize = 0,
 
   const Self = @This();
 
@@ -274,6 +293,10 @@ pub const Lexer = struct {
       return true;
     }
     return false;
+  }
+
+  pub fn currentChar(self: *Self) u8 {
+    return self.peek();
   }
 
   fn newToken(self: *Self, ty: TokenType) Token {
@@ -316,13 +339,18 @@ pub const Lexer = struct {
     while (!self.atEnd() and self.peek() != '\n') {
       self.adv();
     }
+    // skip past \n if not at end
+    if (!self.atEnd()) self.adv();
   }
 
   fn skipWhitespace(self: *Self) !void {
     while (true) {
       const char = self.peek();
       switch(char) {
-        ' ', '\n', '\r', '\t' => _ = self.advance(),
+        ' ', '\r', '\t' => self.adv(),
+        '\n' => {
+          if (self.allowNl > 0) self.adv() else return;
+        },
         '#' => {
          self.skipComment();
         },
@@ -578,6 +606,7 @@ pub const Lexer = struct {
       '^' => self.newToken(.TkCaret),
       '|' => self.newToken(.TkPipe),
       '~' => self.newToken(.TkTilde),
+      '\n' => self.newToken(.TkNewline),
       '"', '\'' => self.lexStr(ch),
       '!' => self.newToken(if (self.match('=')) .TkNeq else .TkExMark),
       '=' => self.newToken(if (self.match('=')) .Tk2Eq else .TkEqual),

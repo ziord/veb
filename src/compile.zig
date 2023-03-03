@@ -556,6 +556,7 @@ pub const Compiler = struct {
       _ = self.c(nd, reg);
     }
     self.scope -= 1;
+    self.popLocalVars();
     return reg;
   }
 

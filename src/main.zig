@@ -221,3 +221,24 @@ test "types" {
   ;
   _ = try doTest(src);
 }
+
+test "blocks" {
+  var src =
+  \\ let x = 'over the garden wall!'
+  \\ do
+  \\   let x = 5
+  \\   let y = 10
+  \\   let z = {x: x * y}
+  \\   z
+  \\ end
+  \\ do 
+  \\   let x = 't-rex'
+  \\   do
+  \\      x = 'foo-foo'
+  \\   end
+  \\   x
+  \\ end
+  \\ x
+  ;
+  _ = try doTest(src);
+}

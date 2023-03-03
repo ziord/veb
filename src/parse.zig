@@ -85,10 +85,12 @@ pub const Parser = struct {
     .{.bp = .Shift, .prefix = null, .infix = Self.binary},        // Tk2Lthan
     .{.bp = .Shift, .prefix = null, .infix = Self.binary},        // Tk2Rthan
     .{.bp = .Access, .prefix = null, .infix = Self.casting},      // TkAs
+    .{.bp = .None, .prefix = null, .infix = null},                // TkDo
     .{.bp = .None, .prefix = null, .infix = null},                // TkIf
     .{.bp = .Or, .prefix = null, .infix = Self.binary},           // TkOr
     .{.bp = .None, .prefix = null, .infix = null},                // TkFor
     .{.bp = .And, .prefix = null, .infix = Self.binary},          // TkAnd
+    .{.bp = .None, .prefix = null, .infix = null},                // TkEnd
     .{.bp = .None, .prefix = null, .infix = null},                // TkLet
     .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkNum
     .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkMap
@@ -556,6 +558,25 @@ pub const Parser = struct {
     }
   }
 
+  fn parseExpr(self: *Self) *Node {
+    return self._parse(.Assignment);
+  }
+
+  fn blockStmt(self: *Self) *Node {
+    const line = self.current_tok.line;
+    self.consume(.TkDo);
+    self.consume(.TkNewline);
+    var node = self.newNode();
+    node.* = .{.AstBlock = ast.BlockNode.init(self.allocator, line)};
+    while (!self.check(.TkEof) and !self.check(.TkEnd)) {
+      util.append(*Node, &node.AstBlock.nodes, self.statement());
+    }
+    self.consume(.TkEnd);
+    // eat newline if present
+    _ = self.match(.TkNewline);
+    return node;
+  }
+
   fn varDecl(self: *Self) *Node {
     // let var (: type)? = expr
     self.consume(.TkLet);
@@ -572,10 +593,6 @@ pub const Parser = struct {
     return decl;
   }
 
-  fn parseExpr(self: *Self) *Node {
-    return self._parse(.Assignment);
-  }
-
   fn exprStmt(self: *Self) *Node {
     const line = self.current_tok.line;
     const expr = self.parseExpr();
@@ -590,6 +607,8 @@ pub const Parser = struct {
       return self.varDecl();
     } else if (self.check(.TkType)) {
       return self.typeAlias();
+    } else if (self.check(.TkDo)) {
+      return self.blockStmt();
     }
     return self.exprStmt();
   }

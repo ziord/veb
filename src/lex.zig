@@ -11,6 +11,7 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"and", .TkAnd},
   .{"let", .TkLet},
   .{"or", .TkOr},
+  .{"as", .TkAs},
   .{"true", .TkTrue},
   .{"false", .TkFalse},
   .{"num", .TkNum},
@@ -53,6 +54,7 @@ pub const TokenType = enum (u8) {
   TkNeq,            // !=
   Tk2Lthan,         // <<
   Tk2Gthan,         // >>
+  TkAs,             // as
   TkIf,             // if
   TkOr,             // or
   TkFor,            // for
@@ -153,6 +155,7 @@ pub const TokenType = enum (u8) {
       .TkNeq => "!=",
       .Tk2Lthan => "<<",
       .Tk2Gthan => ">>",
+      .TkAs => "as",
       .TkIf => "if",
       .TkOr => "or",
       .TkFor => "for",

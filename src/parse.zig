@@ -43,7 +43,7 @@ pub const Parser = struct {
     Power,       // **
     Unary,       // !, -, +, ~
     Call,        // ()
-    Access,      // [], .,
+    Access,      // [], ., as
   };
   const PrefixFn = *const fn (*Self, bool) *Node;
   const InfixFn = *const fn (*Self, *Node, bool) *Node;
@@ -84,6 +84,7 @@ pub const Parser = struct {
     .{.bp = .Equality, .prefix = null, .infix = Self.binary},     // TkNeq
     .{.bp = .Shift, .prefix = null, .infix = Self.binary},        // Tk2Lthan
     .{.bp = .Shift, .prefix = null, .infix = Self.binary},        // Tk2Rthan
+    .{.bp = .Access, .prefix = null, .infix = Self.casting},      // TkAs
     .{.bp = .None, .prefix = null, .infix = null},                // TkIf
     .{.bp = .Or, .prefix = null, .infix = Self.binary},           // TkOr
     .{.bp = .None, .prefix = null, .infix = null},                // TkFor
@@ -294,6 +295,16 @@ pub const Parser = struct {
     const rhs = self._parse(bp);
     const node = self.newNode();
     node.* = .{.AstBinary = ast.BinaryNode.init(lhs, rhs, op, line)};
+    return node;
+  }
+
+  fn casting(self: *Self, lhs: *Node, assignable: bool) *Node {
+    _ = assignable;
+    self.consume(.TkAs);
+    const line = self.previous_tok.line;
+    const rhs = self.typing(false);
+    const node = self.newNode();
+    node.* = .{.AstCast = ast.CastNode.init(lhs, &rhs.AstNType, line)};
     return node;
   }
 

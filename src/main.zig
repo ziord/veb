@@ -213,6 +213,11 @@ test "types" {
   \\ type Foo = (map{str, bool}? | (list{(A)?})?)?
   \\ let x: A{bool?, str?}? = 5
   \\ let x: A{foo.bar.foobar?, str?}? = 5
+  \\ let y = 15 as num
+  \\ let j = (15 as num) as num
+  \\ let z = {15: ['foxy']} as map{num, list{str}}
+  \\ let z1 = {15: ['foxy']} as (map{num, list{str}})
+  \\ let z2 = {12: ['foxy']} as (map{num, list{str}})?
   ;
   _ = try doTest(src);
 }

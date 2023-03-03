@@ -22,6 +22,7 @@ pub const AstType = enum {
   AstBlock,
   AstNType,
   AstAlias,
+  AstCast,
   AstProgram,
 };
 
@@ -155,6 +156,16 @@ pub const AliasNode = struct {
   }
 };
 
+pub const CastNode = struct {
+  expr: *AstNode,
+  typn: *TypeNode,
+  line: usize,
+
+  pub fn init(expr: *AstNode, typn: *TypeNode, line: usize) @This() {
+    return @This() {.expr = expr, .typn = typn, .line = line};
+  }
+};
+
 // TODO: refactor to BlockNode if no other useful info needs to be added.
 pub const ProgramNode = struct {
   decls: AstNodeList,
@@ -180,6 +191,7 @@ pub const AstNode = union(AstType) {
   AstBlock: BlockNode,
   AstNType: TypeNode,
   AstAlias: AliasNode,
+  AstCast: CastNode,
   AstProgram: ProgramNode,
 
   pub fn line(self: *@This()) usize {
@@ -196,6 +208,7 @@ pub const AstNode = union(AstType) {
       .AstBlock => |blk| blk.line,
       .AstNType => |typ| typ.token.line,
       .AstAlias => |ali| ali.token.line,
+      .AstCast => |cst| cst.line,
       .AstProgram => |prog| prog.line,
     };
   }

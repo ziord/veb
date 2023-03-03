@@ -582,6 +582,7 @@ pub const Compiler = struct {
       .AstBlock => |*nd| self.cBlock(nd, reg),
       .AstNType => reg, // TODO
       .AstAlias => reg, // TODO
+      .AstCast => |*nd| self.c(nd.expr, reg), // TODO
       .AstProgram => |*nd| self.cProgram(nd, reg),
     };
   }

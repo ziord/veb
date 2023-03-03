@@ -27,3 +27,12 @@ pub inline fn assert(check: bool, msg: []const u8) void {
     @panic(msg);
   }
 }
+
+pub inline fn box(comptime T: type, val: T, allocator: std.mem.Allocator) *T {
+  var item = allocator.create(T) catch {
+    std.debug.print("Allocation failed\n", .{});
+    std.os.exit(1);
+  };
+  item.* = val;
+  return item;
+}

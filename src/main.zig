@@ -205,3 +205,14 @@ test "vars" {
   var got = try doTest(src2);
   try std.testing.expect(value.asNumber(got) == 7);
 }
+
+test "types" {
+  var src = 
+  \\ type A{K, V} = ((map{K?, map{K, (V | A? | B | C)? | (A? | B?)}?}?)?)
+  \\ type B{K, V, T} = map{K?, map{K, (V | A? | B | C)? | (A? | B?)}?}? | T
+  \\ type Foo = (map{str, bool}? | (list{(A)?})?)?
+  \\ let x: A{bool?, str?}? = 5
+  \\ let x: A{foo.bar.foobar?, str?}? = 5
+  ;
+  _ = try doTest(src);
+}

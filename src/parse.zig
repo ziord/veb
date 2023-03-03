@@ -6,6 +6,10 @@ const NovaAllocator = @import("allocator.zig");
 
 const Node = ast.AstNode;
 const exit = std.os.exit;
+const NTypeKind = ast.NTypeKind;
+const TName = ast.TName;
+const TUnion = ast.TUnion;
+const NType = ast.NType;
 
 // maximum number of elements of a list literal 
 const MAX_LISTING_ELEMS = 0xff;
@@ -70,6 +74,8 @@ pub const Parser = struct {
     .{.bp = .BitXor, .prefix = null, .infix = Self.binary},       // TkCaret
     .{.bp = .BitOr, .prefix = null, .infix = Self.binary},        // TkPipe
     .{.bp = .Unary, .prefix = Self.unary, .infix = null},         // TkTilde
+    .{.bp = .Access, .prefix = null, .infix = null},              // TkDot
+    .{.bp = .None, .prefix = null, .infix = null},                // TkQMark
     .{.bp = .None, .prefix = null, .infix = null},                // TkNewline
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},   // TkLeq
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},   // TkGeq
@@ -82,13 +88,19 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                // TkFor
     .{.bp = .And, .prefix = null, .infix = Self.binary},          // TkAnd
     .{.bp = .None, .prefix = null, .infix = null},                // TkLet
+    .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkNum
+    .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkMap
+    .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkStr
+    .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkBool
+    .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkList
+    .{.bp = .None, .prefix = null, .infix = null},                // TkType
     .{.bp = .None, .prefix = null, .infix = null},                // TkElse
     .{.bp = .None, .prefix = Self.boolean, .infix = null},        // TkTrue
     .{.bp = .None, .prefix = Self.boolean, .infix = null},        // TkFalse
     .{.bp = .None, .prefix = null, .infix = null},                // TkWhile
     .{.bp = .None, .prefix = null, .infix = null},                // TkReturn
-    .{.bp = .None, .prefix = Self.number, .infix = null},         // TkNum
-    .{.bp = .None, .prefix = Self.string, .infix = null},         // TkStr
+    .{.bp = .None, .prefix = Self.number, .infix = null},         // TkNumber
+    .{.bp = .None, .prefix = Self.string, .infix = null},         // TkString
     .{.bp = .None, .prefix = Self.variable, .infix = null},       // TkIdent
     .{.bp = .None, .prefix = null, .infix = null},                // TkErr
     .{.bp = .None, .prefix = null, .infix = null},                // TkEof
@@ -164,7 +176,7 @@ pub const Parser = struct {
 
   inline fn newNode(self: *Self) *Node {
     return self.allocator.create(Node) catch {
-      _ = std.io.getStdErr().write("Allocation failed\n") catch exit(1);
+      std.debug.print("Allocation failed\n", .{});
       exit(1);
     };
   }
@@ -225,7 +237,7 @@ pub const Parser = struct {
   fn number(self: *Self, assignable: bool) *Node {
     _ = assignable;
     const node = self.newNode();
-    node.* = .{.AstNum = self.literal(.TkNum)};
+    node.* = .{.AstNum = self.literal(.TkNumber)};
     var token = node.AstNum.token;
     node.AstNum.value = token.parseNum() catch {
       token.msg = "Invalid number token";
@@ -237,7 +249,7 @@ pub const Parser = struct {
   fn string(self: *Self, assignable: bool) *Node {
     _ = assignable;
     const node = self.newNode();
-    node.* = .{.AstStr = self.literal(.TkStr)};
+    node.* = .{.AstStr = self.literal(.TkString)};
     return node;
   }
 
@@ -374,13 +386,172 @@ pub const Parser = struct {
     return self.handleAugAssign(node, assignable);
   }
 
-  fn vardecl(self: *Self) *Node {
+  inline fn assertMaxTParams(self: *Self, typ: *NType) void {
+    if (typ.tparams.len >= ast.MAX_TPARAMS) {
+      self.current_tok.msg = "maximum type parameters exceeded";
+      self.err(self.current_tok);
+    }
+  }
+
+  inline fn assertNonEmptyTParams(self: *Self, typ: *NType) void {
+    if (typ.tparams.len == 0) {
+      self.previous_tok.msg = "Empty type parameters not allowed";
+      self.err(self.previous_tok);
+    }
+  }
+
+  fn refType(self: *Self, consume_dot: bool) NType {
+    var name = TName.init(self.allocator);
+    while (self.match(.TkIdent)) {
+      util.append(lex.Token, &name.tokens, self.previous_tok);
+      if (name.tokens.items.len > 0 and self.check(.TkDot)) {
+        if (consume_dot) {
+          self.advance();
+        } else {
+          self.current_tok.msg = "Expected single identifier, found multiple";
+          self.err(self.current_tok);
+        }
+      }
+    }
+    return NType.init(NTypeKind.TyName, name);
+  }
+
+  fn builtinOrRefType(self: *Self) NType {
+    if (self.check(.TkIdent)) {
+      return self.refType(true);
+    }
+    var kind: NTypeKind = switch (self.current_tok.ty) {
+      .TkBool => .TyBool,
+      .TkNum => .TyNumber,
+      .TkStr => .TyString,
+      .TkList => .TyList,
+      .TkMap => .TyMap,
+      // TODO: func, method, class, instance
+      else => {
+        self.current_tok.msg = "Invalid type-start";
+        self.err(self.current_tok);
+      }
+    };
+    // direct types such as listed above do not need names
+    var typ = NType.init(kind, null);
+    self.advance();
+    return typ;
+  }
+
+  fn abstractType(self: *Self) NType {
+    // AbstractType := TypeName
+    // TypeName    := Ident TypeParams?
+    // TypeParams  := "{" Ident ( "," Ident )* "}"
+    self.consume(.TkIdent);
+    var name = TName.init(self.allocator);
+    util.append(lex.Token, &name.tokens, self.previous_tok);
+    var typ = NType.init(.TyName, name);
+    if (self.match(.TkLCurly)) {
+      while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
+        if (typ.tparams.len > 0) self.consume(.TkComma);
+        self.assertMaxTParams(&typ);
+        var param = self.refType(false);
+        typ.tparams.params[typ.tparams.len] = util.box(NType, param, self.allocator);
+        typ.tparams.len += 1;
+      }
+      self.assertNonEmptyTParams(&typ);
+      self.consume(.TkRCurly);
+    }
+    return typ;
+  }
+
+  fn tPrimary(self: *Self) NType {
+    // Primary  :=  Builtin | Reference | “(“ Expression “)” | Primary “?”
+    var typ: NType = undefined;
+    if (self.match(.TkLBracket)) {
+      typ = self.tExpr();
+      self.consume(.TkRBracket);
+    } else {
+      typ = self.builtinOrRefType();
+    }
+    return typ;
+  }
+
+  fn tGeneric(self: *Self) NType {
+    // Generic := ( Primary | Primary "{" Expression ( "," Expression )* "}" ) "?"?
+    var typ = self.tPrimary();
+    if (self.match(.TkLCurly)) {
+      while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
+        if (typ.tparams.len > 0) self.consume(.TkComma);
+        self.assertMaxTParams(&typ);
+        var param = self.tExpr();
+        typ.tparams.params[typ.tparams.len] = util.box(NType, param, self.allocator);
+        typ.tparams.len += 1;
+      }
+      self.assertNonEmptyTParams(&typ);
+      self.consume(.TkRCurly);
+    }
+    if (self.match(.TkQMark)) {
+      var nsubtype = typ;
+      typ = NType.init(.TyNullable, null);
+      typ.nsubtype = util.box(NType, nsubtype, self.allocator);
+    }
+    return typ;
+  }
+
+  fn tUnion(self: *Self) NType {
+    // Union := Generic ( “|” Generic )*
+    var typ = self.tGeneric();
+    if (self.check(.TkPipe)) {
+      typ.union_ = TUnion.init(self.allocator);
+      while (self.match(.TkPipe)) {
+        var gen = self.tGeneric();
+        util.append(*NType, &typ.union_.?.types, util.box(NType, gen, self.allocator));
+      }
+    }
+    return typ;
+  }
+
+  fn tExpr(self: *Self) NType {
+    // Expression := Union
+    return self.tUnion();
+  }
+
+  fn typing(self: *Self, assignable: bool) *Node {
+    _ = assignable;
+    var token = self.current_tok;
+    var typ = self.tExpr();
+    var node = self.newNode();
+    node.* = .{.AstNType = ast.TypeNode.init(typ, token)};
+    return node;
+  }
+
+  fn typeAlias(self: *Self) *Node {
+    // TypeAlias   := "type" AbstractType "=" ConcreteType
+    var type_tok = self.current_tok;
+    self.consume(.TkType);
+    var alias_typ = self.abstractType();
+    var alias = self.newNode();
+    alias.* = .{.AstNType = ast.TypeNode.init(alias_typ, self.current_tok)};
+    self.consume(.TkEqual);
+    var aliasee = self.typing(false);
+    var node = self.newNode();
+    node.* = .{.AstAlias = ast.AliasNode.init(type_tok, &alias.AstNType, &aliasee.AstNType)};
+    self.consumeNlOrEof();
+    return node;
+  }
+
+  fn annotation(self: *Self, ident: *ast.VarNode) void {
+    if (self.match(.TkColon)) {
+      var typ_node = &self.typing(false).AstNType;
+      typ_node.typ.ident = ident;
+      ident.typn = typ_node;
+    }
+  }
+
+  fn varDecl(self: *Self) *Node {
     // let var (: type)? = expr
     self.consume(.TkLet);
     self.consume(.TkIdent);
     var name = self.previous_tok;
     var ident = self.newNode();
     ident.* = .{.AstVar = ast.VarNode.init(name)};
+    self.annotation(&ident.*.AstVar);
     self.consume(.TkEqual);
     var val = self.parseExpr();
     var decl = self.newNode();
@@ -404,7 +575,9 @@ pub const Parser = struct {
 
   fn statement(self: *Self) *Node {
     if (self.check(.TkLet)) {
-      return self.vardecl();
+      return self.varDecl();
+    } else if (self.check(.TkType)) {
+      return self.typeAlias();
     }
     return self.exprStmt();
   }

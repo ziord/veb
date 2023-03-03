@@ -13,6 +13,12 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"or", .TkOr},
   .{"true", .TkTrue},
   .{"false", .TkFalse},
+  .{"num", .TkNum},
+  .{"map", .TkMap},
+  .{"str", .TkStr},
+  .{"bool", .TkBool},
+  .{"list", .TkList},
+  .{"type", .TkType},
 });
 
 pub const TokenType = enum (u8) {
@@ -38,6 +44,8 @@ pub const TokenType = enum (u8) {
   TkCaret,          // ^
   TkPipe,           // |
   TkTilde,          // ~
+  TkDot,            // .
+  TkQMark,          // ?
   TkNewline,        // \n
   TkLeq,            // <=
   TkGeq,            // >=
@@ -50,13 +58,19 @@ pub const TokenType = enum (u8) {
   TkFor,            // for
   TkAnd,            // and
   TkLet,            // let
+  TkNum,            // num
+  TkMap,            // map
+  TkStr,            // str
+  TkBool,           // bool
+  TkList,           // list
+  TkType,           // type
   TkElse,           // else
   TkTrue,           // true
   TkFalse,          // false
   TkWhile,          // while
   TkReturn,         // return
-  TkNum,            // <number>
-  TkStr,            // <string>
+  TkNumber,         // <number>
+  TkString,         // <string>
   TkIdent,          // <identifier>
   TkErr,            // <error>
   TkEof,            // <eof>
@@ -130,6 +144,8 @@ pub const TokenType = enum (u8) {
       .TkCaret => "^",
       .TkPipe => "|",
       .TkTilde => "~",
+      .TkDot => ".",
+      .TkQMark => "?",
       .TkNewline => "\n",
       .TkLeq => "<=",
       .TkGeq => ">=",
@@ -142,13 +158,19 @@ pub const TokenType = enum (u8) {
       .TkFor => "for",
       .TkAnd => "and",
       .TkLet => "let",
+      .TkNum => "num",
+      .TkMap => "map",
+      .TkStr => "str",
+      .TkBool => "bool",
+      .TkList => "list",
+      .TkType => "type",
       .TkElse => "else",
       .TkTrue => "true",
       .TkFalse => "false",
       .TkWhile => "while",
       .TkReturn => "return",
-      .TkNum => "<number>",
-      .TkStr => "<string>",
+      .TkNumber => "<number>",
+      .TkString => "<string>",
       .TkIdent => "<identifier>",
       .TkErr => "<error>",
       .TkEof => "<eof>",
@@ -381,7 +403,7 @@ pub const Lexer = struct {
             }
           }
         }
-        return self.newToken(.TkNum);
+        return self.newToken(.TkNumber);
       }
     } else if (is_zero and current == 'o') {
       // "0o" oct_int
@@ -400,7 +422,7 @@ pub const Lexer = struct {
             }
           }
         }
-        return self.newToken(.TkNum);
+        return self.newToken(.TkNumber);
       }
     } else if (is_zero and current == 'x') {
       // "0x" hex_int
@@ -417,7 +439,7 @@ pub const Lexer = struct {
             }
           }
         }
-        return self.newToken(.TkNum);
+        return self.newToken(.TkNumber);
       }
     } else {
       // dec_int
@@ -479,7 +501,7 @@ pub const Lexer = struct {
           return err_token;
         }
       }
-      return self.newToken(.TkNum);
+      return self.newToken(.TkNumber);
     }
     return self.errToken("Invalid number literal");
   }
@@ -517,7 +539,7 @@ pub const Lexer = struct {
     if (self.atEnd()) {
       return self.errToken("Unclosed string");
     }
-    var token = self.newToken(.TkStr);
+    var token = self.newToken(.TkString);
     token.value = token.value[1..]; // skip opening quot `"`
     self.adv(); // skip closing quot `"`
     // check for escape sequences
@@ -606,6 +628,8 @@ pub const Lexer = struct {
       '^' => self.newToken(.TkCaret),
       '|' => self.newToken(.TkPipe),
       '~' => self.newToken(.TkTilde),
+      '.' => self.newToken(.TkDot),
+      '?' => self.newToken(.TkQMark),
       '\n' => self.newToken(.TkNewline),
       '"', '\'' => self.lexStr(ch),
       '!' => self.newToken(if (self.match('=')) .TkNeq else .TkExMark),

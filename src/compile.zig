@@ -580,6 +580,8 @@ pub const Compiler = struct {
       .AstVarDecl => |*nd| self.cVarDecl(nd, reg),
       .AstAssign => |*nd| self.cAssign(nd, reg),
       .AstBlock => |*nd| self.cBlock(nd, reg),
+      .AstNType => reg, // TODO
+      .AstAlias => reg, // TODO
       .AstProgram => |*nd| self.cProgram(nd, reg),
     };
   }

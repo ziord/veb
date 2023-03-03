@@ -1,15 +1,16 @@
 const std = @import("std");
 const lex = @import("lex.zig");
 const ast = @import("ast.zig");
+const types = @import("types.zig");
 const util = @import("util.zig");
 const NovaAllocator = @import("allocator.zig");
 
 const Node = ast.AstNode;
 const exit = std.os.exit;
-const NTypeKind = ast.NTypeKind;
-const TName = ast.TName;
-const TUnion = ast.TUnion;
-const NType = ast.NType;
+const NTypeKind = types.NTypeKind;
+const TName = types.TName;
+const TUnion = types.TUnion;
+const NType = types.NType;
 
 // maximum number of elements of a list literal 
 const MAX_LISTING_ELEMS = 0xff;
@@ -387,7 +388,7 @@ pub const Parser = struct {
   }
 
   inline fn assertMaxTParams(self: *Self, typ: *NType) void {
-    if (typ.tparams.len >= ast.MAX_TPARAMS) {
+    if (typ.tparams.len >= types.MAX_TPARAMS) {
       self.current_tok.msg = "maximum type parameters exceeded";
       self.err(self.current_tok);
     }

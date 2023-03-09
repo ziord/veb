@@ -4,6 +4,7 @@ const compile = @import("compile.zig");
 const vm = @import("vm.zig");
 const debug = @import("debug.zig");
 const value = @import("value.zig");
+const link = @import("link.zig");
 const NovaAllocator = @import("allocator.zig");
 const Vec = @import("vec.zig").Vec;
 
@@ -18,6 +19,8 @@ fn doTest(src: []const u8) !value.Value {
   var parser = parse.Parser.init(src, filename, &nva);
   const node = parser.parse();
   std.debug.print("node: {}\n", .{node});
+  var linker = link.TypeLinker.init(nva.getArenaAllocator());
+  linker.linkTypes(node);
   var code = value.Code.init();
   var cpu = vm.VM.init(&nva, &code);
   defer cpu.deinit(); // don't deinit for now.
@@ -208,11 +211,12 @@ test "vars" {
 
 test "types" {
   var src = 
-  \\ type A{K, V} = ((map{K?, map{K, (V | A? | B | C)? | (A? | B?)}?}?)?)
+  \\ type A{K, V} = (map{K?, map{K, (A | V | C)? | (C?)}?}?)
   \\ type B{K, V, T} = map{K?, map{K, (V | A? | B | C)? | (A? | B?)}?}? | T
+  \\ type C = str
   \\ type Foo = (map{str, bool}? | (list{(A)?})?)?
-  \\ let x: A{bool?, str?}? = 5
-  \\ let x: A{foo.bar.foobar?, str?}? = 5
+  \\ let x: A{bool, str?} = 5
+  \\ let x: A{num, str?} = 5
   \\ let y = 15 as num
   \\ let j = (15 as num) as num
   \\ let z = {15: ['foxy']} as map{num, list{str}}
@@ -241,4 +245,31 @@ test "blocks" {
   \\ x
   ;
   _ = try doTest(src);
+}
+
+test "linking" {
+  var src =
+  \\ type HashMap{K, V} = map{K, V}
+  \\ type StringHashMap{V} = HashMap{str, V}
+  \\ type NumList = list{num}
+  \\ let a: NumList = [1, 2]
+  \\ let b: HashMap{num, bool} = {0: false}
+  \\ let c: StringHashMap{bool} = {'foo': false}
+  \\ let x: str = 'over the garden wall!'
+  \\ let y = 'oops'
+  ;
+  _ = try doTest(src);
+  var src2 =
+  \\ type A = str
+  \\ type B = num
+  \\ type C = map
+  \\ type D{K} = C{K, B}
+  \\ type HashMap{K, V} = C{K, V}
+  \\ type StringHashMap{V} = HashMap{str, V}
+  \\ type BadList = list{StringHashMap{HashMap{A, D{B}?}}}
+  \\ type X = (D{BadList} | D{B}? | BadList)?
+  \\ let x: X = {'fox': 5}
+  \\ x
+  ;
+  _ = try doTest(src2);
 }

@@ -8,8 +8,8 @@ pub const AstNodeList = std.ArrayList(*AstNode);
 
 // ast node types
 pub const AstType = enum {
-  AstNum,
-  AstStr,
+  AstNumber,
+  AstString,
   AstBool,
   AstBinary,
   AstUnary,
@@ -89,14 +89,14 @@ pub const MapNode = struct {
 
 pub const VarNode = struct {
   token: lex.Token,
-  typn: ?*TypeNode,
+  typ: ?*NType,
   line: usize,
 
   pub fn init(token: Token) @This() {
     return @This() {
       .token = token,
       .line = token.line,
-      .typn = null,
+      .typ = null,
     };
   }
 };
@@ -177,8 +177,8 @@ pub const ProgramNode = struct {
 };
 
 pub const AstNode = union(AstType) {
-  AstNum: LiteralNode,
-  AstStr: LiteralNode,
+  AstNumber: LiteralNode,
+  AstString: LiteralNode,
   AstBool: LiteralNode,
   AstBinary: BinaryNode,
   AstUnary: UnaryNode,
@@ -196,7 +196,7 @@ pub const AstNode = union(AstType) {
 
   pub fn line(self: *@This()) usize {
     return switch (self.*) {
-      .AstNum, .AstStr, .AstBool => |lit| lit.line,
+      .AstNumber, .AstString, .AstBool => |lit| lit.line,
       .AstBinary => |bin| bin.line,
       .AstUnary => |una| una.line,
       .AstList => |lst| lst.line,
@@ -215,7 +215,7 @@ pub const AstNode = union(AstType) {
 
   pub fn isNum(self: *@This()) bool {
     return switch (self.*) {
-      .AstNum => true,
+      .AstNumber => true,
       else => false,
     };
   }
@@ -223,7 +223,7 @@ pub const AstNode = union(AstType) {
   pub fn isConst(self: *@This()) bool {
     // for now, only numbers and booleans are recognized as consts
     return switch (self.*) {
-      .AstNum, .AstBool, => true,
+      .AstNumber, .AstBool, => true,
       else => false,
     };
   }

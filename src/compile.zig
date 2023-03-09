@@ -324,7 +324,7 @@ pub const Compiler = struct {
     return self.code.writeValue(val, self.vm);
   }
 
-  fn cNum(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
+  fn cNumber(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
     // load rx, memidx
     self.cConst(dst, value.numberVal(node.value), node.line);
     return dst;
@@ -336,7 +336,7 @@ pub const Compiler = struct {
     return dst;
   }
 
-  fn cStr(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
+  fn cString(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
     self.cConst(
       dst,
       value.objVal(value.createString(self.vm, &self.vm.strings, node.token.value, node.token.is_alloc)),
@@ -354,7 +354,7 @@ pub const Compiler = struct {
       // for now, only numbers and booleans are recognized as consts
       var rk: u32 = undefined;
       if (node.expr.isNum()) {
-        rk = self.code.storeConst(value.numberVal(node.expr.AstNum.value), self.vm);
+        rk = self.code.storeConst(value.numberVal(node.expr.AstNumber.value), self.vm);
       } else {
         rk = self.code.storeConst(value.boolVal(node.expr.AstBool.token.is(.TkTrue)), self.vm);
       }
@@ -391,8 +391,8 @@ pub const Compiler = struct {
     // check that we don't exceed the 9 bits of rk (+ 2 for lhs and rhs)
     if (lhsIsNum and rhsIsNum) {
       if (self.withinRKLimit(2)) {
-        const rk1 = self.code.storeConst(value.numberVal(node.left.AstNum.value), self.vm);
-        const rk2 = self.code.storeConst(value.numberVal(node.right.AstNum.value), self.vm);
+        const rk1 = self.code.storeConst(value.numberVal(node.left.AstNumber.value), self.vm);
+        const rk2 = self.code.storeConst(value.numberVal(node.right.AstNumber.value), self.vm);
         self.code.write3ArgsInst(inst_op, dst, rk1, rk2, @intCast(u32, node.line), self.vm);
         self.cCmp(node);
         return dst;
@@ -402,12 +402,12 @@ pub const Compiler = struct {
     var rk1: u32 = undefined;
     var rk2: u32 = undefined;
     if (lhsIsNum and self.withinRKLimit(1)) { // 2 * (3 * (4 * 5))
-      rk1 = self.code.storeConst(value.numberVal(node.left.AstNum.value), self.vm);
+      rk1 = self.code.storeConst(value.numberVal(node.left.AstNumber.value), self.vm);
     } else {
       rk1 = self.c(node.left, dst);
     }
     if (rhsIsNum and self.withinRKLimit(1)) {
-      rk2 = self.code.storeConst(value.numberVal(node.right.AstNum.value), self.vm);
+      rk2 = self.code.storeConst(value.numberVal(node.right.AstNumber.value), self.vm);
     } else {
       const dst2 = self.getReg();
       rk2 = self.c(node.right, dst2);
@@ -569,8 +569,8 @@ pub const Compiler = struct {
 
   fn c(self: *Self, node: *Node, reg: u32) u32 {
     return switch (node.*) {
-      .AstNum => |*nd| self.cNum(nd, reg),
-      .AstStr => |*nd| self.cStr(nd, reg),
+      .AstNumber => |*nd| self.cNumber(nd, reg),
+      .AstString => |*nd| self.cString(nd, reg),
       .AstBool => |*nd| self.cBool(nd, reg),
       .AstUnary => |*nd| self.cUnary(nd, reg),
       .AstBinary => |*nd| self.cBinary(nd, reg),

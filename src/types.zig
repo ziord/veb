@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("ast.zig");
+const util = @import("util.zig");
 const Token = @import("lex.zig").Token;
 
 pub const MAX_TPARAMS = 0xA;
@@ -37,6 +38,16 @@ pub const TName = struct {
 
   pub fn init(allocator: std.mem.Allocator) @This() {
     return @This() {.tokens = std.ArrayList(Token).init(allocator)};
+  }
+
+  pub fn eql(self: *@This(), other: *@This()) bool {
+    if (other.tokens.items.len != self.tokens.items.len) return false;
+    for (other.tokens.items, self.tokens.items) |a, b| {
+      if (!std.mem.eql(u8, a.value, b.value)) {
+        return false;
+      }
+    }
+    return true;
   }
 };
 
@@ -77,11 +88,80 @@ pub const NType = struct {
   nsubtype: ?*NType = null,
   /// (generic) type parameters
   tparams: TParam = .{},
+  var_name: ?[]const u8 = null,
   // TODO: func, class, etc.
 
   const Self = @This();
 
-  pub fn init(kind: NTypeKind, name: ?TName) @This() {
+  pub fn init(kind: NTypeKind, name: ?TName) Self {
     return Self {.kind = kind, .name = name};
+  }
+
+  pub fn getName(self: *Self) []const u8 {
+    if (self.name) |name| {
+      return name.tokens.getLast().value;
+    } else {
+      return "";
+    }
+  }
+
+  /// non-generic type that requires no substitution
+  pub inline fn isSimple(self: *Self) bool {
+    return switch (self.kind) {
+      .TyNumber, .TyBool, .TyString => true,
+      else => false,
+    };
+  }
+
+  /// a compound type that may also be generic
+  pub inline fn isCompound(self: *Self) bool {
+    return !self.isSimple();
+  }
+
+  /// a type that may require some form of substitution
+  pub fn isGeneric(self: *Self) bool {
+    if (self.tparams.len > 0) return true;
+    return switch (self.kind) {
+      .TyList, .TyMap => true,
+      .TyNullable => self.nsubtype.?.isGeneric(),
+      else => false,
+    };
+  }
+
+  /// a built-in generic type
+  pub fn isBuiltinGeneric(self: *Self) bool {
+    return switch (self.kind) {
+      .TyList, .TyMap => true,
+      else => false,
+    };
+  }
+
+  fn checkNameType(self: *Self, startStep: usize, maxSteps: usize) bool {
+    if (startStep >= maxSteps) {
+      util.error_("Potentially infinite checks arising from probable self-referencing types", .{});
+    }
+    return switch (self.kind) {
+      .TyName => true,
+      .TyNullable => self.nsubtype.?.checkNameType(startStep + 1, maxSteps),
+      .TyUnion => blk: {
+        for (self.union_.?.types.items) |typ| {
+          if (typ.checkNameType(startStep + 1, maxSteps)) {
+            break :blk true;
+          }
+        }
+        break :blk false;
+      },
+      else => false, // don't inspect generics
+    };
+  }
+
+  pub inline fn hasNameType(self: *Self, maxSteps: usize) bool {
+    return self.checkNameType(0, maxSteps);
+  }
+
+  pub fn newNullable(newnode: *Self, nsubtype: *Self) *NType {
+    newnode.kind = .TyNullable;
+    newnode.nsubtype = nsubtype;
+    return newnode;
   }
 };

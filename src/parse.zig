@@ -241,9 +241,9 @@ pub const Parser = struct {
   fn number(self: *Self, assignable: bool) *Node {
     _ = assignable;
     const node = self.newNode();
-    node.* = .{.AstNum = self.literal(.TkNumber)};
-    var token = node.AstNum.token;
-    node.AstNum.value = token.parseNum() catch {
+    node.* = .{.AstNumber = self.literal(.TkNumber)};
+    var token = node.AstNumber.token;
+    node.AstNumber.value = token.parseNum() catch {
       token.msg = "Invalid number token";
       self.err(token);
     };
@@ -253,7 +253,7 @@ pub const Parser = struct {
   fn string(self: *Self, assignable: bool) *Node {
     _ = assignable;
     const node = self.newNode();
-    node.* = .{.AstStr = self.literal(.TkString)};
+    node.* = .{.AstString = self.literal(.TkString)};
     return node;
   }
 
@@ -278,7 +278,7 @@ pub const Parser = struct {
       const num = self.newNode();
       var lit = ast.LiteralNode.init(line_tok);
       lit.value = 0;
-      num.* = .{.AstNum = lit};
+      num.* = .{.AstNumber = lit};
       node.* = .{.AstBinary = ast.BinaryNode.init(num, expr, op, line_tok.line)};
     } else if (op == .OpAdd) {
       // rewrite +expr to expr
@@ -490,6 +490,10 @@ pub const Parser = struct {
     // Generic := ( Primary | Primary "{" Expression ( "," Expression )* "}" ) "?"?
     var typ = self.tPrimary();
     if (self.match(.TkLCurly)) {
+      if (typ.isSimple()) {
+        self.previous_tok.msg = "Cannot instantiate simple type as generic";
+        self.err(self.previous_tok);
+      }
       while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
         if (typ.tparams.len > 0) self.consume(.TkComma);
         self.assertMaxTParams(&typ);
@@ -502,6 +506,10 @@ pub const Parser = struct {
     }
     if (self.match(.TkQMark)) {
       var nsubtype = typ;
+      if (nsubtype.kind == .TyNullable) {
+        self.previous_tok.msg = "Nullable type cannot be nullable";
+        self.err(self.previous_tok);
+      }
       typ = NType.init(.TyNullable, null);
       typ.nsubtype = util.box(NType, nsubtype, self.allocator);
     }
@@ -512,9 +520,12 @@ pub const Parser = struct {
     // Union := Generic ( “|” Generic )*
     var typ = self.tGeneric();
     if (self.check(.TkPipe)) {
+      var gen = typ;
+      typ = NType.init(.TyUnion, null);
       typ.union_ = TUnion.init(self.allocator);
+      util.append(*NType, &typ.union_.?.types, util.box(NType, gen, self.allocator));
       while (self.match(.TkPipe)) {
-        var gen = self.tGeneric();
+        gen = self.tGeneric();
         util.append(*NType, &typ.union_.?.types, util.box(NType, gen, self.allocator));
       }
     }
@@ -535,6 +546,55 @@ pub const Parser = struct {
     return node;
   }
 
+  fn checkGenericTParam(self: *Self, tvar: *NType, cct_ty: *NType) ?*lex.Token {
+    // T{K} -> P{Q | K{V}}
+    if (cct_ty.kind == .TyName) {
+      if (cct_ty.name.?.eql(&tvar.name.?) and cct_ty.isGeneric()) {
+        return &cct_ty.name.?.tokens.items[0];
+      }
+    }
+    if (cct_ty.kind == .TyNullable) {
+      return self.checkGenericTParam(tvar, cct_ty.nsubtype.?);
+    }
+    if (cct_ty.kind == .TyUnion) {
+      for (cct_ty.union_.?.types.items) |ty| {
+        if (self.checkGenericTParam(tvar, ty)) |tok| {
+          return tok;
+        }
+      }
+    }
+    if (cct_ty.isGeneric()) {
+      for (0..cct_ty.tparams.len) |i| {
+        var param = cct_ty.tparams.params[i];
+        if (self.checkGenericTParam(tvar, param)) |tok| {
+          return tok;
+        }
+      }
+    }
+    return null;
+  }
+
+  fn assertNoGenericParameterTypeVariable(self: *Self, abs_ty: *NType, cct_ty: *NType) void {
+    // Check that no type variable in generic params of the type alias is used "generically" 
+    // in the aliasee
+    for (0..abs_ty.tparams.len) |i| {
+      var param = abs_ty.tparams.params[i];
+      if (self.checkGenericTParam(param, cct_ty)) |tok| {
+        tok.msg = "type variable in generic parameter cannot be generic";
+        self.err(tok.*);
+      }
+    }
+  }
+
+  fn assertNoRecursiveAlias(self: *Self, abs_ty: *NType, cct_ty: *NType) void {
+    // Check that type alias name is not used in the aliasee. This is not an in-depth
+    // check, as it's possible for the alias to be meaningfully hidden in the aliasee.
+    if (self.checkGenericTParam(abs_ty, cct_ty)) |tok| {
+      tok.msg = "type alias cannot be used directly in the aliasee";
+      self.err(tok.*);
+    }
+  }
+
   fn typeAlias(self: *Self) *Node {
     // TypeAlias   := "type" AbstractType "=" ConcreteType
     var type_tok = self.current_tok;
@@ -545,6 +605,9 @@ pub const Parser = struct {
     self.consume(.TkEqual);
     var aliasee = self.typing(false);
     var node = self.newNode();
+    // check that generic type variable parameters in `AbstractType` are not generic in `ConcreteType`
+    self.assertNoGenericParameterTypeVariable(&alias_typ, &aliasee.AstNType.typ);
+    self.assertNoRecursiveAlias(&alias_typ, &aliasee.AstNType.typ);
     node.* = .{.AstAlias = ast.AliasNode.init(type_tok, &alias.AstNType, &aliasee.AstNType)};
     self.consumeNlOrEof();
     return node;
@@ -554,7 +617,7 @@ pub const Parser = struct {
     if (self.match(.TkColon)) {
       var typ_node = &self.typing(false).AstNType;
       typ_node.typ.ident = ident;
-      ident.typn = typ_node;
+      ident.typ = &typ_node.typ;
     }
   }
 

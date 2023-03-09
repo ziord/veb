@@ -14,7 +14,7 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
 }
 
 pub fn error_(comptime fmt: []const u8, args: anytype) noreturn {
-  std.debug.print(fmt, args);
+  std.debug.print(fmt ++ "\n", args);
   std.os.exit(1);
 }
 
@@ -35,4 +35,8 @@ pub inline fn box(comptime T: type, val: T, allocator: std.mem.Allocator) *T {
   };
   item.* = val;
   return item;
+}
+
+pub inline fn todo(msg: []const u8) noreturn {
+  @panic("Todo! " ++ msg ++ "\n");
 }

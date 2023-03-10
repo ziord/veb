@@ -71,6 +71,8 @@ pub const TParam = struct {
 pub const NType = struct {
   /// the type's 'kind', which may subsume the need for other properties
   kind: NTypeKind,
+  /// token for error tracing and debugging
+  debug: Token,
   /// name of this type
   name: ?TName,
   /// identifier the type was declared with e.g:
@@ -93,8 +95,8 @@ pub const NType = struct {
 
   const Self = @This();
 
-  pub fn init(kind: NTypeKind, name: ?TName) Self {
-    return Self {.kind = kind, .name = name};
+  pub fn init(kind: NTypeKind, name: ?TName, debug: Token) Self {
+    return Self {.kind = kind, .name = name, .debug = debug};
   }
 
   pub fn getName(self: *Self) []const u8 {
@@ -136,16 +138,16 @@ pub const NType = struct {
     };
   }
 
-  fn checkNameType(self: *Self, startStep: usize, maxSteps: usize) bool {
+  fn checkNameType(self: *Self, startStep: usize, maxSteps: usize) !bool {
     if (startStep >= maxSteps) {
-      util.error_("Potentially infinite checks arising from probable self-referencing types", .{});
+      return error.PotentiallyInfiniteSteps;
     }
     return switch (self.kind) {
       .TyName => true,
-      .TyNullable => self.nsubtype.?.checkNameType(startStep + 1, maxSteps),
+      .TyNullable => try self.nsubtype.?.checkNameType(startStep + 1, maxSteps),
       .TyUnion => blk: {
         for (self.union_.?.types.items) |typ| {
-          if (typ.checkNameType(startStep + 1, maxSteps)) {
+          if (try typ.checkNameType(startStep + 1, maxSteps)) {
             break :blk true;
           }
         }
@@ -155,8 +157,8 @@ pub const NType = struct {
     };
   }
 
-  pub inline fn hasNameType(self: *Self, maxSteps: usize) bool {
-    return self.checkNameType(0, maxSteps);
+  pub inline fn hasNameType(self: *Self, maxSteps: usize) !bool {
+    return try self.checkNameType(0, maxSteps);
   }
 
   pub fn newNullable(newnode: *Self, nsubtype: *Self) *NType {

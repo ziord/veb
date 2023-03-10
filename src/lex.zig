@@ -252,6 +252,8 @@ pub const Token = struct {
   msg: ?[]const u8,
   line: usize,
   column: usize,
+  offset: usize,
+  src: []const u8,
   is_alloc: bool = false,
 
   pub inline fn is(self: @This(), ty: TokenType) bool {
@@ -274,6 +276,48 @@ pub const Token = struct {
       }
     }
     return try std.fmt.parseFloat(f64, self.value);
+  }
+
+  pub fn getLine(self: @This()) []const u8 {
+    var offset: usize = if (self.ty == .TkNewline) self.offset - 1 else self.offset;
+    // walk backwards
+    var start_col: usize = offset;
+    while (start_col > 0): (start_col -= 1) {
+      if (self.src[start_col] == '\n') {
+        start_col += 1;
+        break;
+      }
+    }
+    var end_col: usize = start_col;
+    // walk forwards
+    for (self.src[start_col..]) |ch| {
+      if (ch == '\n') break;
+      end_col += 1;
+    }
+    return self.src[start_col..end_col];
+  }
+
+  fn printSquig(self: @This(), i: usize) void {
+    _ = self;
+    var y = i;
+    while (y > 0) {
+      std.debug.print("{s:^}", .{"^"});
+      y -= 1;
+    }
+  }
+
+  pub fn showError(self: @This(), filename: []const u8, comptime fmt: []const u8, args: anytype) void {
+    var line = self.getLine();
+    std.debug.print(fmt ++ "\n", args);
+    std.debug.print("{s}.{}:{}:\n\t{s}\n", .{filename, self.line, self.column, line});
+    std.debug.print("\t", .{});
+    var i = (self.column - self.value.len);
+    while (i > 0) {
+      std.debug.print(" ", .{});
+      i -= 1;
+    }
+    self.printSquig(self.value.len);
+    std.debug.print("\n", .{});
   }
 };
 
@@ -337,6 +381,8 @@ pub const Lexer = struct {
       .column = self.column - 1,
       .value = self.src[self.start..self.current],
       .msg = null,
+      .src = self.src,
+      .offset = self.start,
     };
   }
 
@@ -583,24 +629,6 @@ pub const Lexer = struct {
     token.value = buf;
     token.is_alloc = true;
     return token;
-  }
-
-  pub fn getLine(self: *Self, line: usize) []const u8 {
-    var curr_line: usize = 0;
-    var start_col: usize = 0;
-    for (self.src, 0..) |ch, idx| {
-      if (curr_line == line - 1) {
-        start_col = idx;
-        break; 
-      }
-      if (ch == '\n') curr_line += 1;
-    }
-    var end_col: usize = start_col;
-    for (self.src[start_col..]) |ch| {
-      if (ch == '\n') break;
-      end_col += 1;
-    }
-    return self.src[start_col..end_col];
   }
 
   pub fn getToken(self: *Self) Token {

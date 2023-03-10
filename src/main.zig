@@ -18,9 +18,8 @@ fn doTest(src: []const u8) !value.Value {
   const filename = "test.nova";
   var parser = parse.Parser.init(src, filename, &nva);
   const node = parser.parse();
-  std.debug.print("node: {}\n", .{node});
-  var linker = link.TypeLinker.init(nva.getArenaAllocator());
-  linker.linkTypes(node);
+  var linker = link.TypeLinker.init(nva.getArenaAllocator(), "test.nova");
+  try linker.linkTypes(node);
   var code = value.Code.init();
   var cpu = vm.VM.init(&nva, &code);
   defer cpu.deinit(); // don't deinit for now.

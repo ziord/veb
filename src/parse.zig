@@ -122,35 +122,8 @@ pub const Parser = struct {
     };
   }
 
-  fn printSquig(self: *Self, i: usize) void {
-    _ = self;
-    var y = i;
-    while (y > 0) {
-      std.debug.print("{s:^}", .{"^"});
-      y -= 1;
-    }
-  }
-
   fn err(self: *Self, token: lex.Token) noreturn {
-    var line = self.lexer.getLine(token.line);
-    std.debug.print("ParseError: {s}\n", .{token.msg.?});
-    std.debug.print("{s}.{}:{}:\n\t{s}\n", .{self.filename, token.line, token.column, line});
-    if (std.mem.indexOf(u8, line, token.value) != null) {
-      std.debug.print("\t", .{});
-      var i = token.column - token.value.len;
-      while (i > 0) {
-        std.debug.print(" ", .{});
-        i -= 1;
-      }
-      self.printSquig(token.value.len);
-      std.debug.print("\n", .{});
-    } else {
-      std.debug.print("\t{s}\n", .{token.value});
-      std.debug.print("\t", .{});
-      self.printSquig(token.value.len);
-      std.debug.print("\n", .{});
-    }
-    // free only arena for now.
+    token.showError(self.filename, "ParseError: {s}", .{token.msg.?});
     self.nva.deinitArena();
     exit(1);
   }
@@ -414,25 +387,35 @@ pub const Parser = struct {
     }
   }
 
-  fn refType(self: *Self, consume_dot: bool) NType {
+
+  fn aliasParams(self: *Self) NType {
     var name = TName.init(self.allocator);
+    var debug = self.current_tok;
     while (self.match(.TkIdent)) {
       util.append(lex.Token, &name.tokens, self.previous_tok);
-      if (name.tokens.items.len > 0 and self.check(.TkDot)) {
-        if (consume_dot) {
-          self.advance();
-        } else {
-          self.current_tok.msg = "Expected single identifier, found multiple";
-          self.err(self.current_tok);
-        }
+      if (self.check(.TkDot)) {
+        self.current_tok.msg = "Expected single identifier, found multiple";
+        self.err(self.current_tok);
       }
     }
-    return NType.init(NTypeKind.TyName, name);
+    return NType.init(NTypeKind.TyName, name, debug);
+  }
+
+  fn refType(self: *Self) NType {
+    var name = TName.init(self.allocator);
+    var debug = self.current_tok;
+    util.append(lex.Token, &name.tokens, self.current_tok);
+    self.consume(.TkIdent);
+    while (self.match(.TkDot)) {
+      self.consume(.TkIdent);
+      util.append(lex.Token, &name.tokens, self.previous_tok);
+    }
+    return NType.init(NTypeKind.TyName, name, debug);
   }
 
   fn builtinOrRefType(self: *Self) NType {
     if (self.check(.TkIdent)) {
-      return self.refType(true);
+      return self.refType();
     }
     var kind: NTypeKind = switch (self.current_tok.ty) {
       .TkBool => .TyBool,
@@ -447,7 +430,7 @@ pub const Parser = struct {
       }
     };
     // direct types such as listed above do not need names
-    var typ = NType.init(kind, null);
+    var typ = NType.init(kind, null, self.current_tok);
     self.advance();
     return typ;
   }
@@ -459,12 +442,12 @@ pub const Parser = struct {
     self.consume(.TkIdent);
     var name = TName.init(self.allocator);
     util.append(lex.Token, &name.tokens, self.previous_tok);
-    var typ = NType.init(.TyName, name);
+    var typ = NType.init(.TyName, name, self.previous_tok);
     if (self.match(.TkLCurly)) {
       while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
         if (typ.tparams.len > 0) self.consume(.TkComma);
         self.assertMaxTParams(&typ);
-        var param = self.refType(false);
+        var param = self.aliasParams();
         typ.tparams.params[typ.tparams.len] = util.box(NType, param, self.allocator);
         typ.tparams.len += 1;
       }
@@ -510,7 +493,7 @@ pub const Parser = struct {
         self.previous_tok.msg = "Nullable type cannot be nullable";
         self.err(self.previous_tok);
       }
-      typ = NType.init(.TyNullable, null);
+      typ = NType.init(.TyNullable, null, self.previous_tok);
       typ.nsubtype = util.box(NType, nsubtype, self.allocator);
     }
     return typ;
@@ -521,7 +504,7 @@ pub const Parser = struct {
     var typ = self.tGeneric();
     if (self.check(.TkPipe)) {
       var gen = typ;
-      typ = NType.init(.TyUnion, null);
+      typ = NType.init(.TyUnion, null, self.current_tok);
       typ.union_ = TUnion.init(self.allocator);
       util.append(*NType, &typ.union_.?.types, util.box(NType, gen, self.allocator));
       while (self.match(.TkPipe)) {

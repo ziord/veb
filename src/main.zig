@@ -74,12 +74,12 @@ test "booleans" {
       "0x123 < 4 and 1 < 5",
       "123.45 > 12_40 or 2 == 2",
       "0b111_000 <= 0o12_12 or 1 > 0.5",
-      "123.e-2 >= 0x12_34_5 and 6 as bool and 7 > 2",
-      "123.e-2 != 0x12_34_5 and 0 as bool or 6 > 2",
-      "(1 as bool or 2 as bool) == 1 as bool",
-      "(1 as bool and 2 as bool) == 2 as bool",
-      "(0b00 as bool and 2 as bool) == 0o0 as bool",
-      "(0x0 as bool or 2 as bool) == 2 as bool",
+      "123.e-2 >= 0x12_34_5 and 6 and 7 > 2",
+      "123.e-2 != 0x12_34_5 and 0 or 6 > 2",
+      "(1 or 2) == 1",
+      "(1 and 2) == 2",
+      "(0b00 and 2) == 0o0",
+      "(0x0 or 2) == 2",
       "true or false",
       "false or true",
       "false or false",
@@ -89,9 +89,9 @@ test "booleans" {
       "false and false",
       "!false",
       "!true",
-      "!(0x0_0 as bool)",
-      "!!(1 as bool)",
-      "!(1 as bool)",
+      "!(0x0_0)",
+      "!!(1)",
+      "!(1)",
       "'foxes and pirates' == 'foxes and pirates'",
       "'foxes and pirates' != 'fishes and pirates'",
   };
@@ -294,7 +294,7 @@ test "self-reference" {
 test "typecheck" {
   var src =
   \\ let x = 5 as bool
-  \\ x as bool and 'fox' as bool
+  \\ x and 'fox'
   \\ let p = 5 as (num | str)?
   \\ let q: (num | str | bool) = 5
   \\ 

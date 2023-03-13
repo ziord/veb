@@ -155,23 +155,26 @@ pub const TypeChecker = struct {
     var key_typ = try self.infer(first_pair.key);
     var val_typ = try self.infer(first_pair.value);
 
-    for (node.pairs.items) |pair| {
-      var typ = try self.infer(pair.key);
-      _ = self.checkAssign(key_typ, typ, typ.debug, false) catch {
-        return self.error_(
-          node.token,
-          "expected key type '{s}', but found '{s}'",
-          .{self.getTypename(key_typ), self.getTypename(typ)}
-        );
-      };
-      typ = try self.infer(pair.value);
-      _ = self.checkAssign(val_typ, typ, typ.debug, false) catch {
-        return self.error_(
-          node.token,
-          "expected value type '{s}', but found '{s}'",
-          .{self.getTypename(val_typ), self.getTypename(typ)}
-        );
-      };
+    if (node.pairs.items.len > 1) {
+      for (node.pairs.items, 1..) |pair, i| {
+        _ = i;
+        var typ = try self.infer(pair.key);
+        _ = self.checkAssign(key_typ, typ, typ.debug, false) catch {
+          return self.error_(
+            node.token,
+            "expected key type '{s}', but found '{s}'",
+            .{self.getTypename(key_typ), self.getTypename(typ)}
+          );
+        };
+        typ = try self.infer(pair.value);
+        _ = self.checkAssign(val_typ, typ, typ.debug, false) catch {
+          return self.error_(
+            node.token,
+            "expected value type '{s}', but found '{s}'",
+            .{self.getTypename(val_typ), self.getTypename(typ)}
+          );
+        };
+      }
     }
     node.typ.?.tparams.params[0] = key_typ;
     node.typ.?.tparams.params[1] = val_typ;
@@ -189,7 +192,8 @@ pub const TypeChecker = struct {
       try self.checkUnary(node, @constCast(&UnitTypes.tyNumber));
     } else {
       std.debug.assert(node.op.optype == .OpNot);
-      try self.checkUnary(node, @constCast(&UnitTypes.tyBool));
+      // ! accepts any type and returns a boolean. 
+      // It applies an implicit bool cast to such a type.
     }
     return node.typ.?;
   }
@@ -470,13 +474,13 @@ pub const TypeChecker = struct {
     }
     const op = node.op.token.value;
     if (node.op.optype == .OpAnd or node.op.optype == .OpOr) {
-      // TODO: need to decide on and/or operand types
-      if (node.typ.?.typeid() != UnitTypes.tyBool.typeid() or source.typeid() != UnitTypes.tyBool.typeid()) {
-        return self.error_(
-          node.op.token,
-          "Expected type 'bool' {s} 'bool', but got '{s}' {s} '{s}'",
-          .{op, self.getTypename(node.typ.?), op, self.getTypename(source)}
-        );
+      // And/Or returns the type of their operands, or the union, if the types are different/disjoint
+      if (node.typ.?.typeid() != source.typeid()) {
+        var uni = self.ctx.newType(.TyUnion, node.typ.?.debug);
+        uni.union_ = TUnion.init(self.allocator);
+        util.append(*Type, &uni.union_.?.types, node.typ.?);
+        util.append(*Type, &uni.union_.?.types, source);
+        node.typ = uni;
       }
       return;
     }

@@ -120,6 +120,7 @@ pub const VM = struct {
           var val = self.globals.get(glb);
           self.assert(val != null);
           self.stack[rx] = val.?;
+          continue;
         },
         .Sglb => {
           // sglb rx, bx -> G[K(bx)] = r(x)
@@ -128,6 +129,7 @@ pub const VM = struct {
           self.read2Args(inst, &rx, &bx);
           var glb = vl.asString(self.readConst(bx));
           _ = self.globals.put(glb, self.stack[rx], self);
+          continue;
         },
         .Ggsym => {
           // ggsym rx, bx -> r(x) = GS[K(bx)]
@@ -135,6 +137,7 @@ pub const VM = struct {
           var bx: u32 = undefined;
           self.read2Args(inst, &rx, &bx);
           self.stack[rx] = self.gsyms[bx];
+          continue;
         },
         .Sgsym => {
           // sgsym rx, bx -> GS[bx] = r(x)
@@ -142,6 +145,7 @@ pub const VM = struct {
           var bx: u32 = undefined;
           self.read2Args(inst, &rx, &bx);
           self.gsyms[bx] = self.stack[rx];
+          continue;
         },
         .Mov => {
           // mov rx, ry
@@ -150,6 +154,7 @@ pub const VM = struct {
           var dum: u32 = undefined;
           self.read3Args(inst, &rx, &ry, &dum);
           self.stack[rx] = self.stack[ry];
+          continue;
         },
         .Add => {
           // add rx, rk(x), rk(x)
@@ -317,22 +322,22 @@ pub const VM = struct {
           continue;
         },
         .Jt => {
-          // jt rx, rk(x): rk(x) == bx
+          // jt rx, bx
           var rx: u32 = undefined;
-          var rk: u32 = undefined;
-          self.read2Args(inst, &rx, &rk);
+          var bx: u32 = undefined;
+          self.read2Args(inst, &rx, &bx);
           if (!vl.valueFalsy(self.stack[rx])) {
-            self.ip += rk;
+            self.ip += bx;
           }
           continue;
         },
         .Jf => {
-          // jf rx, rk(x): rk(x) == bx
+          // jf rx, bx
           var rx: u32 = undefined;
-          var rk: u32 = undefined;
-          self.read2Args(inst, &rx, &rk);
+          var bx: u32 = undefined;
+          self.read2Args(inst, &rx, &bx);
           if (vl.valueFalsy(self.stack[rx])) {
-            self.ip += rk;
+            self.ip += bx;
           }
           continue;
         },
@@ -358,6 +363,7 @@ pub const VM = struct {
           var count: u32 = undefined;
           self.read2Args(inst, &rx, &count);
           self.stack[rx] = vl.objVal(vl.createList(self, @as(usize, count)));
+          continue;
         },
         .Slst => {
           // slst rx, rk(idx), rk(val)
@@ -371,6 +377,7 @@ pub const VM = struct {
             return self.runtimeError("IndexError: list index out of range: {}", .{idx});
           }
           list.items[idx] = self.RK(rk2);
+          continue;
         },
         .Nmap => {
           // TODO: map specialization
@@ -379,6 +386,7 @@ pub const VM = struct {
           var count: u32 = undefined;
           self.read2Args(inst, &rx, &count);
           self.stack[rx] = vl.objVal(vl.createMap(self, @as(usize, count)));
+          continue;
         },
         .Smap => {
           // nmap rx, rk(key), rk(val)
@@ -388,6 +396,15 @@ pub const VM = struct {
           self.read3Args(inst, &rx, &rk1, &rk2);
           var map = vl.asMap(self.stack[rx]);
           _ = map.meta.put(self.RK(rk1), self.RK(rk2), self);
+          continue;
+        },
+        .Bcst => {
+          // bcst rx, rk(x): rk(x) == bx
+          var rx: u32 = undefined;
+          var rk: u32 = undefined;
+          self.read2Args(inst, &rx, &rk);
+          self.stack[rx] = vl.boolVal(!vl.valueFalsy(self.RK(rk)));
+          continue;
         },
         .Ret => {
           break;

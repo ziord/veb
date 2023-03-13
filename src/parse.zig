@@ -95,6 +95,7 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkNum
     .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkMap
     .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkStr
+    .{.bp = .None, .prefix = Self.nullable, .infix = null},       // TkNil
     .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkBool
     .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkList
     .{.bp = .None, .prefix = null, .infix = null},                // TkType
@@ -241,19 +242,19 @@ pub const Parser = struct {
   fn unary(self: *Self, assignable: bool) *Node {
     _ = assignable;
     const bp = ptable[@enumToInt(self.current_tok.ty)].bp;
-    const op = self.current_tok.ty.optype();
+    const op = self.current_tok;
     const line_tok = self.current_tok;
     self.advance();
     const expr = self._parse(bp);
     const node = self.newNode();
     // rewrite -expr to 0 - expr
-    if (op == .OpSub) {
+    if (op.ty.optype() == .OpSub) {
       const num = self.newNode();
       var lit = ast.LiteralNode.init(line_tok);
       lit.value = 0;
       num.* = .{.AstNumber = lit};
-      node.* = .{.AstBinary = ast.BinaryNode.init(num, expr, op, line_tok.line)};
-    } else if (op == .OpAdd) {
+      node.* = .{.AstBinary = ast.BinaryNode.init(num, expr, op)};
+    } else if (op.ty.optype() == .OpAdd) {
       // rewrite +expr to expr
       return expr;
     }
@@ -264,22 +265,21 @@ pub const Parser = struct {
   fn binary(self: *Self, lhs: *Node, assignable: bool) *Node {
     _ = assignable;
     const bp = ptable[@enumToInt(self.current_tok.ty)].bp;
-    const op = self.current_tok.ty.optype();
-    const line = self.current_tok.line;
+    const op = self.current_tok;
     self.advance();
     const rhs = self._parse(bp);
     const node = self.newNode();
-    node.* = .{.AstBinary = ast.BinaryNode.init(lhs, rhs, op, line)};
+    node.* = .{.AstBinary = ast.BinaryNode.init(lhs, rhs, op)};
     return node;
   }
 
   fn casting(self: *Self, lhs: *Node, assignable: bool) *Node {
     _ = assignable;
     self.consume(.TkAs);
-    const line = self.previous_tok.line;
+    const token = self.previous_tok;
     const rhs = self.typing(false);
     const node = self.newNode();
-    node.* = .{.AstCast = ast.CastNode.init(lhs, &rhs.AstNType, line)};
+    node.* = .{.AstCast = ast.CastNode.init(lhs, &rhs.AstNType, token)};
     return node;
   }
 
@@ -296,7 +296,7 @@ pub const Parser = struct {
   fn listing(self: *Self, assignable: bool) *Node {
     _ = assignable;
     var node = self.newNode();
-    node.* = .{.AstList = ast.ListNode.init(self.allocator, self.current_tok.line)};
+    node.* = .{.AstList = ast.ListNode.init(self.allocator, self.current_tok)};
     self.incNl();
     self.consume(.TkLSqrBracket);
     var list = &node.*.AstList.elems;
@@ -318,7 +318,7 @@ pub const Parser = struct {
   fn mapping(self: *Self, assignable: bool) *Node {
     _ = assignable;
     var node = self.newNode();
-    node.* = .{.AstMap = ast.MapNode.init(self.allocator, self.current_tok.line)};
+    node.* = .{.AstMap = ast.MapNode.init(self.allocator, self.current_tok)};
     self.incNl();
     self.consume(.TkLCurly);
     var pairs = &node.*.AstMap.pairs;
@@ -347,20 +347,20 @@ pub const Parser = struct {
     if (self.current_tok.ty.isAssignLikeOp() and self.lexer.currentChar() == '=') {
       // +=, -=, ...=
       // e.g. var += expr => var = var + expr;
-      var tok = self.current_tok;
-      var op = self.current_tok.ty.optype();
+      var op_sign = self.current_tok;
       self.advance(); // skip assignlike op
+      var op_eq = self.current_tok;
       self.advance(); // skip '=' op
       var value = self.parseExpr();
       var right = self.newNode();
-      right.* = .{.AstBinary = ast.BinaryNode.init(left, value, op, tok.line)};
+      right.* = .{.AstBinary = ast.BinaryNode.init(left, value, op_sign)};
       node = self.newNode();
-      node.* = .{.AstAssign = ast.BinaryNode.init(left, right, .OpAssign, tok.line)};
+      node.* = .{.AstAssign = ast.BinaryNode.init(left, right, op_eq)};
     } else if (self.match(.TkEqual)) {
       var token = self.previous_tok;
       var value = self.parseExpr();
       node = self.newNode();
-      node.* = .{.AstAssign = ast.BinaryNode.init(left, value, .OpAssign, token.line)};
+      node.* = .{.AstAssign = ast.BinaryNode.init(left, value, token)};
     }
     return node;
   }
@@ -371,6 +371,13 @@ pub const Parser = struct {
     var node = self.newNode();
     node.* = .{.AstVar = ast.VarNode.init(ident)};
     return self.handleAugAssign(node, assignable);
+  }
+
+  fn nullable(self: *Self, assignable: bool) *Node {
+    _ = assignable;
+    var node = self.newNode();
+    node.* = .{.AstNil = self.literal(.TkNil)};
+    return node;
   }
 
   inline fn assertMaxTParams(self: *Self, typ: *NType) void {
@@ -648,6 +655,12 @@ pub const Parser = struct {
     return node;
   }
 
+  fn emptyStmt(self: *Self) *Node {
+    var node = self.newNode();
+    node.* = .{.AstEmpty = ast.EmptyNode.init(self.previous_tok)};
+    return node;
+  }
+
   fn statement(self: *Self) *Node {
     if (self.check(.TkLet)) {
       return self.varDecl();
@@ -655,6 +668,8 @@ pub const Parser = struct {
       return self.typeAlias();
     } else if (self.check(.TkDo)) {
       return self.blockStmt();
+    } else if (self.match(.TkNewline)) {
+      return self.emptyStmt();
     }
     return self.exprStmt();
   }
@@ -664,7 +679,10 @@ pub const Parser = struct {
     var program = self.newNode();
     program.* = .{.AstProgram = ast.ProgramNode.init(self.allocator, self.current_tok.line)};
     while (!self.match(.TkEof)) {
-      util.append(*Node, &program.AstProgram.decls, self.statement());
+      var node = self.statement();
+      if (!node.isEmptyNode()) {
+        util.append(*Node, &program.AstProgram.decls, node);
+      }
     }
     return program;
   }

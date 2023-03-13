@@ -19,6 +19,7 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"num", .TkNum},
   .{"map", .TkMap},
   .{"str", .TkStr},
+  .{"nil", .TkNil},
   .{"bool", .TkBool},
   .{"list", .TkList},
   .{"type", .TkType},
@@ -67,6 +68,7 @@ pub const TokenType = enum (u8) {
   TkNum,            // num
   TkMap,            // map
   TkStr,            // str
+  TkNil,            // nil
   TkBool,           // bool
   TkList,           // list
   TkType,           // type
@@ -170,6 +172,7 @@ pub const TokenType = enum (u8) {
       .TkNum => "num",
       .TkMap => "map",
       .TkStr => "str",
+      .TkNil => "nil",
       .TkBool => "bool",
       .TkList => "list",
       .TkType => "type",
@@ -246,6 +249,15 @@ pub const OpType = enum (u8) {
   }
 };
 
+pub const Optr = struct {
+  optype: OpType,
+  token: Token,
+
+  pub fn init(token: Token) @This() {
+    return @This() {.optype = token.ty.optype(), .token = token};
+  }
+};
+
 pub const Token = struct {
   ty: TokenType,
   value: []const u8,
@@ -306,12 +318,25 @@ pub const Token = struct {
     }
   }
 
+  pub fn getDefault() Token {
+    return Token {
+      .ty = TokenType.TkEof,
+      .value = "",
+      .msg = null,
+      .line = 0,
+      .column = 0,
+      .offset = 0,
+      .src = "",
+      .is_alloc = false,
+    };
+  }
+
   pub fn showError(self: @This(), filename: []const u8, comptime fmt: []const u8, args: anytype) void {
     var line = self.getLine();
     std.debug.print(fmt ++ "\n", args);
     std.debug.print("{s}.{}:{}:\n\t{s}\n", .{filename, self.line, self.column, line});
     std.debug.print("\t", .{});
-    var i = (self.column - self.value.len);
+    var i = if (self.column >= self.value.len) self.column - self.value.len else self.value.len - self.column;
     while (i > 0) {
       std.debug.print(" ", .{});
       i -= 1;

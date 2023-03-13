@@ -4,6 +4,7 @@ const util = @import("util.zig");
 const Token = @import("lex.zig").Token;
 
 pub const MAX_TPARAMS = 0xA;
+const ID_HASH = 0x12;
 
 pub const NTypeKind = enum (u8) {
   /// boolean type: 
@@ -15,6 +16,9 @@ pub const NTypeKind = enum (u8) {
   /// string type: 
   ///  str
   TyString,
+  /// nil type
+  ///  nil
+  TyNil,
   /// list type: 
   ///  list{T}
   TyList,
@@ -64,8 +68,14 @@ pub const TUnion = struct {
 pub const TParam = struct {
   params: [MAX_TPARAMS]*NType = undefined,
   len: usize = 0,
+
+  pub fn getSlice(self: *@This()) []*NType {
+    return self.params[0..self.len];
+  }
 };
 
+pub const MAX_RECURSIVE_DEPTH = 0x3e8;
+const MAX_STEPS = MAX_RECURSIVE_DEPTH / 2;
 
 /// Nova's type representation
 pub const NType = struct {
@@ -90,7 +100,8 @@ pub const NType = struct {
   nsubtype: ?*NType = null,
   /// (generic) type parameters
   tparams: TParam = .{},
-  var_name: ?[]const u8 = null,
+  /// unique id of this type
+  id: u32 = 0,
   // TODO: func, class, etc.
 
   const Self = @This();
@@ -110,7 +121,7 @@ pub const NType = struct {
   /// non-generic type that requires no substitution
   pub inline fn isSimple(self: *Self) bool {
     return switch (self.kind) {
-      .TyNumber, .TyBool, .TyString => true,
+      .TyNumber, .TyBool, .TyString, .TyNil => true,
       else => false,
     };
   }
@@ -159,6 +170,114 @@ pub const NType = struct {
 
   pub inline fn hasNameType(self: *Self, maxSteps: usize) !bool {
     return try self.checkNameType(0, maxSteps);
+  }
+
+  pub fn typeid(self: *Self) u32 {
+    if (self.id != 0) return self.id;
+    switch (self.kind) {
+      .TyBool =>    self.id = 1 << ID_HASH,
+      .TyNumber =>  self.id = 2 << ID_HASH,
+      .TyString =>  self.id = 3 << ID_HASH,
+      .TyNil =>     self.id = 4 << ID_HASH,
+      .TyList, .TyMap => |kind| {
+        self.id = (if (kind == .TyList) @as(u32, 5) else @as(u32, 6)) << ID_HASH;
+        for (0..self.tparams.len) |i| {
+          self.id += self.tparams.params[i].typeid();
+        }
+      },
+      .TyUnion => {
+        self.id = 7 << ID_HASH;
+        for (self.union_.?.types.items) |ty| {
+          self.id += ty.typeid();
+        }
+      },
+      .TyNullable => {
+        self.id = 8 << ID_HASH;
+        self.id += self.nsubtype.?.typeid();
+      },
+      else => |kind| {
+        std.debug.print("Bad type kind: {}\n", .{kind});
+        self.id = 1;
+      },
+    }
+    return self.id;
+  }
+
+  /// check if typ is contained in self. This is false if self is not a union.
+  pub fn containsType(self: *Self, typ: *Self) bool {
+    if (self.kind == .TyUnion) {
+      if (typ.kind != .TyUnion) {
+        for (self.union_.?.types.items) |ty| {
+          if (ty.typeid() == typ.typeid()) {
+            return true;
+          }
+        }
+      } else {
+        for (typ.union_.?.types.items) |ty| {
+          if (!self.containsType(ty)) {
+            return false;
+          }
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  fn _typename(self: *Self, allocator: std.mem.Allocator, depth: *usize) ![]const u8 {
+    depth.* = depth.* + 1;
+    if (depth.* > MAX_STEPS) return "...";
+    return switch (self.kind) {
+      .TyBool => "bool",
+      .TyNumber => "num",
+      .TyString => "str",
+      .TyNil => "nil",
+      .TyMap, .TyList => |kind| blk: {
+        const name = if (kind == .TyMap) "map" else "list";
+        if (self.tparams.len == 0) {
+          break :blk name;
+        } else {
+          var list = std.ArrayList(u8).init(allocator);
+          var writer = list.writer();
+          _ = try writer.write(name);
+          _ = try writer.write("{");
+          for (self.tparams.getSlice(), 0..) |param, i| {
+            _ = try writer.write(try param._typename(allocator, depth));
+            if (i != self.tparams.len - 1) {
+              _ = try writer.write(", ");
+            }
+          }
+          _ = try writer.write("}");
+          return list.items;
+        }
+      },
+      .TyNullable => {
+        var sub = try self.nsubtype.?._typename(allocator, depth);
+        if (std.mem.containsAtLeast(u8, sub, 1, "|")) {
+          return std.fmt.allocPrint(allocator, "({s})?", .{sub}) catch "";
+        } else {
+          return std.fmt.allocPrint(allocator, "{s}?", .{sub}) catch "";
+        }
+      },
+      .TyUnion => {
+        var list = std.ArrayList(u8).init(allocator);
+        var writer = list.writer();
+        var len: usize = self.union_.?.types.items.len;
+        for (self.union_.?.types.items, 0..) |typ, i| {
+          _ = try writer.write(try typ._typename(allocator, depth));
+          if (i != len - 1) {
+            _ = try writer.write(" | ");
+          }
+        }
+        return list.items;
+      },
+      else => error.BadTypeKind,
+    };
+  }
+
+  pub fn typename(self: *Self, allocator: std.mem.Allocator) []const u8 {
+    var depth: usize = 0;
+    return self._typename(allocator, &depth) catch "";
   }
 
   pub fn newNullable(newnode: *Self, nsubtype: *Self) *NType {

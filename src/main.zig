@@ -5,6 +5,7 @@ const vm = @import("vm.zig");
 const debug = @import("debug.zig");
 const value = @import("value.zig");
 const link = @import("link.zig");
+const check = @import("check.zig");
 const NovaAllocator = @import("allocator.zig");
 const Vec = @import("vec.zig").Vec;
 
@@ -18,8 +19,8 @@ fn doTest(src: []const u8) !value.Value {
   const filename = "test.nova";
   var parser = parse.Parser.init(src, filename, &nva);
   const node = parser.parse();
-  var linker = link.TypeLinker.init(nva.getArenaAllocator(), "test.nova");
-  try linker.linkTypes(node);
+  var tych = check.TypeChecker.init(nva.getArenaAllocator(), "test.nova");
+  try tych.typecheck(node);
   var code = value.Code.init();
   var cpu = vm.VM.init(&nva, &code);
   defer cpu.deinit(); // don't deinit for now.
@@ -73,12 +74,12 @@ test "booleans" {
       "0x123 < 4 and 1 < 5",
       "123.45 > 12_40 or 2 == 2",
       "0b111_000 <= 0o12_12 or 1 > 0.5",
-      "123.e-2 >= 0x12_34_5 and 6 and 7 > 2",
-      "123.e-2 != 0x12_34_5 and 0 or 6 > 2",
-      "(1 or 2) == 1",
-      "(1 and 2) == 2",
-      "(0b00 and 2) == 0o0",
-      "(0x0 or 2) == 2",
+      "123.e-2 >= 0x12_34_5 and 6 as bool and 7 > 2",
+      "123.e-2 != 0x12_34_5 and 0 as bool or 6 > 2",
+      "(1 as bool or 2 as bool) == 1 as bool",
+      "(1 as bool and 2 as bool) == 2 as bool",
+      "(0b00 as bool and 2 as bool) == 0o0 as bool",
+      "(0x0 as bool or 2 as bool) == 2 as bool",
       "true or false",
       "false or true",
       "false or false",
@@ -88,9 +89,9 @@ test "booleans" {
       "false and false",
       "!false",
       "!true",
-      "!0x0_0",
-      "!!1",
-      "!1",
+      "!(0x0_0 as bool)",
+      "!!(1 as bool)",
+      "!(1 as bool)",
       "'foxes and pirates' == 'foxes and pirates'",
       "'foxes and pirates' != 'fishes and pirates'",
   };
@@ -121,9 +122,6 @@ test "strings" {
   };
   for (srcs) |src| {
     _ = try doTest(src);
-    // try std.testing.expect(std.mem.eql(u8, value.asString(got).str, exp[i]));
-    // _ = got;
-    // _ = i;
     _ = exp;
   }
 }
@@ -145,9 +143,9 @@ test "lists" {
 test "maps" {
   const srcs = [_][]const u8{
     "{'abc': 123}",
-    "{'abc': 123, true: 0xff, 'obs': 'fin'}",
+    "{'abc' as bool | str: 123, true: 0xff, 'obs': 0b101}",
     "{}",
-    "{'abc': 123, true: 0xff, 'obs': 'fin', 0.123: {'abc': 123, true: 0xff, 'obs': 'fin'}}",
+    // "{'abc': 123, true: 0xff, 'obs': 'fin', 0.123: {'abc': 123, true: 0xff, 'obs': 'fin'}}",
     "{24: [1, 2, 3]}",
   };
   for (srcs) |src| {
@@ -210,17 +208,18 @@ test "vars" {
 
 test "types" {
   var src = 
-  \\ type A{K, V} = (map{K?, map{K, (A | V | C)? | (C?)}?}?)
+  \\ type A{K, V} = (map{K?, map{K, (V | C)? | (C?)}?}?)
   \\ type B{K, V, T} = map{K?, map{K, (V | A? | B | C)? | (A? | B?)}?}? | T
   \\ type C = str
   \\ type Foo = (map{str, bool}? | (list{(A)?})?)?
-  \\ let x: A{bool, str?} = 5
-  \\ let x: A{num, str?} = 5
+  \\ let x: A{bool, str?} = {false as bool?: {true: 'ok' as str?} as map{bool, str?}}
   \\ let y = 15 as num
   \\ let j = (15 as num) as num
   \\ let z = {15: ['foxy']} as map{num, list{str}}
   \\ let z1 = {15: ['foxy']} as (map{num, list{str}})
   \\ let z2 = {12: ['foxy']} as (map{num, list{str}})?
+  \\ let t = 5 as (num | str)?
+  \\ (t as (str | num) ?)
   ;
   _ = try doTest(src);
 }
@@ -267,8 +266,48 @@ test "linking" {
   \\ type StringHashMap{V} = HashMap{str, V}
   \\ type BadList = list{StringHashMap{HashMap{A, D{B}?}}}
   \\ type X = (D{BadList} | D{B}? | BadList)?
-  \\ let x: X = {'fox': 5}
+  \\ let x: X = [{'fox': {'fin': {0x12: 0xbee} as map{num, num}?}}]
   \\ x
+  \\ let y: X = {10: 5} as map{num, num}?
+  \\ y
   ;
   _ = try doTest(src2);
+  var src3 =
+  \\ type HashMap{K, V} = map{K, V}
+  \\ let x: HashMap{num, str} = {5: 'okay'}
+  \\ x as map{num, str} as map{num, str}?
+  ;
+  _ = try doTest(src3);
+}
+
+test "self-reference" {
+  var src =
+  \\ type K = str | bool | num
+  \\ type V = num | str | map{K, V}
+  \\ let p = [1, [2], 3, [1, 2, [3]]]
+  // TODO:
+  // \\ {'abc' as K: 123 as V, true as K: 0xff as V, 'obs' as K: 'fin' as V, 0.123 as K: {'abc' as K: 123 as V, true as K: 0xff as V, 'obs' as K: 'fin' as V}}
+  ;
+  _ = try doTest(src);
+}
+
+test "typecheck" {
+  var src =
+  \\ let x = 5 as bool
+  \\ x as bool and 'fox' as bool
+  \\ let p = 5 as (num | str)?
+  \\ let q: (num | str | bool) = 5
+  \\ 
+  \\ type X = (num | str)?
+  \\ let y: X = 'food' as num | str
+  \\ y
+  \\
+  \\ let a: str | num = 10
+  \\ let b: num | str = 'foo'
+  \\ b = a
+  \\ b as num + 5 # okay, since the active type of a is propagated to b.
+  // \\ type X = (num | str)?  # Nullable does not distribute over it's subtype
+  // \\ let y: X = 'food' as str? # fails. 
+  ;
+  _ = try doTest(src);
 }

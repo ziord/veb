@@ -23,6 +23,8 @@ pub const AstType = enum {
   AstNType,
   AstAlias,
   AstCast,
+  AstNil,
+  AstEmpty,
   AstProgram,
 };
 
@@ -31,6 +33,7 @@ pub const LiteralNode = struct {
   token: Token,
   value: f64,
   line: usize,
+  typ: ?*NType = null,
 
   pub fn init(token: Token) @This() {
     return @This() {
@@ -44,46 +47,64 @@ pub const LiteralNode = struct {
 pub const BinaryNode = struct {
   left: *AstNode,
   right: *AstNode,
-  op: OpType,
+  op: lex.Optr,
   line: usize,
+  typ: ?*NType = null,
 
-  pub fn init(left: *AstNode, right: *AstNode, op: OpType, line: usize) @This() {
+  pub fn init(left: *AstNode, right: *AstNode, op: Token) @This() {
     return @This() {
       .left = left,
       .right = right,
-      .op = op,
-      .line = line,
+      .op = lex.Optr.init(op),
+      .line = op.line,
     };
   }
 };
 
 pub const UnaryNode = struct {
   expr: *AstNode,
-  op: OpType,
+  op: lex.Optr,
   line: usize,
+  typ: ?*NType = null,
 
-  pub fn init(expr: *AstNode, op: OpType, line: usize) @This() {
-    return @This() {.expr = expr, .op = op, .line = line,};
+  pub fn init(expr: *AstNode, op: Token, line: usize) @This() {
+    return @This() {
+      .expr = expr,
+      .op = lex.Optr.init(op),
+      .line = line,
+    };
   }
 };
 
 pub const ListNode = struct {
   elems: AstNodeList,
   line: usize,
+  token: Token,
+  typ: ?*NType = null,
 
-  pub fn init(allocator: std.mem.Allocator, line: usize) @This() {
-    return @This() {.elems = AstNodeList.init(allocator), .line = line,};
+  pub fn init(allocator: std.mem.Allocator, token: Token) @This() {
+    return @This() {
+      .elems = AstNodeList.init(allocator),
+      .line = token.line,
+      .token = token
+    };
   }
 };
 
 pub const MapNode = struct {
   pairs: std.ArrayList(Pair),
   line: usize,
+  token: Token,
+  typ: ?*NType = null,
 
   pub const Pair = struct {key: *AstNode, value: *AstNode};
 
-  pub fn init(allocator: std.mem.Allocator, line: usize) @This() {
-    return @This() {.pairs = std.ArrayList(Pair).init(allocator), .line = line};
+  pub fn init(allocator: std.mem.Allocator, token: Token) @This() {
+    return @This() {
+      .pairs = std.ArrayList(Pair).init(allocator),
+      .line = token.line,
+      .token = token
+    };
   }
 };
 
@@ -156,13 +177,27 @@ pub const AliasNode = struct {
   }
 };
 
+pub const EmptyNode = struct {
+  token: Token,
+
+  pub fn init(token: Token) @This() {
+    return @This() {.token = token};
+  }
+};
+
 pub const CastNode = struct {
   expr: *AstNode,
   typn: *TypeNode,
+  token: Token,
   line: usize,
 
-  pub fn init(expr: *AstNode, typn: *TypeNode, line: usize) @This() {
-    return @This() {.expr = expr, .typn = typn, .line = line};
+  pub fn init(expr: *AstNode, typn: *TypeNode, token: Token) @This() {
+    return @This() {
+      .expr = expr,
+      .typn = typn,
+      .line = token.line,
+      .token = token
+    };
   }
 };
 
@@ -180,6 +215,7 @@ pub const AstNode = union(AstType) {
   AstNumber: LiteralNode,
   AstString: LiteralNode,
   AstBool: LiteralNode,
+  AstNil: LiteralNode,
   AstBinary: BinaryNode,
   AstUnary: UnaryNode,
   AstList: ListNode,
@@ -192,11 +228,12 @@ pub const AstNode = union(AstType) {
   AstNType: TypeNode,
   AstAlias: AliasNode,
   AstCast: CastNode,
+  AstEmpty: EmptyNode,
   AstProgram: ProgramNode,
 
   pub fn line(self: *@This()) usize {
     return switch (self.*) {
-      .AstNumber, .AstString, .AstBool => |lit| lit.line,
+      .AstNumber, .AstString, .AstBool, .AstNil => |lit| lit.line,
       .AstBinary => |bin| bin.line,
       .AstUnary => |una| una.line,
       .AstList => |lst| lst.line,
@@ -209,6 +246,7 @@ pub const AstNode = union(AstType) {
       .AstNType => |typ| typ.token.line,
       .AstAlias => |ali| ali.token.line,
       .AstCast => |cst| cst.line,
+      .AstEmpty => |emp| emp.token.line,
       .AstProgram => |prog| prog.line,
     };
   }
@@ -220,11 +258,35 @@ pub const AstNode = union(AstType) {
     };
   }
 
-  pub fn isConst(self: *@This()) bool {
-    // for now, only numbers and booleans are recognized as consts
+  pub fn isEmptyNode(self: *@This()) bool {
     return switch (self.*) {
-      .AstNumber, .AstBool, => true,
+      .AstEmpty => true,
       else => false,
+    };
+  }
+
+  pub fn isNumOrBoolNode(self: *@This()) bool {
+    return switch (self.*) {
+      .AstNumber, .AstBool => true,
+      else => false,
+    };
+  }
+
+  pub fn getType(self: *@This()) ?*NType {
+    return switch (self.*) {
+      .AstNumber, .AstString, .AstBool, .AstNil => |lit| lit.typ,
+      .AstBinary => |bin| bin.typ,
+      .AstUnary => |una| una.typ,
+      .AstList => |lst| lst.typ,
+      .AstMap => |map| map.typ,
+      .AstExprStmt => |stmt| stmt.expr.getType(),
+      .AstVarDecl => |decl| decl.ident.typ,
+      .AstVar => |id| id.typ,
+      .AstAssign => |asi| asi.typ,
+      .AstNType => |typn| @constCast(&typn.typ),
+      .AstAlias => |ali| ali.typ,
+      .AstCast => |cst| @constCast(&cst.typn.typ),
+      else => unreachable,
     };
   }
 };

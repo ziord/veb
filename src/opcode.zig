@@ -50,6 +50,10 @@ pub const OpCode = enum (u8) {
   // [6] [8]  [18]
   Inv,
 
+  // bcst rx, rk(x)
+  // [6] [8]  [18]
+  Bcst,
+
   // jt rx, bx
   // [6] [8]  [18]
   Jt,

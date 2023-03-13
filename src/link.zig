@@ -2,11 +2,12 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const types = @import("types.zig");
 const util = @import("util.zig");
-const Token = @import("lex.zig").Token;
+pub const Token = @import("lex.zig").Token;
 
-const Type = types.NType;
-const TypeKind = types.NTypeKind;
-const Node = ast.AstNode;
+pub const Type = types.NType;
+pub const TUnion = types.TUnion;
+pub const TypeKind = types.NTypeKind;
+pub const Node = ast.AstNode;
 
 fn CreateMap(comptime K: type, comptime V: type) type {
   return struct {
@@ -30,7 +31,7 @@ fn CreateMap(comptime K: type, comptime V: type) type {
   };
 }
 
-const Scope = struct {
+pub const Scope = struct {
   decls: std.ArrayList(TypeMap),
   allocator: std.mem.Allocator,
 
@@ -81,34 +82,58 @@ const Scope = struct {
   }
 };
 
-pub const TypeLinker = struct {
+pub const TContext = struct {
   allocator: std.mem.Allocator,
+  /// type scope
+  typScope: Scope,
+  /// scope for other declarations, e.g. variables, functions, etc.
+  varScope: Scope,
+  filename: []const u8,
+
+  const Self = @This();
+
+  pub fn init(allocator: std.mem.Allocator, filename: []const u8) Self {
+    return Self {
+      .allocator = allocator, 
+      .typScope = Scope.init(allocator), 
+      .varScope = Scope.init(allocator),
+      .filename = filename,
+    };
+  }
+
+  pub inline fn newType(self: *Self, kind: TypeKind, debug: Token) *Type {
+    return util.box(Type, Type.init(kind, null, debug), self.allocator);
+  }
+
+  pub inline fn enterScope(self: *Self) void {
+    self.typScope.pushScope();
+    self.varScope.pushScope();
+  }
+
+  pub inline fn leaveScope(self: *Self) void {
+    self.typScope.popScope();
+    self.varScope.popScope();
+  }
+
+  pub fn copyType(self: *Self, typ: *Type) *Type {
+    var new = self.newType(typ.kind, typ.debug);
+    new.* = typ.*;
+    return new;
+  }
+
+};
+
+pub const TypeLinker = struct {
   ctx: TContext,
+  sub_steps: usize = 0,
 
+  pub const MAX_SUB_STEPS = types.MAX_RECURSIVE_DEPTH;
   const TypeLinkError = error{TypeLinkError};
-
-  const TContext = struct {
-    /// type scope
-    scope: Scope,
-    /// scope for other declarations, e.g. variables, functions, etc.
-    varScope: Scope,
-    sub_steps: usize = 0,
-    filename: []const u8,
-
-    const MAX_SUB_STEPS = 0x3e8;
-  };
 
   const Self = @This();
 
   pub fn init(allocator: std.mem.Allocator, filename: []const u8) @This() {
-    return @This() {
-      .allocator = allocator, 
-      .ctx = TContext{
-        .scope = Scope.init(allocator), 
-        .varScope = Scope.init(allocator),
-        .filename = filename,
-      }
-    };
+    return Self { .ctx = TContext.init(allocator, filename) };
   }
 
   fn error_(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) TypeLinkError {
@@ -116,27 +141,7 @@ pub const TypeLinker = struct {
     return error.TypeLinkError;
   }
 
-  inline fn newType(self: *Self, kind: TypeKind, debug: Token) *Type {
-    return util.box(Type, Type.init(kind, null, debug), self.allocator);
-  }
-
-  inline fn enterScope(self: *Self) void {
-    self.ctx.scope.pushScope();
-    self.ctx.varScope.pushScope();
-  }
-
-  inline fn leaveScope(self: *Self) void {
-    self.ctx.scope.popScope();
-    self.ctx.varScope.popScope();
-  }
-
-  fn copyType(self: *Self, typ: *Type) *Type {
-    var new = self.newType(typ.kind, typ.debug);
-    new.* = typ.*;
-    return new;
-  }
-
-  fn findName(self: *Self, typ: *Type) ?*Type {
+  pub fn findType(self: *Self, typ: *Type) ?*Type {
     // TODO: augment to return failing name token
     var tokens = typ.name.?.tokens.items;
     var found = if (tokens.len > 1) {
@@ -144,16 +149,16 @@ pub const TypeLinker = struct {
       util.todo("multiple names impl with context type");
     } else blk: {
       var name = tokens[0];
-      break :blk self.ctx.scope.lookup(name.value);
+      break :blk self.ctx.typScope.lookup(name.value);
     };
     if (found) |ty| {
-      return self.copyType(ty);
+      return self.ctx.copyType(ty);
     }
     return null;
   }
 
-  fn lookupName(self: *Self, typ: *Type) !*Type {
-    if (self.findName(typ)) |found| {
+  fn lookupType(self: *Self, typ: *Type) !*Type {
+    if (self.findType(typ)) |found| {
       return found;
     } else {
       return self.error_(typ.debug, "Could not resolve type with name: '{s}'", .{typ.getName()});
@@ -161,7 +166,7 @@ pub const TypeLinker = struct {
   }
 
   inline fn assertMaxSubStepsNotExceeded(self: *Self, typ: *Type) !void {
-    if (self.ctx.sub_steps >= TContext.MAX_SUB_STEPS) {
+    if (self.sub_steps >= MAX_SUB_STEPS) {
       return self.error_(
         typ.debug,
         "Potentially infinite substitutions arising from probable self-referencing types", 
@@ -174,6 +179,8 @@ pub const TypeLinker = struct {
     // check that this subtype to be assigned to a nullable type is not itself nullable
     if (subtype.kind == .TyNullable) {
       return self.error_(subtype.debug, "Nullable type cannot have a nullable subtype", .{});
+    } else if (subtype.kind == .TyNil) {
+      return self.error_(subtype.debug, "Nullable type cannot have a nil subtype", .{});
     }
   }
 
@@ -200,13 +207,11 @@ pub const TypeLinker = struct {
     // type A -> str
     // type B{K} -> list{K}
     // x: B{A} -> list{K} -> list{A} -> list{str}
-    self.ctx.sub_steps += 1;
+    self.sub_steps += 1;
     try self.assertMaxSubStepsNotExceeded(sub);
     if (sub.isGeneric()) {
-      for (0..sub.tparams.len) |i| {
-        var sub_param = sub.tparams.params[i];
-        for (0..eqn.tparams.len) |j| {
-          var eqn_param = eqn.tparams.params[j];
+      for (sub.tparams.getSlice()) |sub_param| {
+        for (eqn.tparams.getSlice(),  0..) |eqn_param, j| {
           // try to substitute if it's not a simple type
           if (eqn_param.isCompound()) {
             eqn.tparams.params[j] = try self.substitute(sub_param, eqn_param);
@@ -217,10 +222,9 @@ pub const TypeLinker = struct {
     // resolve names in eqn if any
     if (eqn.isGeneric()) {
       if (eqn.tparams.len > 0) {
-        for (0..eqn.tparams.len) |i| {
-          var param = eqn.tparams.params[i];
-          var hasNameTy = param.hasNameType(TContext.MAX_SUB_STEPS) catch blk: {
-            self.ctx.sub_steps = TContext.MAX_SUB_STEPS;
+        for (eqn.tparams.getSlice(),  0..) |param, i| {
+          var hasNameTy = param.hasNameType(MAX_SUB_STEPS) catch blk: {
+            self.sub_steps = MAX_SUB_STEPS;
             try self.assertMaxSubStepsNotExceeded(param);
             break :blk false; // unreachable
           };
@@ -239,7 +243,7 @@ pub const TypeLinker = struct {
     if (eqn.kind == .TyNullable) {
       var ty = try self.substitute(sub, eqn.nsubtype.?);
       try self.assertNonNullableSubtype(ty);
-      return Type.newNullable(self.newType(.TyNullable, ty.debug), ty);
+      return Type.newNullable(self.ctx.newType(.TyNullable, ty.debug), ty);
     }
     if (eqn.kind == .TyUnion) {
       for (eqn.union_.?.types.items, 0..) |uni, i| {
@@ -247,7 +251,7 @@ pub const TypeLinker = struct {
       }
     }
     if (eqn.kind == .TyName) {
-      if (self.findName(eqn)) |ty| {
+      if (self.findType(eqn)) |ty| {
         // solve ty using eqn as sub, i.e. substitue eqn into ty
         return try self.substitute(eqn, ty);
       } else {
@@ -264,15 +268,14 @@ pub const TypeLinker = struct {
       return typ;
     }
     if (typ.isGeneric()) {
-      for (0..typ.tparams.len) |i| {
-        var param = typ.tparams.params[i];
+      for (typ.tparams.getSlice(), 0..) |param, i| {
         typ.tparams.params[i] = try self.resolveType(param);
       }
     }
     if (typ.kind == .TyNullable) {
       var tmp = try self.resolveType(typ.nsubtype.?);
       try self.assertNonNullableSubtype(tmp);
-      return Type.newNullable(self.newType(.TyNullable, tmp.debug), tmp);
+      return Type.newNullable(self.ctx.newType(.TyNullable, tmp.debug), tmp);
     }
     if (typ.kind == .TyUnion) {
       for (typ.union_.?.types.items, 0..) |uni, i| {
@@ -280,19 +283,18 @@ pub const TypeLinker = struct {
       }
     }
     if (typ.kind == .TyName) {
-      var eqn = try self.lookupName(typ);
+      var eqn = try self.lookupType(typ);
       // only instantiate generic type variables when the calling type is instantiated
       if (eqn.alias != null and typ.isGeneric()) {
         var alias = eqn.alias.?;
         try self.assertGenericAliasSubMatches(alias, typ);
-        self.ctx.scope.pushScope();
-        for (0..alias.tparams.len) |i| {
-          var tvar = alias.tparams.params[i];
+        self.ctx.typScope.pushScope();
+        for (alias.tparams.getSlice(), 0..) |tvar, i| {
           var tsub = typ.tparams.params[i];
-          self.ctx.scope.insert(tvar.name.?.tokens.items[0].value, tsub);
+          self.ctx.typScope.insert(tvar.name.?.tokens.items[0].value, tsub);
         }
         var sol = try self.substitute(typ, eqn);
-        self.ctx.scope.popScope();
+        self.ctx.typScope.popScope();
         return sol;
       } else {
         return try self.substitute(typ, eqn);
@@ -302,9 +304,9 @@ pub const TypeLinker = struct {
   }
 
   fn resolve(self: *Self, typ: *Type) !*Type {
-    self.ctx.sub_steps = 0;
+    self.sub_steps = 0;
     const ty = try self.resolveType(typ);
-    const has = ty.hasNameType(TContext.MAX_SUB_STEPS) catch {
+    const has = ty.hasNameType(MAX_SUB_STEPS) catch {
       return self.error_(ty.debug, "Unable to resolve potentially self-referencing type.", .{});
     };
     if (has) return self.error_(ty.debug, "Could not resolve type, probable undefined", .{});
@@ -336,11 +338,19 @@ pub const TypeLinker = struct {
   }
 
   fn linkList(self: *Self, node: *ast.ListNode) !void {
-    _ = self;
-    _ = node;
+    for (node.elems.items) |elem| {
+      try self.link(elem);
+    }
   }
 
   fn linkMap(self: *Self, node: *ast.MapNode) !void {
+    for (node.pairs.items) |pair| {
+      try self.link(pair.key);
+      try self.link(pair.value);
+    }
+  }
+
+  fn linkNil(self: *Self, node: *ast.LiteralNode) !void {
     _ = self;
     _ = node;
   }
@@ -361,21 +371,20 @@ pub const TypeLinker = struct {
   }
   
   fn linkBlock(self: *Self, node: *ast.BlockNode) !void {
-    self.enterScope();
+    self.ctx.enterScope();
     for (node.nodes.items) |item| {
       try self.link(item);
     }
-    self.leaveScope();
+    self.ctx.leaveScope();
   }
 
   fn linkNType(self: *Self, node: *ast.TypeNode) !void {
-    _ = self;
-    _ = node;
+    node.typ = (try self.resolveType(&node.typ)).*;
   }
 
   fn linkCast(self: *Self, node: *ast.CastNode) !void {
-    _ = self;
-    _ = node;
+    try self.link(node.expr);
+    try self.linkNType(node.typn);
   }
 
   fn linkVarDecl(self: *Self, node: *ast.VarDeclNode) !void {
@@ -387,15 +396,15 @@ pub const TypeLinker = struct {
 
   fn linkAlias(self: *Self, node: *ast.AliasNode) !void {
     var name = node.alias.typ.name.?;
-    self.ctx.scope.insert(name.tokens.items[0].value, &node.aliasee.typ);
+    self.ctx.typScope.insert(name.tokens.items[0].value, &node.aliasee.typ);
   }
 
   fn linkProgram(self: *Self, node: *ast.ProgramNode) !void {
-    self.enterScope();
+    self.ctx.enterScope();
     for (node.decls.items) |item| {
       try self.link(item);
     }
-    self.leaveScope();
+    self.ctx.leaveScope();
   }
 
   fn link(self: *Self, node: *Node) TypeLinkError!void {
@@ -409,12 +418,14 @@ pub const TypeLinker = struct {
       .AstMap => |*nd| try self.linkMap(nd),
       .AstExprStmt => |*nd| try self.linkExprStmt(nd),
       .AstVar => |*nd| try self.linkVar(nd),
+      .AstNil => |*nd| try self.linkNil(nd),
       .AstVarDecl => |*nd| try self.linkVarDecl(nd),
       .AstAssign => |*nd| try self.linkAssign(nd),
       .AstBlock => |*nd| try self.linkBlock(nd),
       .AstNType => |*nd| try self.linkNType(nd),
       .AstAlias => |*nd| try self.linkAlias(nd),
       .AstCast => |*nd| try self.linkCast(nd),
+      .AstEmpty => unreachable,
       .AstProgram => |*nd| try self.linkProgram(nd),
     }
   }

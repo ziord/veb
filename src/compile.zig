@@ -345,9 +345,15 @@ pub const Compiler = struct {
     return dst;
   }
 
+  fn cNil(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
+    // load rx, memidx
+    self.cConst(dst, value.nilVal(), node.line);
+    return dst;
+  }
+
   fn cUnary(self: *Self, node: *ast.UnaryNode, reg: u32) u32 {
-    const inst_op = node.op.toInstOp();
-    const isConst = node.expr.isConst();
+    const inst_op = node.op.optype.toInstOp();
+    const isConst = node.expr.isNumOrBoolNode();
     const rx = reg;
     // check that we don't exceed the 18 bits of rk/bx (+ 1 for expr)
     if (isConst and self.withinBXLimit()) {
@@ -368,14 +374,14 @@ pub const Compiler = struct {
 
   inline fn cCmp(self: *Self, node: *ast.BinaryNode) void {
     // <, >, <=, >=, ==, !=
-    if (!node.op.isCmpOp()) return;
-    self.code.writeNoArgInst(@intToEnum(OpCode, @enumToInt(node.op)), node.line, self.vm);
+    if (!node.op.optype.isCmpOp()) return;
+    self.code.writeNoArgInst(@intToEnum(OpCode, @enumToInt(node.op.optype)), node.line, self.vm);
   }
 
   inline fn cLgc(self: *Self, node: *ast.BinaryNode, reg: u32) u32 {
     // and, or
     var rx = self.c(node.left, reg);
-    const end_jmp = self.code.write2ArgsJmp(node.op.toInstOp(), rx, self.lastLine(), self.vm);
+    const end_jmp = self.code.write2ArgsJmp(node.op.optype.toInstOp(), rx, self.lastLine(), self.vm);
     rx = self.c(node.right, reg);
     self.code.patch2ArgsJmp(end_jmp);
     return rx;
@@ -383,11 +389,11 @@ pub const Compiler = struct {
 
   fn cBinary(self: *Self, node: *ast.BinaryNode, dst: u32) u32 {
     // handle and | or
-    if (node.op.isLgcOp()) return self.cLgc(node, dst);
+    if (node.op.optype.isLgcOp()) return self.cLgc(node, dst);
     // handle other binary ops
     const lhsIsNum = node.left.isNum();
     const rhsIsNum = node.right.isNum();
-    const inst_op = node.op.toInstOp();
+    const inst_op = node.op.optype.toInstOp();
     // check that we don't exceed the 9 bits of rk (+ 2 for lhs and rhs)
     if (lhsIsNum and rhsIsNum) {
       if (self.withinRKLimit(2)) {
@@ -509,6 +515,32 @@ pub const Compiler = struct {
     };
   }
 
+  fn cCast(self: *Self, node: *ast.CastNode, dst: u32) u32 {
+    if (node.expr.getType().?.kind != .TyBool) {
+      if (node.typn.typ.kind == .TyBool) {
+        // TODO: optimize this.
+        var rk: u32 = undefined;
+        if (self.withinRKLimit(1)) {
+          rk = switch (node.expr.*) {
+            .AstNumber => self.code.storeConst(value.numberVal(node.expr.AstNumber.value), self.vm),
+            .AstBool => self.code.storeConst(value.boolVal(node.expr.AstBool.token.is(.TkTrue)), self.vm),
+            .AstNil => self.code.storeConst(value.nilVal(), self.vm),
+            .AstString => blk: {
+              var obj = value.objVal(value.createString(self.vm, &self.vm.strings, node.token.value, node.token.is_alloc));
+              break :blk self.code.storeConst(obj, self.vm);
+            },
+            else => self.c(node.expr, dst),
+          };
+        } else {
+          rk = self.c(node.expr, dst);
+        }
+        self.code.write2ArgsInst(.Bcst, dst, rk, node.line, self.vm);
+        return dst;
+      }
+    }
+    return self.c(node.expr, dst);
+  }
+
   fn cVarDecl(self: *Self, node: *ast.VarDeclNode, reg: u32) u32 {
     // let var = expr
     // local
@@ -533,7 +565,7 @@ pub const Compiler = struct {
       var rx = self.c(node.value, dst);
       // now, initialize this global after its rhs has been compiled successfully
       const inst: OpCode = blk: {
-        if(info.isGSym) {
+        if (info.isGSym) {
           self.gsyms[info.pos].initialized = true;
           break :blk .Sgsym;
         } else {
@@ -583,7 +615,9 @@ pub const Compiler = struct {
       .AstBlock => |*nd| self.cBlock(nd, reg),
       .AstNType => reg, // TODO
       .AstAlias => reg, // TODO
-      .AstCast => |*nd| self.c(nd.expr, reg), // TODO
+      .AstNil => |*nd| self.cNil(nd, reg),
+      .AstCast => |*nd| self.cCast(nd, reg),
+      .AstEmpty => unreachable,
       .AstProgram => |*nd| self.cProgram(nd, reg),
     };
   }

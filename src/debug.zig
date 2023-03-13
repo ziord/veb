@@ -70,6 +70,7 @@ pub const Disassembler = struct {
       .Sglb => _2ArgsInst("sglb", word),
       .Ggsym => _2ArgsInst("ggsym", word),
       .Sgsym => _2ArgsInst("sgsym", word),
+      .Bcst => _2ArgsInst("bcst", word),
       .Ret => plainInst("ret"),
       .Mov => {
         // mov is a 2-arg inst using a 3-arg format.

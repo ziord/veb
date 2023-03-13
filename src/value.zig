@@ -225,6 +225,10 @@ pub inline fn isBool(val: Value) bool {
   return (val | 1) == TRUE_VAL;
 }
 
+pub inline fn nilVal() Value {
+  return NIL_VAL;
+}
+
 pub inline fn isNil(val: Value) bool {
   return val == NIL_VAL;
 }

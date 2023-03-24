@@ -126,6 +126,7 @@ pub const TContext = struct {
 pub const TypeLinker = struct {
   ctx: TContext,
   sub_steps: usize = 0,
+  curr_typ: ?*Type = null,
 
   pub const MAX_SUB_STEPS = types.MAX_RECURSIVE_DEPTH;
   const TypeLinkError = error{TypeLinkError};
@@ -141,7 +142,7 @@ pub const TypeLinker = struct {
     return error.TypeLinkError;
   }
 
-  pub fn findType(self: *Self, typ: *Type) ?*Type {
+  pub fn findType(self: *Self, typ: *Type, copy: bool) ?*Type {
     // TODO: augment to return failing name token
     var tokens = typ.name.?.tokens.items;
     var found = if (tokens.len > 1) {
@@ -152,13 +153,13 @@ pub const TypeLinker = struct {
       break :blk self.ctx.typScope.lookup(name.value);
     };
     if (found) |ty| {
-      return self.ctx.copyType(ty);
+      return if (copy and !ty.isSimple()) self.ctx.copyType(ty) else ty;
     }
     return null;
   }
 
   fn lookupType(self: *Self, typ: *Type) !*Type {
-    if (self.findType(typ)) |found| {
+    if (self.findType(typ, true)) |found| {
       return found;
     } else {
       return self.error_(typ.debug, "Could not resolve type with name: '{s}'", .{typ.getName()});
@@ -251,7 +252,7 @@ pub const TypeLinker = struct {
       }
     }
     if (eqn.kind == .TyName) {
-      if (self.findType(eqn)) |ty| {
+      if (self.findType(eqn, true)) |ty| {
         // solve ty using eqn as sub, i.e. substitue eqn into ty
         return try self.substitute(eqn, ty);
       } else {
@@ -285,7 +286,7 @@ pub const TypeLinker = struct {
     if (typ.kind == .TyName) {
       var eqn = try self.lookupType(typ);
       // only instantiate generic type variables when the calling type is instantiated
-      if (eqn.alias != null and typ.isGeneric()) {
+      if (eqn.alias != null and eqn.alias.?.isGeneric()) {
         var alias = eqn.alias.?;
         try self.assertGenericAliasSubMatches(alias, typ);
         self.ctx.typScope.pushScope();
@@ -305,6 +306,7 @@ pub const TypeLinker = struct {
 
   fn resolve(self: *Self, typ: *Type) !*Type {
     self.sub_steps = 0;
+    self.curr_typ = typ;
     const ty = try self.resolveType(typ);
     const has = ty.hasNameType(MAX_SUB_STEPS) catch {
       return self.error_(ty.debug, "Unable to resolve potentially self-referencing type.", .{});
@@ -392,6 +394,7 @@ pub const TypeLinker = struct {
       node.ident.typ = try self.resolve(ty);
       self.ctx.varScope.insert(node.ident.token.value, node.ident.typ.?);
     }
+    try self.link(node.value);
   }
 
   fn linkAlias(self: *Self, node: *ast.AliasNode) !void {

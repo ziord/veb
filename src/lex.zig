@@ -441,8 +441,6 @@ pub const Lexer = struct {
     while (!self.atEnd() and self.peek() != '\n') {
       self.adv();
     }
-    // skip past \n if not at end
-    if (!self.atEnd()) self.adv();
   }
 
   fn skipWhitespace(self: *Self) !void {

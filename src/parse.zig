@@ -394,16 +394,24 @@ pub const Parser = struct {
     }
   }
 
+  inline fn assertUniqueTParams(self: *Self, alias: *NType, param: *NType) void {
+    for (alias.tparams.getSlice()) |typ| {
+      var token = param.name.?.tokens.items[0];
+      if (std.mem.eql(u8, typ.name.?.tokens.items[0].value, token.value)) {
+        token.msg = "Redefinition of alias type parameter";
+        self.err(token);
+      }
+    }
+  }
 
-  fn aliasParams(self: *Self) NType {
+  fn aliasParam(self: *Self) NType {
     var name = TName.init(self.allocator);
     var debug = self.current_tok;
-    while (self.match(.TkIdent)) {
-      util.append(lex.Token, &name.tokens, self.previous_tok);
-      if (self.check(.TkDot)) {
-        self.current_tok.msg = "Expected single identifier, found multiple";
-        self.err(self.current_tok);
-      }
+    self.consume(.TkIdent);
+    util.append(lex.Token, &name.tokens, debug);
+    if (self.check(.TkDot)) {
+      self.current_tok.msg = "Expected single identifier, found multiple";
+      self.err(self.current_tok);
     }
     return NType.init(NTypeKind.TyName, name, debug);
   }
@@ -454,7 +462,8 @@ pub const Parser = struct {
       while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
         if (typ.tparams.len > 0) self.consume(.TkComma);
         self.assertMaxTParams(&typ);
-        var param = self.aliasParams();
+        var param = self.aliasParam();
+        self.assertUniqueTParams(&typ, &param);
         typ.tparams.params[typ.tparams.len] = util.box(NType, param, self.allocator);
         typ.tparams.len += 1;
       }
@@ -576,7 +585,7 @@ pub const Parser = struct {
     }
   }
 
-  fn assertNoRecursiveAlias(self: *Self, abs_ty: *NType, cct_ty: *NType) void {
+  fn assertNoDirectRecursiveAlias(self: *Self, abs_ty: *NType, cct_ty: *NType) void {
     // Check that type alias name is not used in the aliasee. This is not an in-depth
     // check, as it's possible for the alias to be meaningfully hidden in the aliasee.
     if (self.checkGenericTParam(abs_ty, cct_ty)) |tok| {
@@ -597,7 +606,7 @@ pub const Parser = struct {
     var node = self.newNode();
     // check that generic type variable parameters in `AbstractType` are not generic in `ConcreteType`
     self.assertNoGenericParameterTypeVariable(&alias_typ, &aliasee.AstNType.typ);
-    self.assertNoRecursiveAlias(&alias_typ, &aliasee.AstNType.typ);
+    self.assertNoDirectRecursiveAlias(&alias_typ, &aliasee.AstNType.typ);
     node.* = .{.AstAlias = ast.AliasNode.init(type_tok, &alias.AstNType, &aliasee.AstNType)};
     self.consumeNlOrEof();
     return node;

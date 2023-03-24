@@ -56,7 +56,7 @@ pub const TypeChecker = struct {
 
   pub fn findName(self: *Self, name: []const u8) ?*Type {
     if (self.ctx.varScope.lookup(name)) |ty| {
-      return self.ctx.copyType(ty);
+      return ty; // self.ctx.copyType(ty);
     }
     return null;
   }
@@ -156,7 +156,7 @@ pub const TypeChecker = struct {
     var val_typ = try self.infer(first_pair.value);
 
     if (node.pairs.items.len > 1) {
-      for (node.pairs.items, 1..) |pair, i| {
+      for (node.pairs.items[1..], 1..) |pair, i| {
         _ = i;
         var typ = try self.infer(pair.key);
         _ = self.checkAssign(key_typ, typ, typ.debug, false) catch {
@@ -379,6 +379,7 @@ pub const TypeChecker = struct {
 
   /// check assignment follows assignment rules
   fn _checkAssign(self: *Self, target: *Type, source: *Type) ?*Type {
+    if (target == source) return target;
     switch (target.kind) {
       .TyUnion => {
         if (target.typeid() == source.typeid()) {

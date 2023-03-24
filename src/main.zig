@@ -305,7 +305,10 @@ test "typecheck" {
   \\ let a: str | num = 10
   \\ let b: num | str = 'foo'
   \\ b = a
+  \\ # okay,
   \\ b as num + 5 # okay, since the active type of a is propagated to b.
+  // \\ type T = list
+  // \\ let p: T = []
   // \\ type X = (num | str)?  # Nullable does not distribute over it's subtype
   // \\ let y: X = 'food' as str? # fails. 
   ;

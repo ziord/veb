@@ -59,6 +59,7 @@ pub const TUnion = struct {
   types: std.ArrayList(*NType),
   /// the active type in the union
   active: ?*NType = null,
+  recursive: bool = false,
 
   pub fn init(allocator: std.mem.Allocator) @This() {
     return @This() {.types = std.ArrayList(*NType).init(allocator)};
@@ -138,6 +139,19 @@ pub const NType = struct {
       .TyList, .TyMap => true,
       .TyNullable => self.nsubtype.?.isGeneric(),
       else => false,
+    };
+  }
+
+  /// a generic type that isn't instantiated
+  pub fn isGenericButUninstantiated(self: *Self, tparam_len: usize) bool {
+    return (self.tparams.len != tparam_len);
+  }
+
+  pub fn getBuiltinGenericParamsLen(self: *Self) usize {
+    return switch (self.kind) {
+      .TyList => 1,
+      .TyMap => 2,
+      else => 0
     };
   }
 

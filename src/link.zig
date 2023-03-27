@@ -129,8 +129,14 @@ pub const TContext = struct {
 
 pub const TypeLinker = struct {
   ctx: TContext,
+  /// track each substitution/resolution steps
   sub_steps: usize = 0,
-  curr_typ: ?*Type = null,
+  /// track if a Variable type is from a generic parameter type substitution 
+  using_tvar: usize = 0,
+  /// re-pair - recursive unions (pun intended) 
+  repair: ?Pair = null,
+
+  const Pair = struct {key: *Type, value: *Type};
 
   pub const MAX_SUB_STEPS = types.MAX_RECURSIVE_DEPTH;
   const TypeLinkError = error{TypeLinkError};
@@ -157,10 +163,21 @@ pub const TypeLinker = struct {
       break :blk self.ctx.typScope.lookup(name.value);
     };
     if (found) |ty| {
-      return switch (ty.kind) {
+      var result = switch (ty.kind) {
         .Concrete, .Variable => ty,
         else => self.ctx.copyType(ty),
       };
+      if (self.repair) |pair| {
+        // if we find a matching union type, it must be recursive
+        if (pair.key == ty and ty.isUnion()) {
+          pair.value.union_().recursive = true;
+          return pair.value;
+        }
+      } else {
+        // cache the type.
+        self.repair = Pair {.key = ty, .value = result};
+      }
+      return result;
     }
     return null;
   }
@@ -237,6 +254,7 @@ pub const TypeLinker = struct {
         var alias = eqn.alias_info.?.lhs;
         try self.assertGenericAliasSubMatches(alias, typ);
         self.ctx.typScope.pushScope();
+        self.using_tvar += 1;
         var alias_gen = alias.generic();
         for (alias_gen.getSlice(), 0..) |tvar, i| {
           var tsub = gen.tparams.items[i];
@@ -251,18 +269,14 @@ pub const TypeLinker = struct {
         }
         // resolving eqn resolves typ
         var sol = try self.resolveType(eqn);
+        self.using_tvar -= 1;
         self.ctx.typScope.popScope();
         return sol;
       } else {
         for (gen.getSlice(), 0..) |param, i| {
-          gen.tparams.items[i] = self.resolveType(param) catch {
-            return self.error_(
-              typ.debug,
-              "Generic type '{s}' may not have been instantiated correctly",
-              .{typ.typename(self.ctx.allocator)}
-            );
-          };
+          gen.tparams.items[i] = try self.resolveType(param);
         }
+        return typ;
       }
     }
     if (typ.isNullable()) {
@@ -283,6 +297,19 @@ pub const TypeLinker = struct {
     }
     if (typ.isVariable()) {
       var eqn = try self.lookupType(typ);
+      if (eqn.alias_info) |alias| {
+        if (alias.lhs.isGeneric()) {
+          // check if this is a regular generic type called without instantiation, 
+          // or a recursive generic type called without instantiation (for this, eqn must be union)
+          if (self.using_tvar == 0 or (eqn.isUnion() and eqn.union_().recursive)) {
+            return self.error_(
+              typ.debug,
+              "Generic type '{s}' may not have been instantiated correctly",
+              .{typ.typename(self.ctx.allocator)}
+            );
+          }
+        }
+      }
       return try self.resolveType(eqn);
     }
     return typ;
@@ -290,12 +317,13 @@ pub const TypeLinker = struct {
 
   fn resolve(self: *Self, typ: *Type) !*Type {
     self.sub_steps = 0;
-    self.curr_typ = typ;
     const ty = try self.resolveType(typ);
     const has = ty.hasVariable(MAX_SUB_STEPS) catch {
       return self.error_(ty.debug, "Unable to resolve potentially self-referencing type.", .{});
     };
     if (has) return self.error_(ty.debug, "Could not resolve type, probable undefined", .{});
+    // reset pair
+    self.repair = null;
     return ty;
   }
 

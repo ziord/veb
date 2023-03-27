@@ -398,6 +398,11 @@ pub const Type = struct {
     return self.tid;
   }
 
+  pub fn recContainsType(self: *Self, typ: *Self) bool {
+    _ = typ;
+    _ = self;
+  }
+
   /// check if typ is contained in self. This is false if self is not a union.
   pub fn containsType(self: *Self, typ: *Self) bool {
     switch (self.kind) {
@@ -478,9 +483,13 @@ pub const Type = struct {
         var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
         var values = uni.variants.values();
         for (values, 0..) |typ, i| {
-          _ = try writer.write(try typ._typename(allocator, depth));
-          if (i != values.len - 1) {
-            _ = try writer.write(" | ");
+          if (uni.recursive and typ.isUnion()) {
+            _ = try writer.write("{...}");
+          } else {
+            _ = try writer.write(try typ._typename(allocator, depth));
+            if (i != values.len - 1) {
+              _ = try writer.write(" | ");
+            }
           }
         }
         return writer.context.items;

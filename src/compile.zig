@@ -516,8 +516,9 @@ pub const Compiler = struct {
   }
 
   fn cCast(self: *Self, node: *ast.CastNode, dst: u32) u32 {
-    if (node.expr.getType().?.kind != .TyBool) {
-      if (node.typn.typ.kind == .TyBool) {
+    const ty = node.expr.getType();
+    if (ty != null and !ty.?.isBoolTy()) {
+      if (node.typn.typ.isSimple() and node.typn.typ.isBoolTy()) {
         // TODO: optimize this.
         var rk: u32 = undefined;
         if (self.withinRKLimit(1)) {

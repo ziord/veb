@@ -3,26 +3,32 @@ const ast = @import("ast.zig");
 const link = @import("link.zig");
 const util = @import("util.zig");
 
+const types = link.types;
 const Scope = link.Scope;
 const Token = link.Token;
 const Type = link.Type;
 const TypeKind = link.TypeKind;
-const TUnion = link.TUnion;
+const TypeInfo = link.TypeInfo;
+const Union = link.Union;
 const TContext = link.TContext;
 const Node = link.Node;
 const TypeLinker = link.TypeLinker;
-
-const TypeHashMap = std.AutoArrayHashMap(u32, *Type);
+const TypeHashSet = types.TypeHashSet;
 
 pub const TypeChecker = struct {
   allocator: std.mem.Allocator,
   ctx: TContext,
 
   const UnitTypes = struct {
-    var tyNumber: Type = Type.init(.TyNumber, null, Token.getDefault());
-    var tyString: Type = Type.init(.TyString, null, Token.getDefault());
-    var tyBool: Type = Type.init(.TyBool, null, Token.getDefault());
-    var tyNil: Type = Type.init(.TyNil, null, Token.getDefault());
+    const num = types.Concrete.init(.TyNumber);
+    const str = types.Concrete.init(.TyString);
+    const bol = types.Concrete.init(.TyBool);
+    const nil = types.Concrete.init(.TyNil);
+
+    const tyNumber: Type = Type.init(.{.Concrete = num}, Token.getDefault());
+    const tyString: Type = Type.init(.{.Concrete = str}, Token.getDefault());
+    const tyBool: Type = Type.init(.{.Concrete = bol}, Token.getDefault());
+    const tyNil: Type = Type.init(.{.Concrete = nil}, Token.getDefault());
   };
   const Self = @This();
   pub const TypeCheckError = error{TypeCheckError};
@@ -49,14 +55,20 @@ pub const TypeChecker = struct {
   pub fn findType(self: *Self, name: []const u8) ?*Type {
     // TODO
     if (self.ctx.typScope.lookup(name)) |ty| {
-      return self.ctx.copyType(ty);
+      return switch (ty.kind) {
+        .Concrete, .Variable => ty,
+        else => self.ctx.copyType(ty),
+      };
     }
     return null;
   }
 
   pub fn findName(self: *Self, name: []const u8) ?*Type {
     if (self.ctx.varScope.lookup(name)) |ty| {
-      return ty; // self.ctx.copyType(ty);
+      return switch (ty.kind) {
+        .Concrete, .Variable => ty,
+        else => self.ctx.copyType(ty),
+      };
     }
     return null;
   }
@@ -69,13 +81,12 @@ pub const TypeChecker = struct {
     }
   }
 
-  fn validateGenericParamSize(self: *Self, size: usize, max_size: usize, exact: bool, type_name: []const u8, token: Token) !void {
-    var not_okay = if (exact) size < max_size else size > max_size;
-    if (not_okay) {
+  fn validateGenericParamSize(self: *Self, size: usize, exp_size: usize, token: Token) !void {
+    if (size != exp_size) {
       return self.error_(
         token, 
-        "'{s}' type accepts {} generic type parameter(s), but got {}", 
-        .{type_name, max_size, size}
+        "Generic type parameter(s) mismatch. Expected {} type parameter(s), but got {}", 
+        .{exp_size, size}
       );
     }
   }
@@ -84,29 +95,29 @@ pub const TypeChecker = struct {
     return typ.typename(self.allocator);
   }
 
-  fn inferLiteral(self: *Self, node: *ast.LiteralNode, kind: TypeKind) !*Type {
+  fn inferLiteral(self: *Self, node: *ast.LiteralNode, kind: types.Concrete) !*Type {
     if (node.typ) |typ| {
       return typ;
     } else {
-      node.typ = self.ctx.newType(kind, node.token);
+      node.typ = kind.toType(node.token).box(self.allocator);
       return node.typ.?;
     }
   }
 
   fn inferNil(self: *Self, node: *ast.LiteralNode) !*Type {
-    return try self.inferLiteral(node, .TyNil);
+    return try self.inferLiteral(node, UnitTypes.nil);
   }
 
   fn inferNumber(self: *Self, node: *ast.LiteralNode) !*Type {
-    return try self.inferLiteral(node, .TyNumber);
+    return try self.inferLiteral(node, UnitTypes.num);
   }
 
   fn inferString(self: *Self, node: *ast.LiteralNode) !*Type {
-    return try self.inferLiteral(node, .TyString);
+    return try self.inferLiteral(node, UnitTypes.str);
   }
 
   fn inferBool(self: *Self, node: *ast.LiteralNode) !*Type {
-    return try self.inferLiteral(node, .TyBool);
+    return try self.inferLiteral(node, UnitTypes.bol);
   }
 
   fn inferList(self: *Self, node: *ast.ListNode) !*Type {
@@ -114,29 +125,26 @@ pub const TypeChecker = struct {
       return typ;
     }
     // create a new type
-    node.typ = self.ctx.newType(.TyList, node.token);
+    var base = Type.newConcrete(.TyClass, "list", node.token).box(self.allocator);
+    node.typ = Type.newGeneric(self.allocator, base, node.token).box(self.allocator);
     if (node.elems.items.len == 0) {
       return node.typ.?;
     }
     // infer type of elements stored in the list
-    var types = TypeHashMap.init(self.allocator);
-    types.ensureTotalCapacity(node.elems.items.len) catch {};
+    var typeset = TypeHashSet.init(self.allocator);
+    typeset.ensureTotalCapacity(node.elems.items.len) catch {};
     for (node.elems.items) |elem| {
       var typ = try self.infer(elem);
-      types.put(typ.typeid(), typ) catch break;
+      typeset.put(typ.typeid(), typ) catch break;
     }
-    if (types.count() > 1) {
+    var gen = node.typ.?.generic();
+    if (typeset.count() > 1) {
       // convert types to a single union type
-      var tparam = self.ctx.newType(.TyUnion, node.token);
-      tparam.union_ = TUnion.init(self.allocator);
-      for (types.values()) |typ| {
-        util.append(*Type, &tparam.union_.?.types, typ);
-      }
-      node.typ.?.tparams.params[0] = tparam;
-      node.typ.?.tparams.len += 1;
+      var unionTy = Type.newUnion(self.allocator, node.token).box(self.allocator);
+      unionTy.union_().addAll(&typeset);
+      gen.append(unionTy);
     } else {
-      node.typ.?.tparams.params[0] = types.values()[0];
-      node.typ.?.tparams.len += 1;
+      gen.append(typeset.values()[0]);
     }
     return node.typ.?;
   }
@@ -146,7 +154,8 @@ pub const TypeChecker = struct {
       return typ;
     }
     // create a new type
-    node.typ = self.ctx.newType(.TyMap, node.token);
+    var base = Type.newConcrete(.TyClass, "map", node.token).box(self.allocator);
+    node.typ = Type.newGeneric(self.allocator, base, node.token).box(self.allocator);
     if (node.pairs.items.len == 0) {
       return node.typ.?;
     }
@@ -176,9 +185,9 @@ pub const TypeChecker = struct {
         };
       }
     }
-    node.typ.?.tparams.params[0] = key_typ;
-    node.typ.?.tparams.params[1] = val_typ;
-    node.typ.?.tparams.len += 2;
+    var gen = node.typ.?.generic();
+    gen.append(key_typ);
+    gen.append(val_typ);
     return node.typ.?;
   }
 
@@ -207,7 +216,7 @@ pub const TypeChecker = struct {
     node.typ = lhsTy;
     try self.checkBinary(node, rhsTy);
     if (node.op.optype.isCmpOp()) {
-      node.typ = self.ctx.newType(.TyBool, lhsTy.debug);
+      node.typ = UnitTypes.bol.toType(lhsTy.debug).box(self.allocator);
     }
     return node.typ.?;
   }
@@ -225,7 +234,9 @@ pub const TypeChecker = struct {
   }
 
   fn inferAssign(self: *Self, node: *ast.BinaryNode) !*Type {
-    var typ = try self.inferBinary(node);
+    var lhsTy = try self.infer(node.left);
+    var rhsTy = try self.infer(node.right);
+    var typ = try self.checkAssign(lhsTy, rhsTy, node.op.token, true);
     // update type.
     switch (node.left.*) {
       .AstVar => |ident| self.ctx.varScope.insert(ident.token.value, typ),
@@ -287,63 +298,64 @@ pub const TypeChecker = struct {
       cast_ty: *Type, debug: Token,
       emit: bool, report_node_ty: *Type, report_cast_ty: *Type
   ) TypeCheckError!*Type {
-    if (cast_ty.kind == .TyNil) {
+    if (cast_ty.isNilTy()) {
       return self.errorOrEmit(emit, debug, "Illegal cast to nil", .{});
     }
     // any type may be cast to bool
-    if (cast_ty.kind == .TyBool) {
+    if (cast_ty.isBoolTy()) {
       return cast_ty;
     }
     // nil may cast to nullable
-    if (node_ty.kind == .TyNil) {
-      if (cast_ty.kind == .TyNullable) {
+    if (node_ty.isNilTy()) {
+      if (cast_ty.isNullable()) {
         return cast_ty;
       } else {
         return self.errorOrEmit(emit, debug, "Illegal cast from 'nil' to '{s}'", .{self.getTypename(report_cast_ty)});
       }
     }
     // a nullable type may be cast to bool or an assignable-nullable type
-    if (node_ty.kind == .TyNullable) {
-      if (cast_ty.kind == .TyNullable) {
-        _ = try self._checkCast(node_ty.nsubtype.?, cast_ty.nsubtype.?, debug, emit, report_node_ty, report_cast_ty);
+    if (node_ty.isNullable()) {
+      if (cast_ty.isNullable()) {
+        _ = try self._checkCast(node_ty.nullable().subtype, cast_ty.nullable().subtype, debug, emit, report_node_ty, report_cast_ty);
         return cast_ty;
       }
       return self.errorOrEmit(emit, debug, "Nullable type may only cast to bool or equi-nullable type", .{});
     }
     // any type may be cast to nullable of that type, i.e. type -> type?
-    if (cast_ty.kind == .TyNullable) {
-      _ = try self._checkCast(node_ty, cast_ty.nsubtype.?, debug, emit, report_node_ty, report_cast_ty);
+    if (cast_ty.isNullable()) {
+      _ = try self._checkCast(node_ty, cast_ty.nullable().subtype, debug, emit, report_node_ty, report_cast_ty);
       return cast_ty;
     }
-    if (node_ty.kind == .TyList and cast_ty.kind == .TyList) {
-      try self.validateGenericParamSize(cast_ty.tparams.len, 1, true, "list", debug);
+    if (node_ty.isGeneric() and cast_ty.isGeneric()) {
+      var node_gen = node_ty.generic();
+      var cast_gen = cast_ty.generic();
+      // check if the base types are assignable
+      _ = self.checkAssign(cast_gen.base, node_gen.base, debug, false) catch {
+        return self.errorOrEmit(
+          emit, debug,
+          "Cannot cast from type '{s}' to type '{s}', because neither types sufficiently overlaps",
+          .{self.getTypename(report_node_ty), self.getTypename(report_cast_ty)}
+        );
+      };
       // empty generic to specialized generic
-      if (node_ty.tparams.len == 0) return cast_ty;
+      if (node_gen.tparams_len() == 0) return cast_ty;
       // non-empty to another type
-      try self.validateGenericParamSize(node_ty.tparams.len, 1, true, "list", debug);
-      _ = try self._checkCast(node_ty.tparams.params[0], cast_ty.tparams.params[0], debug, emit, report_node_ty, report_cast_ty);
-      return cast_ty;
-    }
-    if (node_ty.kind == .TyMap and cast_ty.kind == .TyMap) {
-      try self.validateGenericParamSize(cast_ty.tparams.len, 2, true, "map", debug);
-      // empty generic to specialized generic
-      if (node_ty.tparams.len == 0) return cast_ty;
-      // non-empty to another type
-      try self.validateGenericParamSize(node_ty.tparams.len, 2, true, "map", debug);
-      _ = try self._checkCast(node_ty.tparams.params[0], cast_ty.tparams.params[0], debug, emit, report_node_ty, report_cast_ty);
-      _ = try self._checkCast(node_ty.tparams.params[1], cast_ty.tparams.params[1], debug, emit, report_node_ty, report_cast_ty);
+      try self.validateGenericParamSize(node_gen.tparams_len(), cast_gen.tparams_len(), debug);
+      for (node_gen.tparams.items, 0..) |param, i| {
+        _ = try self._checkCast(param, cast_gen.tparams.items[i], debug, emit, report_node_ty, report_cast_ty);
+      }
       return cast_ty;
     }
     // upcasting/widening
     if (cast_ty.containsType(node_ty)) {
-      std.debug.assert(cast_ty.kind == .TyUnion);
-      cast_ty.union_.?.active = node_ty;
+      std.debug.assert(cast_ty.isUnion());
+      cast_ty.union_().active = node_ty;
       return cast_ty;
     }
     // downcasting
     if (node_ty.containsType(cast_ty)) {
-      std.debug.assert(node_ty.kind == .TyUnion);
-      if (node_ty.union_.?.active) |active| {
+      std.debug.assert(node_ty.isUnion());
+      if (node_ty.union_().active) |active| {
         // check if the active type is assignable to the cast type
         _ = self.checkAssign(cast_ty, active, debug, false) catch {
           return self.errorOrEmit(
@@ -381,37 +393,54 @@ pub const TypeChecker = struct {
   fn _checkAssign(self: *Self, target: *Type, source: *Type) ?*Type {
     if (target == source) return target;
     switch (target.kind) {
-      .TyUnion => {
-        if (target.typeid() == source.typeid()) {
-          if (source.union_.?.active) |active| {
-            target.union_.?.active = active;
+      .Concrete => |conc| {
+        if (!source.isConcrete()) return null;
+        switch (conc.tkind) {
+          .TyClass => {
+            // resolved name must match for target and source
+            // TODO: this would need to be updated when class inheritance is implemented
+            if (conc.name != null and source.concrete().name != null) {
+              if (std.mem.eql(u8, conc.name.?, source.concrete().name.?)) {
+                return target;
+              }
+            }
+          },
+          else => {}
+        }
+      },
+      .Union => |*union_| {
+        if (source.isUnion() and target.typeid() == source.typeid()) {
+          if (source.union_().active) |active| {
+            union_.active = active;
           }
           return target;
         }
         if (target.containsType(source)) {
-          target.union_.?.active = source;
+          union_.active = source;
           return target;
         }
       },
-      .TyNullable => {
+      .Nullable => |nul| {
         // NOTE: nullable type does not distribute over it's subtype.
         // For example: (str | num)? !== str? | num?
         // The subtype of a nullable type is its **own concrete** type.
-        if (source.kind == .TyNil) return target;
-        if (self._checkAssign(target.nsubtype.?, source) != null) {
+        if (source.isNilTy()) return target;
+        if (self._checkAssign(nul.subtype, source) != null) {
           return target;
         }
       },
-      .TyList, .TyMap => |kind| {
-        if (source.kind == kind) {
-          if (target.tparams.len == source.tparams.len) {
-            var found: ?*Type = null;
-            for (target.tparams.getSlice(), 0..) |param, i| {
-              found = self._checkAssign(param, source.tparams.params[i]);
-              if (found != null) return target;
-            }
-            return null;
+      .Generic => |*gen| {
+        if (source.isGeneric()) {
+          var s_gen = source.generic();
+          if (self._checkAssign(gen.base, s_gen.base) == null) return null;
+          // less specific to specific, for ex: lex x = []; x = [1, 2, 3]
+          if (gen.tparams_len() == 0) return source;
+          self.validateGenericParamSize(gen.tparams_len(), s_gen.tparams_len(), source.debug) catch return null;
+          for (gen.tparams.items, 0..) |param, i| {
+            var res = self._checkAssign(param, s_gen.tparams.items[i]);
+            if (res == null) return res;
           }
+          return target;
         }
       },
       else => {},
@@ -459,10 +488,6 @@ pub const TypeChecker = struct {
   fn checkBinary(self: *Self, node: *ast.BinaryNode, source: *Type) !void {
     // source is type of rhs
     // node.typ is type of lhs
-    if (node.op.optype == .OpAssign) {
-      _ = try self.checkAssign(node.typ.?, source, node.op.token, true);
-      return;
-    }
     if (node.op.optype == .OpEqq or node.op.optype == .OpNeq) {
       _ = self.checkCast(node.typ.?, source, node.op.token, false) catch {
         return self.error_(
@@ -477,22 +502,21 @@ pub const TypeChecker = struct {
     if (node.op.optype == .OpAnd or node.op.optype == .OpOr) {
       // And/Or returns the type of their operands, or the union, if the types are different/disjoint
       if (node.typ.?.typeid() != source.typeid()) {
-        var uni = self.ctx.newType(.TyUnion, node.typ.?.debug);
-        uni.union_ = TUnion.init(self.allocator);
-        util.append(*Type, &uni.union_.?.types, node.typ.?);
-        util.append(*Type, &uni.union_.?.types, source);
+        var uni = Type.newUnion(self.allocator, node.typ.?.debug).box(self.allocator);
+        uni.union_().set(node.typ.?);
+        uni.union_().set(source);
         node.typ = uni;
       }
       return;
     }
     var errTy: ?*Type = null;
-    if (node.typ.?.typeid() != (&UnitTypes.tyNumber).typeid()) {
+    if (node.typ.?.typeid() != @constCast(&UnitTypes.tyNumber).typeid()) {
       errTy = node.typ;
-    } else if (source.typeid() != (&UnitTypes.tyNumber).typeid()) {
+    } else if (source.typeid() != @constCast(&UnitTypes.tyNumber).typeid()) {
       errTy = source;
     }
     if (errTy != null) {
-      const name = self.getTypename(&UnitTypes.tyNumber);
+      const name = self.getTypename(@constCast(&UnitTypes.tyNumber));
       return self.error_(
         node.op.token,
         "Expected type '{s}' {s} '{s}', but got '{s}' {s} '{s}'",

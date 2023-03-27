@@ -260,7 +260,7 @@ test "linking" {
   var src2 =
   \\ type A = str
   \\ type B = num
-  \\ type C = map
+  \\ type C{A, B} = map{A, B}
   \\ type D{K} = C{K, B}
   \\ type HashMap{K, V} = C{K, V}
   \\ type StringHashMap{V} = HashMap{str, V}
@@ -307,7 +307,9 @@ test "typecheck" {
   \\ b = a
   \\ # okay,
   \\ b as num + 5 # okay, since the active type of a is propagated to b.
-  // \\ type T = list
+  \\ let x = []
+  \\ x = [1, 2, 3]
+  // \\ type T = str | num | list{T}
   // \\ let p: T = []
   // \\ type X = (num | str)?  # Nullable does not distribute over it's subtype
   // \\ let y: X = 'food' as str? # fails. 

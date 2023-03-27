@@ -1,12 +1,15 @@
 const std = @import("std");
 const ast = @import("ast.zig");
-const types = @import("types.zig");
 const util = @import("util.zig");
+pub const types = @import("type.zig");
 pub const Token = @import("lex.zig").Token;
 
-pub const Type = types.NType;
-pub const TUnion = types.TUnion;
-pub const TypeKind = types.NTypeKind;
+pub const Type = types.Type;
+pub const Union = types.Union;
+pub const TypeKind = types.TypeKind;
+pub const TypeInfo = types.TypeInfo;
+pub const Generic = types.Generic;
+pub const Variable = types.Variable;
 pub const Node = ast.AstNode;
 
 fn CreateMap(comptime K: type, comptime V: type) type {
@@ -101,8 +104,8 @@ pub const TContext = struct {
     };
   }
 
-  pub inline fn newType(self: *Self, kind: TypeKind, debug: Token) *Type {
-    return util.box(Type, Type.init(kind, null, debug), self.allocator);
+  pub inline fn newType(self: *Self, kind: TypeInfo, debug: Token) *Type {
+    return util.box(Type, Type.init(kind, debug), self.allocator);
   }
 
   pub inline fn enterScope(self: *Self) void {
@@ -116,8 +119,9 @@ pub const TContext = struct {
   }
 
   pub fn copyType(self: *Self, typ: *Type) *Type {
-    var new = self.newType(typ.kind, typ.debug);
-    new.* = typ.*;
+    // we need to deepcopy typ
+    var new = typ.box(self.allocator);
+    new.kind = typ.kind.clone();
     return new;
   }
 
@@ -142,9 +146,9 @@ pub const TypeLinker = struct {
     return error.TypeLinkError;
   }
 
-  pub fn findType(self: *Self, typ: *Type, copy: bool) ?*Type {
+  pub fn findType(self: *Self, typ: *Type) ?*Type {
     // TODO: augment to return failing name token
-    var tokens = typ.name.?.tokens.items;
+    var tokens = typ.variable().tokens.items;
     var found = if (tokens.len > 1) {
       // TODO: context type
       util.todo("multiple names impl with context type");
@@ -153,13 +157,16 @@ pub const TypeLinker = struct {
       break :blk self.ctx.typScope.lookup(name.value);
     };
     if (found) |ty| {
-      return if (copy and !ty.isSimple()) self.ctx.copyType(ty) else ty;
+      return switch (ty.kind) {
+        .Concrete, .Variable => ty,
+        else => self.ctx.copyType(ty),
+      };
     }
     return null;
   }
 
   fn lookupType(self: *Self, typ: *Type) !*Type {
-    if (self.findType(typ, true)) |found| {
+    if (self.findType(typ)) |found| {
       return found;
     } else {
       return self.error_(typ.debug, "Could not resolve type with name: '{s}'", .{typ.getName()});
@@ -169,7 +176,7 @@ pub const TypeLinker = struct {
   inline fn assertMaxSubStepsNotExceeded(self: *Self, typ: *Type) !void {
     if (self.sub_steps >= MAX_SUB_STEPS) {
       return self.error_(
-        typ.debug,
+        typ.debugToken(),
         "Potentially infinite substitutions arising from probable self-referencing types", 
         .{}
       );
@@ -178,10 +185,14 @@ pub const TypeLinker = struct {
 
   inline fn assertNonNullableSubtype(self: *Self, subtype: *Type) !void {
     // check that this subtype to be assigned to a nullable type is not itself nullable
-    if (subtype.kind == .TyNullable) {
-      return self.error_(subtype.debug, "Nullable type cannot have a nullable subtype", .{});
-    } else if (subtype.kind == .TyNil) {
-      return self.error_(subtype.debug, "Nullable type cannot have a nil subtype", .{});
+    switch (subtype.kind) {
+      .Nullable => return self.error_(subtype.debug, "Nullable type cannot have a nullable subtype", .{}),
+      .Concrete => |conc| {
+        if (conc.tkind == .TyNil) {
+          return self.error_(subtype.debug, "Nullable type cannot have a nil subtype", .{});
+        }
+      },
+      else => {}
     }
   }
 
@@ -191,77 +202,24 @@ pub const TypeLinker = struct {
       return self.error_(
         typ.debug,
         "Type alias is not generic, but instantiated with {} parameters", 
-        .{typ.tparams.len},
+        .{typ.generic().tparams_len()},
+      );
+    } else if (!typ.isGeneric()) {
+      return self.error_(
+        typ.debug,
+        "Type is not generic, but instantiated with {} parameters", 
+        .{alias.generic().tparams_len()},
       );
     }
-    if (alias.tparams.len != typ.tparams.len) {
+    var l_gen = alias.generic();
+    var r_gen = typ.generic();
+    if (l_gen.tparams_len() != r_gen.tparams_len()) {
       return self.error_(
         typ.debug,
         "Parameter mismatch in generic type instantiion. Expected {} generic arguments, got {}", 
-        .{alias.tparams.len, typ.tparams.len},
+        .{l_gen.tparams_len(), r_gen.tparams_len()},
       );
     }
-  }
-
-  /// substitute abstract generic type parameters with more concrete ones
-  fn substitute(self: *Self, sub: *Type, eqn: *Type) TypeLinkError!*Type {
-    // type A -> str
-    // type B{K} -> list{K}
-    // x: B{A} -> list{K} -> list{A} -> list{str}
-    self.sub_steps += 1;
-    try self.assertMaxSubStepsNotExceeded(sub);
-    if (sub.isGeneric()) {
-      for (sub.tparams.getSlice()) |sub_param| {
-        for (eqn.tparams.getSlice(),  0..) |eqn_param, j| {
-          // try to substitute if it's not a simple type
-          if (eqn_param.isCompound()) {
-            eqn.tparams.params[j] = try self.substitute(sub_param, eqn_param);
-          }
-        }
-      }
-    }
-    // resolve names in eqn if any
-    if (eqn.isGeneric()) {
-      if (eqn.tparams.len > 0) {
-        for (eqn.tparams.getSlice(),  0..) |param, i| {
-          var hasNameTy = param.hasNameType(MAX_SUB_STEPS) catch blk: {
-            self.sub_steps = MAX_SUB_STEPS;
-            try self.assertMaxSubStepsNotExceeded(param);
-            break :blk false; // unreachable
-          };
-          if (hasNameTy) {
-            eqn.tparams.params[i] = try self.resolveType(param);
-          }
-        }
-      } else {
-        // generic but not instantiated. copy the types
-        for (0..sub.tparams.len) |i| {
-          eqn.tparams.params[i] = try self.resolveType(sub.tparams.params[i]);
-          eqn.tparams.len += 1;
-        }
-      }
-    }
-    if (eqn.kind == .TyNullable) {
-      var ty = try self.substitute(sub, eqn.nsubtype.?);
-      try self.assertNonNullableSubtype(ty);
-      return Type.newNullable(self.ctx.newType(.TyNullable, ty.debug), ty);
-    }
-    if (eqn.kind == .TyUnion) {
-      for (eqn.union_.?.types.items, 0..) |uni, i| {
-        eqn.union_.?.types.items[i] = try self.substitute(sub, uni);
-      }
-    }
-    if (eqn.kind == .TyName) {
-      if (self.findType(eqn, true)) |ty| {
-        // solve ty using eqn as sub, i.e. substitue eqn into ty
-        return try self.substitute(eqn, ty);
-      } else {
-        // at this point, sub is the solution to eqn
-        return sub;
-      }
-    }
-    // eqn is the final solution
-    return eqn;
   }
 
   fn resolveType(self: *Self, typ: *Type) TypeLinkError!*Type {
@@ -269,37 +227,63 @@ pub const TypeLinker = struct {
       return typ;
     }
     if (typ.isGeneric()) {
-      for (typ.tparams.getSlice(), 0..) |param, i| {
-        typ.tparams.params[i] = try self.resolveType(param);
-      }
-    }
-    if (typ.kind == .TyNullable) {
-      var tmp = try self.resolveType(typ.nsubtype.?);
-      try self.assertNonNullableSubtype(tmp);
-      return Type.newNullable(self.ctx.newType(.TyNullable, tmp.debug), tmp);
-    }
-    if (typ.kind == .TyUnion) {
-      for (typ.union_.?.types.items, 0..) |uni, i| {
-        typ.union_.?.types.items[i] = try self.resolveType(uni);
-      }
-    }
-    if (typ.kind == .TyName) {
-      var eqn = try self.lookupType(typ);
-      // only instantiate generic type variables when the calling type is instantiated
-      if (eqn.alias != null and eqn.alias.?.isGeneric()) {
-        var alias = eqn.alias.?;
+      var gen = typ.generic();
+      if (gen.base.isVariable()) {
+        var eqn = try self.lookupType(gen.base);
+        // only instantiate generic type variables when the alias type is guaranteed to be generic
+        if (eqn.alias_info == null or !eqn.alias_info.?.lhs.isGeneric()) {
+          return self.error_(typ.debug, "Non-generic type instantiated as generic", .{});
+        }
+        var alias = eqn.alias_info.?.lhs;
         try self.assertGenericAliasSubMatches(alias, typ);
         self.ctx.typScope.pushScope();
-        for (alias.tparams.getSlice(), 0..) |tvar, i| {
-          var tsub = typ.tparams.params[i];
-          self.ctx.typScope.insert(tvar.name.?.tokens.items[0].value, tsub);
+        var alias_gen = alias.generic();
+        for (alias_gen.getSlice(), 0..) |tvar, i| {
+          var tsub = gen.tparams.items[i];
+          std.debug.assert(tvar.variable().tokens.items.len == 1);
+          self.ctx.typScope.insert(tvar.variable().tokens.items[0].value, tsub);
         }
-        var sol = try self.substitute(typ, eqn);
+        if (eqn.isGeneric()) {
+          var eqn_gen = eqn.generic();
+          for (eqn_gen.getSlice(), 0..) |param, i| {
+            eqn_gen.tparams.items[i] = try self.resolveType(param);
+          }
+        }
+        // resolving eqn resolves typ
+        var sol = try self.resolveType(eqn);
         self.ctx.typScope.popScope();
         return sol;
       } else {
-        return try self.substitute(typ, eqn);
+        for (gen.getSlice(), 0..) |param, i| {
+          gen.tparams.items[i] = self.resolveType(param) catch {
+            return self.error_(
+              typ.debug,
+              "Generic type '{s}' may not have been instantiated correctly",
+              .{typ.typename(self.ctx.allocator)}
+            );
+          };
+        }
       }
+    }
+    if (typ.isNullable()) {
+      var subtype = try self.resolveType(typ.nullable().subtype);
+      try self.assertNonNullableSubtype(subtype);
+      var nul = types.Nullable.init(subtype);
+      return self.ctx.newType(.{.Nullable = nul}, subtype.debug);
+    }
+    if (typ.isUnion()) {
+      // TODO: need to figure out how to do this in-place
+      var uni = typ.union_();
+      var old_variants = uni.variants;
+      uni.variants = types.TypeHashSet.init(self.ctx.allocator);
+      for (old_variants.values()) |variant| {
+        uni.set(try self.resolveType(variant));
+      }
+      return typ;
+    }
+    if (typ.isVariable()) {
+      var eqn = try self.lookupType(typ);
+      return try self.resolveType(eqn);
     }
     return typ;
   }
@@ -308,7 +292,7 @@ pub const TypeLinker = struct {
     self.sub_steps = 0;
     self.curr_typ = typ;
     const ty = try self.resolveType(typ);
-    const has = ty.hasNameType(MAX_SUB_STEPS) catch {
+    const has = ty.hasVariable(MAX_SUB_STEPS) catch {
       return self.error_(ty.debug, "Unable to resolve potentially self-referencing type.", .{});
     };
     if (has) return self.error_(ty.debug, "Could not resolve type, probable undefined", .{});
@@ -398,8 +382,9 @@ pub const TypeLinker = struct {
   }
 
   fn linkAlias(self: *Self, node: *ast.AliasNode) !void {
-    var name = node.alias.typ.name.?;
-    self.ctx.typScope.insert(name.tokens.items[0].value, &node.aliasee.typ);
+    var typ = node.alias.typ;
+    var tokens = if (typ.isGeneric()) typ.generic().base.variable().tokens else typ.variable().tokens;
+    self.ctx.typScope.insert(tokens.items[0].value, &node.aliasee.typ);
   }
 
   fn linkProgram(self: *Self, node: *ast.ProgramNode) !void {

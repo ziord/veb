@@ -1,6 +1,7 @@
 const std = @import("std");
 const lex = @import("lex.zig");
-const NType = @import("types.zig").NType;
+const types = @import("type.zig");
+const Type = types.Type;
 
 const Token = lex.Token;
 const OpType = lex.OpType;
@@ -33,7 +34,7 @@ pub const LiteralNode = struct {
   token: Token,
   value: f64,
   line: usize,
-  typ: ?*NType = null,
+  typ: ?*Type = null,
 
   pub fn init(token: Token) @This() {
     return @This() {
@@ -49,7 +50,7 @@ pub const BinaryNode = struct {
   right: *AstNode,
   op: lex.Optr,
   line: usize,
-  typ: ?*NType = null,
+  typ: ?*Type = null,
 
   pub fn init(left: *AstNode, right: *AstNode, op: Token) @This() {
     return @This() {
@@ -65,7 +66,7 @@ pub const UnaryNode = struct {
   expr: *AstNode,
   op: lex.Optr,
   line: usize,
-  typ: ?*NType = null,
+  typ: ?*Type = null,
 
   pub fn init(expr: *AstNode, op: Token, line: usize) @This() {
     return @This() {
@@ -80,7 +81,7 @@ pub const ListNode = struct {
   elems: AstNodeList,
   line: usize,
   token: Token,
-  typ: ?*NType = null,
+  typ: ?*Type = null,
 
   pub fn init(allocator: std.mem.Allocator, token: Token) @This() {
     return @This() {
@@ -95,7 +96,7 @@ pub const MapNode = struct {
   pairs: std.ArrayList(Pair),
   line: usize,
   token: Token,
-  typ: ?*NType = null,
+  typ: ?*Type = null,
 
   pub const Pair = struct {key: *AstNode, value: *AstNode};
 
@@ -110,7 +111,7 @@ pub const MapNode = struct {
 
 pub const VarNode = struct {
   token: lex.Token,
-  typ: ?*NType,
+  typ: ?*Type,
   line: usize,
 
   pub fn init(token: Token) @This() {
@@ -155,10 +156,10 @@ pub const BlockNode = struct {
 };
 
 pub const TypeNode = struct {
-  typ: NType,
+  typ: Type,
   token: Token,
 
-  pub fn init(typ: NType, token: Token) @This() {
+  pub fn init(typ: Type, token: Token) @This() {
     return @This() {.typ = typ, .token = token};
   }
 };
@@ -167,13 +168,13 @@ pub const AliasNode = struct {
   token: Token, // token for 'type'
   alias: *TypeNode,
   aliasee: *TypeNode,
-  typ: *NType, // alias and aliasee is set in `typ`
+  typ: *Type, // alias and aliasee is set in `typ`
 
   pub fn init(typ_token: Token, alias: *TypeNode, aliasee: *TypeNode) @This() {
-    var typ = &alias.typ;
-    typ.aliasee = &aliasee.typ;
-    aliasee.typ.alias = typ;
-    return @This() {.alias = alias, .aliasee = aliasee, .token = typ_token, .typ = typ};
+    const info = types.AliasInfo.init(&alias.typ, &aliasee.typ);
+    alias.typ.alias_info = info;
+    aliasee.typ.alias_info = info;
+    return @This() {.alias = alias, .aliasee = aliasee, .token = typ_token, .typ = &alias.typ};
   }
 };
 
@@ -272,7 +273,7 @@ pub const AstNode = union(AstType) {
     };
   }
 
-  pub fn getType(self: *@This()) ?*NType {
+  pub fn getType(self: *@This()) ?*Type {
     return switch (self.*) {
       .AstNumber, .AstString, .AstBool, .AstNil => |lit| lit.typ,
       .AstBinary => |bin| bin.typ,

@@ -8,6 +8,13 @@ pub fn append(comptime T: type, list: *std.ArrayList(T), val: T) void {
   };
 }
 
+pub fn set(comptime K: type, comptime V: type, map: *std.AutoArrayHashMap(K, V), key: K, val: V) void {
+  map.put(key, val) catch |e| {
+    std.debug.print("error: {}", .{e});
+    std.os.exit(1);
+  };
+}
+
 pub fn print(comptime fmt: []const u8, args: anytype) void {
   var out_w = std.io.getStdOut().writer();
   out_w.print(fmt, args) catch return;

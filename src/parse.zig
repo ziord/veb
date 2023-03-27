@@ -1,16 +1,19 @@
 const std = @import("std");
 const lex = @import("lex.zig");
 const ast = @import("ast.zig");
-const types = @import("types.zig");
+const types = @import("type.zig");
 const util = @import("util.zig");
 const NovaAllocator = @import("allocator.zig");
 
 const Node = ast.AstNode;
 const exit = std.os.exit;
-const NTypeKind = types.NTypeKind;
-const TName = types.TName;
-const TUnion = types.TUnion;
-const NType = types.NType;
+const TypeKind = types.TypeKind;
+const Type = types.Type;
+const Generic = types.Generic;
+const Union = types.Union;
+const Variable = types.Variable;
+const Nullable = types.Nullable;
+const Concrete = types.Concrete;
 
 // maximum number of elements of a list literal 
 const MAX_LISTING_ELEMS = 0xff;
@@ -380,102 +383,131 @@ pub const Parser = struct {
     return node;
   }
 
-  inline fn assertMaxTParams(self: *Self, typ: *NType) void {
-    if (typ.tparams.len >= types.MAX_TPARAMS) {
+  inline fn assertMaxTParams(self: *Self, typ: *Generic) void {
+    if (typ.tparams.items.len >= types.MAX_TPARAMS) {
       self.current_tok.msg = "maximum type parameters exceeded";
       self.err(self.current_tok);
     }
   }
 
-  inline fn assertNonEmptyTParams(self: *Self, typ: *NType) void {
-    if (typ.tparams.len == 0) {
+  inline fn assertBuiltinExpTParams(self: *Self, typ: *Generic) void {
+    if (typ.base.isSimple()) {
+      var conc = typ.base.kind.Concrete;
+      if (conc.tkind == .TyClass) {
+        var tok = conc.variable.?.tokens.getLast();
+        // list or map
+        var exp: usize = if (tok.ty == .TkList) 1 else if (tok.ty == .TkMap) 2 else return;
+        if (typ.tparams.items.len != exp) {
+          tok.msg = "Generic type instantiated with wrong number of paramters";
+          self.err(tok);
+        }
+      }
+    }
+    self.assertNonEmptyTParams(typ);
+  }
+
+  inline fn assertNonEmptyTParams(self: *Self, typ: *Generic) void {
+    if (typ.tparams.items.len == 0) {
       self.previous_tok.msg = "Empty type parameters not allowed";
       self.err(self.previous_tok);
     }
   }
 
-  inline fn assertUniqueTParams(self: *Self, alias: *NType, param: *NType) void {
-    for (alias.tparams.getSlice()) |typ| {
-      var token = param.name.?.tokens.items[0];
-      if (std.mem.eql(u8, typ.name.?.tokens.items[0].value, token.value)) {
+  inline fn assertUniqueTParams(self: *Self, alias: *Generic, param: *Type) void {
+    for (alias.getSlice()) |typ| {
+      // `param` and `typ` have Variable.tokens equal to size 1.
+      var token = param.variable().tokens.getLast();
+      if (std.mem.eql(u8, typ.variable().tokens.getLast().value, token.value)) {
         token.msg = "Redefinition of alias type parameter";
         self.err(token);
       }
     }
   }
 
-  fn aliasParam(self: *Self) NType {
-    var name = TName.init(self.allocator);
+  fn aliasParam(self: *Self) Type {
     var debug = self.current_tok;
     self.consume(.TkIdent);
-    util.append(lex.Token, &name.tokens, debug);
+    var typ = Type.newVariable(self.allocator, debug);
+    typ.variable().append(debug);
     if (self.check(.TkDot)) {
       self.current_tok.msg = "Expected single identifier, found multiple";
       self.err(self.current_tok);
     }
-    return NType.init(NTypeKind.TyName, name, debug);
+    return typ;
   }
 
-  fn refType(self: *Self) NType {
-    var name = TName.init(self.allocator);
+  fn builtinType(self: *Self) Type {
+    // handle builtin list/map type
     var debug = self.current_tok;
-    util.append(lex.Token, &name.tokens, self.current_tok);
+    self.advance();
+    var tvar = Variable.init(self.allocator);
+    tvar.append(debug);
+    var conc = Type.newConcrete(.TyClass, debug.value, debug);
+    conc.kind.Concrete.name = debug.value;
+    conc.kind.Concrete.variable = tvar;
+    return Type.newGeneric(self.allocator, conc.box(self.allocator), debug);
+  }
+
+  fn refType(self: *Self) Type {
     self.consume(.TkIdent);
+    var typ = Type.newVariable(self.allocator, self.previous_tok);
+    typ.variable().append(self.previous_tok);
     while (self.match(.TkDot)) {
       self.consume(.TkIdent);
-      util.append(lex.Token, &name.tokens, self.previous_tok);
+      typ.variable().append(self.previous_tok);
     }
-    return NType.init(NTypeKind.TyName, name, debug);
+    return typ;
   }
 
-  fn builtinOrRefType(self: *Self) NType {
+  fn builtinOrRefType(self: *Self) Type {
     if (self.check(.TkIdent)) {
       return self.refType();
+    } else if (self.check(.TkList) or self.check(.TkMap)) {
+      return self.builtinType();
     }
-    var kind: NTypeKind = switch (self.current_tok.ty) {
+    var tkind: TypeKind = switch (self.current_tok.ty) {
       .TkBool => .TyBool,
       .TkNum => .TyNumber,
       .TkStr => .TyString,
-      .TkList => .TyList,
-      .TkMap => .TyMap,
       // TODO: func, method, class, instance
       else => {
         self.current_tok.msg = "Invalid type-start";
         self.err(self.current_tok);
       }
     };
-    // direct types such as listed above do not need names
-    var typ = NType.init(kind, null, self.current_tok);
+
+    // direct 'unit' types such as listed above do not need names
+    var typ = Type.newConcrete(tkind, null, self.current_tok);
     self.advance();
     return typ;
   }
 
-  fn abstractType(self: *Self) NType {
+  fn abstractType(self: *Self) Type {
     // AbstractType := TypeName
     // TypeName    := Ident TypeParams?
     // TypeParams  := "{" Ident ( "," Ident )* "}"
     self.consume(.TkIdent);
-    var name = TName.init(self.allocator);
-    util.append(lex.Token, &name.tokens, self.previous_tok);
-    var typ = NType.init(.TyName, name, self.previous_tok);
+    var typ = Type.newVariable(self.allocator, self.previous_tok);
+    typ.variable().append(self.previous_tok);
     if (self.match(.TkLCurly)) {
+      var gen = Generic.init(self.allocator, typ.box(self.allocator));
       while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
-        if (typ.tparams.len > 0) self.consume(.TkComma);
-        self.assertMaxTParams(&typ);
+        if (gen.tparams.items.len > 0) self.consume(.TkComma);
+        self.assertMaxTParams(&gen);
         var param = self.aliasParam();
-        self.assertUniqueTParams(&typ, &param);
-        typ.tparams.params[typ.tparams.len] = util.box(NType, param, self.allocator);
-        typ.tparams.len += 1;
+        self.assertUniqueTParams(&gen, &param);
+        gen.append(param.box(self.allocator));
       }
-      self.assertNonEmptyTParams(&typ);
+      self.assertNonEmptyTParams(&gen);
       self.consume(.TkRCurly);
+      return gen.toType(self.previous_tok);
     }
     return typ;
   }
 
-  fn tPrimary(self: *Self) NType {
+  fn tPrimary(self: *Self) Type {
     // Primary  :=  Builtin | Reference | “(“ Expression “)” | Primary “?”
-    var typ: NType = undefined;
+    var typ: Type = undefined;
     if (self.match(.TkLBracket)) {
       typ = self.tExpr();
       self.consume(.TkRBracket);
@@ -485,7 +517,7 @@ pub const Parser = struct {
     return typ;
   }
 
-  fn tGeneric(self: *Self) NType {
+  fn tGeneric(self: *Self) Type {
     // Generic := ( Primary | Primary "{" Expression ( "," Expression )* "}" ) "?"?
     var typ = self.tPrimary();
     if (self.match(.TkLCurly)) {
@@ -493,45 +525,57 @@ pub const Parser = struct {
         self.previous_tok.msg = "Cannot instantiate simple type as generic";
         self.err(self.previous_tok);
       }
-      while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
-        if (typ.tparams.len > 0) self.consume(.TkComma);
-        self.assertMaxTParams(&typ);
-        var param = self.tExpr();
-        typ.tparams.params[typ.tparams.len] = util.box(NType, param, self.allocator);
-        typ.tparams.len += 1;
+      var gen: *Generic = undefined;
+      var ret: Type = undefined;
+      if (typ.isGeneric()) {
+        ret = typ;
+      } else {
+        var tmp = Generic.init(self.allocator, typ.box(self.allocator));
+        ret = tmp.toType(self.previous_tok);
       }
-      self.assertNonEmptyTParams(&typ);
+      gen = ret.generic();
+      while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
+        if (gen.tparams.items.len > 0) self.consume(.TkComma);
+        self.assertMaxTParams(gen);
+        var param = self.tExpr();
+        gen.append(param.box(self.allocator));
+      }
+      self.assertNonEmptyTParams(gen);
+      // check that builtin generic types are properly instantiated
+      self.assertBuiltinExpTParams(gen);
       self.consume(.TkRCurly);
+      typ = ret;
+    } else if (typ.isGeneric()) {
+      self.assertBuiltinExpTParams(typ.generic());
     }
     if (self.match(.TkQMark)) {
-      var nsubtype = typ;
-      if (nsubtype.kind == .TyNullable) {
+      var subtype = typ;
+      if (subtype.isNullable()) {
         self.previous_tok.msg = "Nullable type cannot be nullable";
         self.err(self.previous_tok);
       }
-      typ = NType.init(.TyNullable, null, self.previous_tok);
-      typ.nsubtype = util.box(NType, nsubtype, self.allocator);
+      typ = Type.newNullable(subtype.box(self.allocator), self.previous_tok);
     }
     return typ;
   }
 
-  fn tUnion(self: *Self) NType {
+  fn tUnion(self: *Self) Type {
     // Union := Generic ( “|” Generic )*
     var typ = self.tGeneric();
     if (self.check(.TkPipe)) {
-      var gen = typ;
-      typ = NType.init(.TyUnion, null, self.current_tok);
-      typ.union_ = TUnion.init(self.allocator);
-      util.append(*NType, &typ.union_.?.types, util.box(NType, gen, self.allocator));
+      var token = self.current_tok;
+      var uni = Union.init(self.allocator);
+      uni.set(typ.box(self.allocator));
       while (self.match(.TkPipe)) {
-        gen = self.tGeneric();
-        util.append(*NType, &typ.union_.?.types, util.box(NType, gen, self.allocator));
+        typ = self.tGeneric();
+        uni.set(typ.box(self.allocator));
       }
+      return uni.toType(token);
     }
     return typ;
   }
 
-  fn tExpr(self: *Self) NType {
+  fn tExpr(self: *Self) Type {
     // Expression := Union
     return self.tUnion();
   }
@@ -545,50 +589,55 @@ pub const Parser = struct {
     return node;
   }
 
-  fn checkGenericTParam(self: *Self, tvar: *NType, cct_ty: *NType) ?*lex.Token {
-    // T{K} -> P{Q | K{V}}
-    if (cct_ty.kind == .TyName) {
-      if (cct_ty.name.?.eql(&tvar.name.?) and cct_ty.isGeneric()) {
-        return &cct_ty.name.?.tokens.items[0];
-      }
-    }
-    if (cct_ty.kind == .TyNullable) {
-      return self.checkGenericTParam(tvar, cct_ty.nsubtype.?);
-    }
-    if (cct_ty.kind == .TyUnion) {
-      for (cct_ty.union_.?.types.items) |ty| {
-        if (self.checkGenericTParam(tvar, ty)) |tok| {
-          return tok;
+  fn checkGenericTParam(self: *Self, tvar: *Type, rhs_ty: *Type) ?*lex.Token {
+    // T{K} -> P{Q | K{V}}, here K is tvar
+    switch (rhs_ty.kind) {
+      .Generic => |*gen| {
+        switch (gen.base.kind) {
+          .Variable => |*vr| {
+            if (vr.eql(&tvar.kind.Variable)) {
+              return &vr.tokens.items[0];
+            }
+          },
+          else => {}
         }
-      }
-    }
-    if (cct_ty.isGeneric()) {
-      for (0..cct_ty.tparams.len) |i| {
-        var param = cct_ty.tparams.params[i];
-        if (self.checkGenericTParam(tvar, param)) |tok| {
-          return tok;
+      },
+      .Union => |*uni| {
+        for (uni.variants.values()) |ty| {
+          if (self.checkGenericTParam(tvar, ty)) |tok| {
+            return tok;
+          }
         }
-      }
+      },
+      .Nullable => |nul| {
+        return self.checkGenericTParam(tvar, nul.subtype);
+      },
+      else => {},
     }
     return null;
   }
 
-  fn assertNoGenericParameterTypeVariable(self: *Self, abs_ty: *NType, cct_ty: *NType) void {
+  fn assertNoGenericParameterTypeVariable(self: *Self, abs_ty: *Type, rhs_ty: *Type) void {
     // Check that no type variable in generic params of the type alias is used "generically" 
     // in the aliasee
-    for (0..abs_ty.tparams.len) |i| {
-      var param = abs_ty.tparams.params[i];
-      if (self.checkGenericTParam(param, cct_ty)) |tok| {
-        tok.msg = "type variable in generic parameter cannot be generic";
-        self.err(tok.*);
-      }
+    switch (abs_ty.kind) {
+      .Generic => |*gen| {
+        for (gen.getSlice()) |param| {
+          if (self.checkGenericTParam(param, rhs_ty)) |tok| {
+            tok.msg = "type variable in generic parameter cannot be generic";
+            self.err(tok.*);
+          }
+        }
+      },
+      else => {}
     }
   }
 
-  fn assertNoDirectRecursiveAlias(self: *Self, abs_ty: *NType, cct_ty: *NType) void {
-    // Check that type alias name is not used in the aliasee. This is not an in-depth
+  fn assertNoDirectRecursiveAlias(self: *Self, abs_ty: *Type, rhs_ty: *Type) void {
+    // Check that type alias name is not used directly in the aliasee. This is not an in-depth
     // check, as it's possible for the alias to be meaningfully hidden in the aliasee.
-    if (self.checkGenericTParam(abs_ty, cct_ty)) |tok| {
+    var lhs_ty = if (abs_ty.isGeneric()) abs_ty.generic().base else abs_ty;
+    if (self.checkGenericTParam(lhs_ty, rhs_ty)) |tok| {
       tok.msg = "type alias cannot be used directly in the aliasee";
       self.err(tok.*);
     }

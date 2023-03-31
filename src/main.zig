@@ -220,6 +220,9 @@ test "types" {
   \\ let z2 = {12: ['foxy']} as (map{num, list{str}})?
   \\ let t = 5 as (num | str)?
   \\ (t as (str | num) ?)
+  \\ type T{K, V} = K | V
+  \\ let p: T{num, str} = 5
+  \\ p as num + 3
   ;
   _ = try doTest(src);
 }
@@ -280,13 +283,104 @@ test "linking" {
   _ = try doTest(src3);
 }
 
-test "self-reference" {
+test "recursive types" {
   var src =
+  \\ # simple recursive
   \\ type K = str | bool | num
   \\ type V = num | str | map{K, V}
   \\ let p = [1, [2], 3, [1, 2, [3]]]
-  // TODO:
-  // \\ {'abc' as K: 123 as V, true as K: 0xff as V, 'obs' as K: 'fin' as V, 0.123 as K: {'abc' as K: 123 as V, true as K: 0xff as V, 'obs' as K: 'fin' as V}}
+  \\ let x: V = {'abc' as K: 123 as V, true: 0xff, 'obs': 'fin', 0.123: {'abc' as K: 123 as V, true: 0xff, 'obs': 'fin'}}
+  \\ x
+  \\ # recursive nullable
+  \\ type R = str | num | list{R}
+  \\ type S = list{S? | str}
+  \\ let x: R = 'fox'
+  \\ x = [[[['foo']], 3, [[[4, 5], 'bar']], 'ok'], [[[]]], []]
+  \\ x
+  \\ let x: S = [[[[[[[[[] as S?, [[[[[]]]]]]]]]]]], [[]], []]
+  \\ x
+  \\ # recursive generics
+  \\ type R{K} = str | K | list{R{K}}
+  \\ type S{K} = K | str | list{S{K}}
+  \\ let x: R{num}? = [5, 'fox', [[[[33]]]]]
+  \\ let y: S{num} = [1]
+  \\ x = y
+  \\ x
+  \\ # mutually recursive 1
+  \\ type R = str | num | list{S}
+  \\ type S = num | str | list{R}
+  \\ let x: R = [5, 'fox', [[[[33]]]]]
+  \\ let y: S = [1]
+  \\ y = x
+  \\ x
+  \\ # mutually recursive 2
+  \\ type R = str | num | list{S | R}
+  \\ type S = num | str | list{R | S}
+  \\ let x: R = [5, 'fox', [[[[33]]]]]
+  \\ let y: S = [1]
+  \\ y = x
+  \\ x = y
+  \\ # mutually recursive 3
+  \\ type R = str | num | list{S | R?}
+  \\ type S = num | str | list{R | S?}
+  \\ let x: R = [5, 'fox', [[[[33]]]]]
+  \\ let y: S = [1]
+  \\ x = y
+  \\ y = x
+  \\ # mutually recursive 4
+  \\ type R = str | num | list{S? | R?}
+  \\ type S = num | str | list{R? | S?}
+  \\ let x: R = [5, 'fox', [[[[33]]]]]
+  \\ let y: S = [1]
+  \\ y = x
+  \\ x = y
+  \\ # mutually recursive 5
+  \\ type R = str | num | list{R? | S?}
+  \\ type S = num | str | list{R? | S?}
+  \\ let x: R = [5, 'fox', [[[[33]]]]]
+  \\ let y: S = [1]
+  \\ x = y
+  \\ y = x
+  \\ # mutually recursive 6
+  \\ type R = str | num | list{R? | S?}
+  \\ type S = num | str | list{S? | R?}
+  \\ let x: R = [5, 'fox', [[[[33]]]]]
+  \\ let y: S = [1]
+  \\ y = x
+  \\ x = y
+  \\ # mutually recursive generics 1
+  \\ type R{K} = str | K | list{S{K}}
+  \\ type S{K} = num | K | list{R{K} | S{K}}
+  \\ let x: R{num} = [5, [[[[33]]]]]
+  \\ let y: S{str} = ['fox', [[[[[5]]]]]]
+  \\ y = x
+  \\ x = y
+  \\ # mutually recursive generics 2
+  \\ type R{K} = str | K | list{S{K} | R{K}}
+  \\ type S{K} = num | K | list{R{K} | S{K}}
+  \\ let x: R{num} = [5, [[[[33]]]]]
+  \\ let y: S{str} = ['fox', [[[[[5]]]]]]
+  \\ y = x
+  \\ x = y
+  \\ # mutually recursive generics 3
+  \\ type R{K, V} = V | K | list{R{K, V} | S{K, V}}
+  \\ type S{K, V} = K | V | list{S{K, V} | R{K, V}}
+  \\ let x: R{num, str} = [5, [[[[33]]]]]
+  \\ let y: S{str, num} = ['fox', [[[[[5]]]]]]
+  \\ x = y
+  \\ y = x as S{str, num}
+  \\ y = x
+  \\ # mutually recursive generics 4
+  \\ type R{K, V} = V | K | list{R{K, V}? | S{K, V}?}
+  \\ type S{K, V} = K | V | list{S{K, V}? | R{K, V}?}
+  \\ let x: R{num, str} = [5, [[[[33]]], nil]] as R{num, str}
+  \\ let y: S{str, num} = ['fox', [[([[[5]], nil]) as S{str, num}]]]
+  \\ y = x
+  \\ x = y
+  \\ # no conflicts
+  \\ type A{T} = T
+  \\ let x: A{A{num}} = 5
+  \\
   ;
   _ = try doTest(src);
 }
@@ -309,8 +403,8 @@ test "typecheck" {
   \\ b as num + 5 # okay, since the active type of a is propagated to b.
   \\ let x = []
   \\ x = [1, 2, 3]
-  // \\ type T = str | num | list{T}
-  // \\ let p: T = []
+  \\ type T = str | num | list{T}
+  \\ let p: T = [[1,[],'2']]
   // \\ type X = (num | str)?  # Nullable does not distribute over it's subtype
   // \\ let y: X = 'food' as str? # fails. 
   ;

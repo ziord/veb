@@ -52,7 +52,7 @@ pub const TypeChecker = struct {
     return error.TypeCheckError;
   }
 
-  pub fn findType(self: *Self, name: []const u8) ?*Type {
+  fn findType(self: *Self, name: []const u8) ?*Type {
     // TODO
     if (self.ctx.typScope.lookup(name)) |ty| {
       return switch (ty.kind) {
@@ -63,7 +63,7 @@ pub const TypeChecker = struct {
     return null;
   }
 
-  pub fn findName(self: *Self, name: []const u8) ?*Type {
+  fn findName(self: *Self, name: []const u8) ?*Type {
     if (self.ctx.varScope.lookup(name)) |ty| {
       return switch (ty.kind) {
         .Concrete, .Variable => ty,
@@ -292,172 +292,19 @@ pub const TypeChecker = struct {
     return undefined;
   }
 
-  /// check cast follows coercion rules
-  fn _checkCast(
-      self: *Self, node_ty: *Type,
-      cast_ty: *Type, debug: Token,
-      emit: bool, report_node_ty: *Type, report_cast_ty: *Type
-  ) TypeCheckError!*Type {
-    if (cast_ty.isNilTy()) {
-      return self.errorOrEmit(emit, debug, "Illegal cast to nil", .{});
-    }
-    // any type may be cast to bool
-    if (cast_ty.isBoolTy()) {
-      return cast_ty;
-    }
-    // nil may cast to nullable
-    if (node_ty.isNilTy()) {
-      if (cast_ty.isNullable()) {
-        return cast_ty;
-      } else {
-        return self.errorOrEmit(emit, debug, "Illegal cast from 'nil' to '{s}'", .{self.getTypename(report_cast_ty)});
-      }
-    }
-    // a nullable type may be cast to bool or an assignable-nullable type
-    if (node_ty.isNullable()) {
-      if (cast_ty.isNullable()) {
-        _ = try self._checkCast(node_ty.nullable().subtype, cast_ty.nullable().subtype, debug, emit, report_node_ty, report_cast_ty);
-        return cast_ty;
-      }
-      return self.errorOrEmit(emit, debug, "Nullable type may only cast to bool or equi-nullable type", .{});
-    }
-    // any type may be cast to nullable of that type, i.e. type -> type?
-    if (cast_ty.isNullable()) {
-      _ = try self._checkCast(node_ty, cast_ty.nullable().subtype, debug, emit, report_node_ty, report_cast_ty);
-      return cast_ty;
-    }
-    if (node_ty.isGeneric() and cast_ty.isGeneric()) {
-      var node_gen = node_ty.generic();
-      var cast_gen = cast_ty.generic();
-      // check if the base types are assignable
-      _ = self.checkAssign(cast_gen.base, node_gen.base, debug, false) catch {
-        return self.errorOrEmit(
-          emit, debug,
-          "Cannot cast from type '{s}' to type '{s}', because neither types sufficiently overlaps",
-          .{self.getTypename(report_node_ty), self.getTypename(report_cast_ty)}
-        );
-      };
-      // empty generic to specialized generic
-      if (node_gen.tparams_len() == 0) return cast_ty;
-      // non-empty to another type
-      try self.validateGenericParamSize(node_gen.tparams_len(), cast_gen.tparams_len(), debug);
-      for (node_gen.tparams.items, 0..) |param, i| {
-        _ = try self._checkCast(param, cast_gen.tparams.items[i], debug, emit, report_node_ty, report_cast_ty);
-      }
-      return cast_ty;
-    }
-    // upcasting/widening
-    if (cast_ty.containsType(node_ty)) {
-      std.debug.assert(cast_ty.isUnion());
-      cast_ty.union_().active = node_ty;
-      return cast_ty;
-    }
-    // downcasting
-    if (node_ty.containsType(cast_ty)) {
-      std.debug.assert(node_ty.isUnion());
-      if (node_ty.union_().active) |active| {
-        // check if the active type is assignable to the cast type
-        _ = self.checkAssign(cast_ty, active, debug, false) catch {
-          return self.errorOrEmit(
-            emit, debug,
-            "Cannot cast from type '{s}' to type '{s}', because the active type is '{s}'",
-            .{self.getTypename(report_node_ty), self.getTypename(report_cast_ty), self.getTypename(active)}
-          );
-        };
-        return cast_ty;
-      } else {
-        // TODO:
-        // we need to keep track of a cast like this. For example:
-        // let p: str | num = 5
-        // (p as num) + 2  # ok
-        // (p as str).concat(...) # not okay  <-- to avoid this, we need to somehow keep 
-        // track of casts performed without an active type being known (in runtime cases)
-        // just return the union in this case, for now.
-        return node_ty;
-      }
-    }
-    // Due to the nature of typeid, T | S is equal to S | T.
-    // Hence, we allow generics and other checks take precedence before equality comparison,
-    // that way, things like: x: map{num, str} ; x as map{str, num} would be properly caught.
-    if (node_ty.typeid() == cast_ty.typeid()) {
-      return cast_ty;
-    }
-    return self.errorOrEmit(
-      emit, debug,
-      "Cannot cast from type '{s}' to type '{s}'",
-      .{self.getTypename(report_node_ty), self.getTypename(report_cast_ty)}
-    );
-  }
-
-  /// check assignment follows assignment rules
-  fn _checkAssign(self: *Self, target: *Type, source: *Type) ?*Type {
-    if (target == source) return target;
-    switch (target.kind) {
-      .Concrete => |conc| {
-        if (!source.isConcrete()) return null;
-        switch (conc.tkind) {
-          .TyClass => {
-            // resolved name must match for target and source
-            // TODO: this would need to be updated when class inheritance is implemented
-            if (conc.name != null and source.concrete().name != null) {
-              if (std.mem.eql(u8, conc.name.?, source.concrete().name.?)) {
-                return target;
-              }
-            }
-          },
-          else => {}
-        }
-      },
-      .Union => |*union_| {
-        if (source.isUnion() and target.typeid() == source.typeid()) {
-          if (source.union_().active) |active| {
-            union_.active = active;
-          }
-          return target;
-        }
-        if (target.containsType(source)) {
-          union_.active = source;
-          return target;
-        }
-      },
-      .Nullable => |nul| {
-        // NOTE: nullable type does not distribute over it's subtype.
-        // For example: (str | num)? !== str? | num?
-        // The subtype of a nullable type is its **own concrete** type.
-        if (source.isNilTy()) return target;
-        if (self._checkAssign(nul.subtype, source) != null) {
-          return target;
-        }
-      },
-      .Generic => |*gen| {
-        if (source.isGeneric()) {
-          var s_gen = source.generic();
-          if (self._checkAssign(gen.base, s_gen.base) == null) return null;
-          // less specific to specific, for ex: lex x = []; x = [1, 2, 3]
-          if (gen.tparams_len() == 0) return source;
-          self.validateGenericParamSize(gen.tparams_len(), s_gen.tparams_len(), source.debug) catch return null;
-          for (gen.tparams.items, 0..) |param, i| {
-            var res = self._checkAssign(param, s_gen.tparams.items[i]);
-            if (res == null) return res;
-          }
-          return target;
-        }
-      },
-      else => {},
-    }
-    // lowest precedence
-    if (target.typeid() == source.typeid()) {
-      return target;
-    }
-    return null;
-  }
-
   fn checkCast(self: *Self, node_ty: *Type, cast_ty: *Type, debug: Token, emit: bool) TypeCheckError!*Type {
-    return self._checkCast(node_ty, cast_ty, debug, emit, node_ty, cast_ty);
+    _ = node_ty.canBeCastTo(cast_ty, self.allocator) catch {
+      return self.errorOrEmit(
+        emit, debug,
+        "Cannot cast from type '{s}' to type '{s}'",
+        .{self.getTypename(node_ty), self.getTypename(cast_ty)}
+      );
+    };
+    return cast_ty;
   }
 
   fn checkAssign(self: *Self, target: *Type, source: *Type, debug: ?Token, emit: bool) !*Type {
-    var typ = self._checkAssign(target, source);
+    var typ = target.canBeAssigned(source, self.allocator);
     if (typ == null) {
       return self.errorOrEmit(
         emit,

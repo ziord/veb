@@ -4,7 +4,7 @@ const VarNode = @import("ast.zig").VarNode;
 const Token = @import("lex.zig").Token;
 
 const ID_HASH = 0x12;
-const MAX_STEPS = MAX_RECURSIVE_DEPTH / 2;
+pub const MAX_STEPS = MAX_RECURSIVE_DEPTH / 2;
 pub const MAX_TPARAMS = 0xA;
 pub const MAX_RECURSIVE_DEPTH = 0x3e8;
 pub const TypeHashSet = std.AutoArrayHashMap(u32, *Type);
@@ -57,8 +57,6 @@ pub const Union = struct {
   variants: TypeHashSet,
   /// the active type in the union
   active: ?*Type = null,
-  /// recursive flag
-  recursive: bool = false,
 
   pub fn init(allocator: std.mem.Allocator) @This() {
     return Union{.variants = TypeHashSet.init(allocator)};
@@ -72,14 +70,6 @@ pub const Union = struct {
     self.variants.put(typ.typeid(), typ) catch |e| {
       std.debug.print("error: {}", .{e});
       std.os.exit(1);
-    };
-  }
-
-  pub fn clone(self: *@This()) @This() {
-    return Union{
-      .variants = self.variants.clone() catch std.os.exit(12),
-      .active = self.active,
-      .recursive = self.recursive,
     };
   }
 
@@ -113,13 +103,6 @@ pub const Generic = struct {
   pub fn tparams_len(self: *@This()) usize {
     return self.tparams.items.len;
   }
-
-  pub fn clone(self: *@This()) @This() {
-    return Generic{
-      .base = self.base,
-      .tparams = self.tparams.clone() catch std.os.exit(12)
-    };
-  }
 };
 
 pub const Nullable = struct {
@@ -152,6 +135,14 @@ pub const Variable = struct {
   }
 };
 
+pub const Recursive = struct {
+  base: *Type,
+
+  pub fn init(base: *Type) @This() {
+    return @This() {.base = base};
+  }
+};
+
 pub const AliasInfo = struct {
   lhs: *Type, // alias 
   rhs: *Type, // aliasee
@@ -167,14 +158,7 @@ pub const TypeInfo = union(enum) {
   Variable: Variable,
   Union: Union,
   Generic: Generic,
-
-  pub fn clone(self: *TypeInfo) TypeInfo {
-    return switch (self.*) {
-      .Union => |*t| .{.Union = t.clone()},
-      .Generic => |*t| .{.Generic = t.clone()},
-      else => self.*,
-    };
-  }
+  Recursive: Recursive,
 };
 
 pub const Type = struct {
@@ -194,6 +178,39 @@ pub const Type = struct {
     var al = allocate(Self, allocator);
     al.* = self;
     return al;
+  }
+
+  fn setRestFields(ty1: *Self, ty2: *Self) void {
+    ty1.tid = ty2.tid;
+    ty1.alias_info = ty2.alias_info;
+    ty1.ident = ty2.ident;
+    // ty1.debug = ty2.debug;
+  }
+
+  pub fn clone(self: *Self, A: std.mem.Allocator) *Self {
+    switch (self.kind) {
+      .Concrete, .Variable, .Nullable, .Recursive => return self,
+      .Generic => |*gen| {
+        var new = Generic.init(A, gen.base.clone(A));
+        new.tparams.ensureTotalCapacity(gen.tparams.capacity) catch {};
+        for (gen.tparams.items) |ty| {
+          new.append(ty.clone(A));
+        }
+        var ret = Type.init(.{.Generic = new}, self.debug).box(A);
+        ret.setRestFields(self);
+        return ret;
+      },
+      .Union => |*uni| {
+        var new = Union.init(A);
+        new.variants.ensureTotalCapacity(uni.variants.capacity()) catch {};
+        for (uni.variants.values()) |ty| {
+          new.set(ty.clone(A));
+        }
+        var ret = Type.init(.{.Union = new}, self.debug).box(A);
+        ret.setRestFields(self);
+        return ret;
+      },
+    }
   }
 
   pub fn newConcrete(kind: TypeKind, name: ?[]const u8, debug: Token) Self {
@@ -221,6 +238,11 @@ pub const Type = struct {
     var gen = Generic.init(allocator, base);
     return Self.init(.{.Generic = gen}, debug);
   }
+
+  pub fn newRecursive(base: *Self, debug: Token) Self {
+    var rec = Recursive.init(base);
+    return Self.init(.{.Recursive = rec}, debug);
+  }
  
   /// simple/concrete 'unit' type
   pub inline fn isSimple(self: *Self) bool {
@@ -241,7 +263,7 @@ pub const Type = struct {
   }
 
   /// a type that may require some form of substitution
-  pub fn isGeneric(self: *Self) bool {
+  pub inline fn isGeneric(self: *Self) bool {
     return switch (self.kind) {
       .Generic => true,
       else => false,
@@ -249,7 +271,7 @@ pub const Type = struct {
   }
 
   /// a nullable type
-  pub fn isNullable(self: *Self) bool {
+  pub inline fn isNullable(self: *Self) bool {
     return switch (self.kind) {
       .Nullable => true,
       else => false,
@@ -257,7 +279,7 @@ pub const Type = struct {
   }
 
   /// a union type
-  pub fn isUnion(self: *Self) bool {
+  pub inline fn isUnion(self: *Self) bool {
     return switch (self.kind) {
       .Union => true,
       else => false,
@@ -265,9 +287,17 @@ pub const Type = struct {
   }
 
   /// a name/variable type
-  pub fn isVariable(self: *Self) bool {
+  pub inline fn isVariable(self: *Self) bool {
     return switch (self.kind) {
       .Variable => true,
+      else => false,
+    };
+  }
+
+  /// a recursive type
+  pub inline fn isRecursive(self: *Self) bool {
+    return switch (self.kind) {
+      .Recursive => true,
       else => false,
     };
   }
@@ -319,6 +349,10 @@ pub const Type = struct {
 
   pub inline fn union_(self: *Self) *Union {
     return &self.kind.Union;
+  }
+
+  pub inline fn recursive(self: *Self) Recursive {
+    return self.kind.Recursive;
   }
 
   fn checkVariable(self: *Self, startStep: usize, maxSteps: usize) !bool {
@@ -376,12 +410,13 @@ pub const Type = struct {
         }
       },
       .Union => |*uni| {
+        self.tid = 6 << ID_HASH;
         for (uni.variants.values()) |ty| {
           self.tid += ty.typeid();
         }
       },
       .Nullable => |nul| {
-        self.tid = 6 << ID_HASH;
+        self.tid = 7 << ID_HASH;
         self.tid += nul.subtype.typeid();
       },
       .Variable => |vr| {
@@ -393,24 +428,259 @@ pub const Type = struct {
           }
         }
       },
+      .Recursive => |rec| {
+        self.tid = rec.base.typeid();
+      }
     }
     std.debug.assert(self.tid != 0);
     return self.tid;
   }
 
-  pub fn recContainsType(self: *Self, typ: *Self) bool {
-    _ = typ;
+  fn getNullVariableType(self: *Self, allocator: std.mem.Allocator, debug: Token) *Type {
     _ = self;
+    var nul = Self.newVariable(allocator, debug);
+    var token = Token.getDefault();
+    (&token).* = debug;
+    token.value = "$$null$$";
+    token.ty = .TkIdent;
+    nul.variable().append(token);
+    return nul.box(allocator);
+  }
+
+  fn _unfoldRecursive(typ: *Self, step: usize, list: *TypeList, visited: *TypeHashSet) void {
+    if (step > 0 and typ.isRecursive() and visited.get(typ.typeid()) != null) {
+      return;
+    }
+    switch (typ.kind) {
+      .Concrete => util.append(*Type, list, typ),
+      .Variable => util.append(*Type, list, typ),
+      .Nullable => |nul| {
+        util.append(*Type, list, typ.getNullVariableType(list.allocator, typ.debug));
+        nul.subtype._unfoldRecursive(step + 1, list, visited);
+      },
+      .Generic => |*gen| {
+        gen.base._unfoldRecursive(step + 1, list, visited);
+        for (gen.tparams.items) |param| {
+          param._unfoldRecursive(step + 1, list, visited);
+        }
+      },
+      .Union => |uni| {
+        for (uni.variants.values()) |ty| {
+          ty._unfoldRecursive(step + 1, list, visited);
+        }
+      },
+      .Recursive => |rec| {
+        util.set(u32, *Type, visited, typ.typeid(), typ);
+        rec.base._unfoldRecursive(step + 1, list, visited);
+      }
+    }
+  }
+
+  fn _unfold(self: *Self, list: *TypeList) void {
+    switch (self.kind) {
+      .Concrete => util.append(*Type, list, self),
+      .Variable => util.append(*Type, list, self),
+      .Nullable => |nul| {
+        util.append(*Type, list, self.getNullVariableType(list.allocator, self.debug));
+        nul.subtype._unfold(list);
+      },
+      .Generic => |*gen| {
+        gen.base._unfold(list);
+        for (gen.tparams.items) |param| {
+          param._unfold(list);
+        }
+      },
+      .Union => |uni| {
+        for (uni.variants.values()) |ty| {
+          ty._unfold(list);
+        }
+      }, 
+      .Recursive => |rec| {
+        var visited = TypeHashSet.init(list.allocator);
+        util.set(u32, *Type, &visited, self.typeid(), self);
+        rec.base._unfoldRecursive(0, list, &visited);
+        visited.clearAndFree();
+      }
+    }
+  }
+
+  fn unfold(self: *Self, allocator: std.mem.Allocator) TypeList {
+    // TODO: use TypeHashSet for unfold?
+    var list = TypeList.init(allocator);
+    self._unfold(&list);
+    return list;
+  }
+
+  fn recContainsType(rec_list: *TypeList, o_list: *TypeList) bool {
+    start: 
+    for (o_list.items) |ty| {
+      for (rec_list.items) |rty| {
+        if (ty.typeid() == rty.typeid()) {
+          continue :start;
+        }
+      }
+      return false;
+    }
+    return true;
+  }
+
+  pub fn canBeCastTo(node_ty: *Type, cast_ty: *Type, A: std.mem.Allocator) error{CastError}!*Type {
+    if (cast_ty.isNilTy()) {
+      return error.CastError;
+    }
+    // any type may be cast to bool
+    if (cast_ty.isBoolTy()) {
+      return cast_ty;
+    }
+    // nil may cast to nullable
+    if (node_ty.isNilTy()) {
+      if (cast_ty.isNullable()) {
+        return cast_ty;
+      } else {
+        return error.CastError;
+      }
+    }
+    // a nullable type may be cast to bool or an assignable-nullable type
+    if (node_ty.isNullable()) {
+      if (cast_ty.isNullable()) {
+        _ = try node_ty.nullable().subtype.canBeCastTo(cast_ty.nullable().subtype, A);
+        return cast_ty;
+      }
+      return error.CastError;
+    }
+    // any type may be cast to nullable of that type, i.e. type -> type?
+    if (cast_ty.isNullable()) {
+      _ = try node_ty.canBeCastTo(cast_ty.nullable().subtype, A);
+      return cast_ty;
+    }
+    if (node_ty.isGeneric() and cast_ty.isGeneric()) {
+      var node_gen = node_ty.generic();
+      var cast_gen = cast_ty.generic();
+      // check if the base types are assignable
+      if (cast_gen.base.canBeAssigned(node_gen.base, A) == null) return error.CastError;
+      // empty generic to specialized generic
+      if (node_gen.tparams_len() == 0) return cast_ty;
+      // non-empty to another type
+      if (node_gen.tparams_len() != cast_gen.tparams_len()) return error.CastError;
+      for (node_gen.tparams.items, 0..) |param, i| {
+        _ = try param.canBeCastTo(cast_gen.tparams.items[i], A);
+      }
+      return cast_ty;
+    }
+    // upcasting/widening
+    if (cast_ty.containsType(node_ty, A)) {
+      std.debug.assert(cast_ty.isUnion());
+      cast_ty.union_().active = node_ty;
+      return cast_ty;
+    }
+    // downcasting
+    if (node_ty.containsType(cast_ty, A)) {
+      std.debug.assert(node_ty.isUnion());
+      if (node_ty.union_().active) |active| {
+        // check if the active type is assignable to the cast type
+        if (cast_ty.canBeAssigned(active, A) == null) return error.CastError;
+        return cast_ty;
+      } else {
+        // TODO:
+        // we need to keep track of a cast like this. For example:
+        // let p: str | num = 5
+        // (p as num) + 2  # ok
+        // (p as str).concat(...) # not okay  <-- to avoid this, we need to somehow keep 
+        // track of casts performed without an active type being known (in runtime cases)
+        // just return the union in this case, for now.
+        return node_ty;
+      }
+    }
+    // Due to the nature of typeid, T | S is equal to S | T.
+    // Hence, we allow generics and other checks take precedence before equality comparison,
+    // that way, things like: x: map{num, str} ; x as map{str, num} would be properly caught.
+    if (node_ty.typeid() == cast_ty.typeid()) {
+      return cast_ty;
+    }
+    return error.CastError;
+  }
+
+  pub fn canBeAssigned(target: *Self, source: *Self, A: std.mem.Allocator) ?*Type {
+    if (target == source) return target;
+    switch (target.kind) {
+      .Concrete => |conc| {
+        if (!source.isConcrete()) return null;
+        switch (conc.tkind) {
+          .TyClass => {
+            // resolved name must match for target and source
+            // TODO: this would need to be updated when class inheritance is implemented
+            if (conc.name != null and source.concrete().name != null) {
+              if (std.mem.eql(u8, conc.name.?, source.concrete().name.?)) {
+                return target;
+              }
+            }
+          },
+          else => {}
+        }
+      },
+      .Union => |*uni| {
+        if (source.isUnion() and target.typeid() == source.typeid()) {
+          if (source.union_().active) |active| {
+            uni.active = active;
+          }
+          return target;
+        }
+        if (target.containsType(source, A)) {
+          uni.active = source;
+          return target;
+        }
+      },
+      .Nullable => |nul| {
+        // NOTE: nullable type does not distribute over it's subtype.
+        // For example: (str | num)? !== str? | num?
+        // The subtype of a nullable type is its **own concrete** type.
+        if (source.isNilTy()) return target;
+        var src = if (source.isNullable()) source.nullable().subtype else source;
+        if (nul.subtype.canBeAssigned(src, A) != null) {
+          return target;
+        }
+      },
+      .Generic => |*gen| {
+        if (source.isGeneric()) {
+          var s_gen = source.generic();
+          if (gen.base.canBeAssigned(s_gen.base, A) == null) return null;
+          // less specific to specific, for ex: lex x = []; x = [1, 2, 3]
+          if (gen.tparams_len() == 0) return source;
+          // specific to less specific, fox ex: let x: list{str} = ['fox']; x = []
+          if (s_gen.tparams_len() == 0) return target;
+          // len must match
+          if (s_gen.tparams_len() != gen.tparams_len()) return null;
+          for (gen.tparams.items, 0..) |param, i| {
+            var res = param.canBeAssigned(s_gen.tparams.items[i], A);
+            if (res == null) return res;
+          }
+          return target;
+        }
+      },
+      .Recursive => {
+        var flat_rec = target.unfold(A);
+        var flat_source = source.unfold(A);
+        if (Self.recContainsType(&flat_rec, &flat_source)) {
+          return target;
+        }
+      },
+      else => {},
+    }
+    // lowest precedence
+    if (target.typeid() == source.typeid()) {
+      return target;
+    }
+    return null;
   }
 
   /// check if typ is contained in self. This is false if self is not a union.
-  pub fn containsType(self: *Self, typ: *Self) bool {
+  pub fn containsType(self: *Self, typ: *Self, A: std.mem.Allocator) bool {
     switch (self.kind) {
       .Union => |*uni_a| {
         switch (typ.kind) {
           .Union => |*uni_b| {
             for (uni_b.variants.values()) |ty| {
-              if (!self.containsType(ty)) {
+              if (!self.containsType(ty, A)) {
                 return false;
               }
             }
@@ -420,12 +690,14 @@ pub const Type = struct {
             for (uni_a.variants.values()) |ty| {
               if (ty.typeid() == typ.typeid()) {
                 return true;
+              } else if (ty.canBeAssigned(typ, A)) |_| {
+                return true;
               }
             }
           }
         }
       },
-      else => return false
+      else => {}
     }
     return false;
   }
@@ -483,23 +755,21 @@ pub const Type = struct {
         var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
         var values = uni.variants.values();
         for (values, 0..) |typ, i| {
-          if (uni.recursive and typ.isUnion()) {
-            _ = try writer.write("{...}");
-          } else {
-            _ = try writer.write(try typ._typename(allocator, depth));
-            if (i != values.len - 1) {
-              _ = try writer.write(" | ");
-            }
+          _ = try writer.write(try typ._typename(allocator, depth));
+          if (i != values.len - 1) {
+            _ = try writer.write(" | ");
           }
         }
         return writer.context.items;
       },
       .Variable => |*vr| try writeName(allocator, &vr.tokens),
+      .Recursive => "{...}"
     };
   }
 
   pub fn typename(self: *Self, allocator: std.mem.Allocator) []const u8 {
     var depth: usize = 0;
+    if (self.alias_info) |info| return info.lhs._typename(allocator, &depth) catch "";
     return self._typename(allocator, &depth) catch "";
   }
 };

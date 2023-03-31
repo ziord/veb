@@ -10,6 +10,7 @@ pub const TypeKind = types.TypeKind;
 pub const TypeInfo = types.TypeInfo;
 pub const Generic = types.Generic;
 pub const Variable = types.Variable;
+pub const Recursive = types.Recursive;
 pub const Node = ast.AstNode;
 
 fn CreateMap(comptime K: type, comptime V: type) type {
@@ -31,101 +32,129 @@ fn CreateMap(comptime K: type, comptime V: type) type {
     pub fn get(self: *@This(), key: K) ?V {
       return self.map.get(key);
     }
+
+    pub fn del(self: *@This(), key: K) bool {
+      return self.map.remove(key);
+    }
   };
 }
 
-pub const Scope = struct {
-  decls: std.ArrayList(TypeMap),
-  allocator: std.mem.Allocator,
+fn GenScope(comptime K: type, comptime V: type) type {
+  return struct {
+    decls: std.ArrayList(ScopeMap),
+    allocator: std.mem.Allocator,
+    const ScopeMap = CreateMap(K, V);
 
-  const K = []const u8;
-  const V = *Type;
-  const TypeMap = CreateMap(K, V);
-
-  pub fn init(allocator: std.mem.Allocator) @This(){
-    return @This() {.decls = std.ArrayList(TypeMap).init(allocator), .allocator = allocator};
-  }
-
-  pub fn pushScope(self: *@This()) void {
-    util.append(TypeMap, &self.decls, TypeMap.init(self.allocator));
-  }
-
-  pub fn popScope(self: *@This()) void {
-    if (self.decls.items.len == 0) {
-      util.error_("pop from empty scope-list", .{});
+    pub fn init(allocator: std.mem.Allocator) @This(){
+      return @This() {.decls = std.ArrayList(ScopeMap).init(allocator), .allocator = allocator};
     }
-    _ = self.decls.pop();
-  }
 
-  fn current(self: *@This()) TypeMap {
-    return self.decls.getLast();
-  }
+    pub fn pushScope(self: *@This()) void {
+      util.append(ScopeMap, &self.decls, ScopeMap.init(self.allocator));
+    }
 
-  inline fn len(self: *@This()) usize {
-    return self.decls.items.len;
-  }
+    pub fn popScope(self: *@This()) void {
+      if (self.decls.items.len == 0) {
+        util.error_("pop from empty scope-list", .{});
+      }
+      _ = self.decls.pop();
+    }
 
-  pub fn lookup(self: *@This(), name: K) ?V {
-    if (self.len() == 0) return null;
-    var i: usize = self.len();
-    while (i > 0): (i -= 1) {
-      var map = self.decls.items[i - 1];
-      if (map.get(name)) |ty| {
-        return ty;
+    pub fn popScopes(self: *@This(), count: usize) void {
+      if (self.decls.items.len == 0) {
+        util.error_("pop from empty scope-list", .{});
+      }
+      for (0..count) |_| {
+        if (self.len() > 0) {
+          _ = self.decls.pop();
+        }
       }
     }
-    return null;
-  }
 
-  pub fn insert(self: *@This(), name: K, ty: V) void {
-    if (self.len() == 0) {
-      util.error_("insert into empty scope-list", .{});
+    fn current(self: *@This()) ScopeMap {
+      return self.decls.getLast();
     }
-    self.decls.items[self.len() - 1].put(name, ty);
-  }
-};
 
-pub const TContext = struct {
-  allocator: std.mem.Allocator,
-  /// type scope
-  typScope: Scope,
-  /// scope for other declarations, e.g. variables, functions, etc.
-  varScope: Scope,
-  filename: []const u8,
+    pub inline fn len(self: *@This()) usize {
+      return self.decls.items.len;
+    }
 
-  const Self = @This();
+    pub fn lookup(self: *@This(), name: K) ?V {
+      if (self.len() == 0) return null;
+      var i: usize = self.len();
+      while (i > 0): (i -= 1) {
+        var map = self.decls.items[i - 1];
+        if (map.get(name)) |ty| {
+          return ty;
+        }
+      }
+      return null;
+    }
 
-  pub fn init(allocator: std.mem.Allocator, filename: []const u8) Self {
-    return Self {
-      .allocator = allocator, 
-      .typScope = Scope.init(allocator), 
-      .varScope = Scope.init(allocator),
-      .filename = filename,
-    };
-  }
+    pub fn remove(self: *@This(), name: K) void {
+      if (self.len() == 0) return;
+      var i: usize = self.len();
+      while (i > 0): (i -= 1) {
+        var map = self.decls.items[i - 1];
+        if (map.del(name)) {
+          return;
+        }
+      }
+    }
 
-  pub inline fn newType(self: *Self, kind: TypeInfo, debug: Token) *Type {
-    return util.box(Type, Type.init(kind, debug), self.allocator);
-  }
+    pub fn insert(self: *@This(), name: K, ty: V) void {
+      if (self.len() == 0) {
+        util.error_("insert into empty scope-list", .{});
+      }
+      self.decls.items[self.len() - 1].put(name, ty);
+    }
+  };
+}
 
-  pub inline fn enterScope(self: *Self) void {
-    self.typScope.pushScope();
-    self.varScope.pushScope();
-  }
+fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
+  return struct {
+    allocator: std.mem.Allocator,
+    /// type scope
+    typScope: TypScope,
+    /// scope for other declarations, e.g. variables, functions, etc.
+    varScope: VarScope,
+    filename: []const u8,
 
-  pub inline fn leaveScope(self: *Self) void {
-    self.typScope.popScope();
-    self.varScope.popScope();
-  }
+    const Self = @This();
 
-  pub fn copyType(self: *Self, typ: *Type) *Type {
-    // we need to deepcopy typ
-    var new = typ.box(self.allocator);
-    new.kind = typ.kind.clone();
-    return new;
-  }
+    pub fn init(allocator: std.mem.Allocator, filename: []const u8) Self {
+      return Self {
+        .allocator = allocator, 
+        .typScope = TypScope.init(allocator), 
+        .varScope = VarScope.init(allocator),
+        .filename = filename,
+      };
+    }
 
-};
+    pub inline fn newType(self: *Self, kind: TypeInfo, debug: Token) *Type {
+      return util.box(Type, Type.init(kind, debug), self.allocator);
+    }
+
+    pub inline fn enterScope(self: *Self) void {
+      self.typScope.pushScope();
+      self.varScope.pushScope();
+    }
+
+    pub inline fn leaveScope(self: *Self) void {
+      self.typScope.popScope();
+      self.varScope.popScope();
+    }
+
+    pub fn copyType(self: *Self, typ: *Type) *Type {
+      // we need to deepcopy typ
+      var new = typ.clone(self.allocator);
+      return new;
+    }
+  };
+}
+
+pub const Scope = GenScope([]const u8, *Type);
+pub const TContext = CreateTContext(Scope, Scope);
 
 pub const TypeLinker = struct {
   ctx: TContext,
@@ -133,18 +162,21 @@ pub const TypeLinker = struct {
   sub_steps: usize = 0,
   /// track if a Variable type is from a generic parameter type substitution 
   using_tvar: usize = 0,
-  /// re-pair - recursive unions (pun intended) 
-  repair: ?Pair = null,
+  /// scope for cycle detection
+  cyc_scope: PairScope,
+  /// resolving an infinite/recursive type?
+  in_inf: bool = false,
 
-  const Pair = struct {key: *Type, value: *Type};
-
-  pub const MAX_SUB_STEPS = types.MAX_RECURSIVE_DEPTH;
+  const MultiPair = struct {setter: *Type, key: *Type, value: *Type};
+  const PairScope = GenScope([]const u8, MultiPair);
   const TypeLinkError = error{TypeLinkError};
+  const MAX_DEPTH = 0x64;
+  pub const MAX_SUB_STEPS = types.MAX_RECURSIVE_DEPTH;
 
   const Self = @This();
 
   pub fn init(allocator: std.mem.Allocator, filename: []const u8) @This() {
-    return Self { .ctx = TContext.init(allocator, filename) };
+    return Self { .ctx = TContext.init(allocator, filename), .cyc_scope = PairScope.init(allocator) };
   }
 
   fn error_(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) TypeLinkError {
@@ -152,46 +184,88 @@ pub const TypeLinker = struct {
     return error.TypeLinkError;
   }
 
-  pub fn findType(self: *Self, typ: *Type) ?*Type {
-    // TODO: augment to return failing name token
+  fn insertTVar(self: *Self, typ: *Type, data: MultiPair) void {
+    var tvar = typ.variable();
+    if (tvar.tokens.items.len > 1) return;
+    var name = tvar.tokens.items[0].value;
+    self.cyc_scope.insert(name, data);
+  }
+
+  fn checkTVar(self: *Self, typ: *Type, found: *Type) ?*Type {
+    var tvar = typ.variable();
+    if (tvar.tokens.items.len > 1) return null;
+    var name = tvar.tokens.items[0].value;
+    if (self.cyc_scope.lookup(name)) |pair| {
+      // extra p.o.c;
+      if (pair.key == found) {
+        return pair.value;
+      }
+    }
+    return null;
+  }
+
+  fn delTVar(self: *Self, typ: *Type) void {
+    var tvar = typ.variable();
+    if (tvar.tokens.items.len > 1) return;
+    var name = tvar.tokens.items[0].value;
+    if (self.cyc_scope.lookup(name)) |pair| {
+      // only delete this pair if `typ` is its exact setter
+      if (pair.setter == typ) {
+        self.cyc_scope.remove(name);
+      }
+    }
+  }
+
+  inline fn lookupVarType(self: *Self, typ: *Type) ?*Type {
     var tokens = typ.variable().tokens.items;
-    var found = if (tokens.len > 1) {
+    return if (tokens.len > 1) {
       // TODO: context type
       util.todo("multiple names impl with context type");
     } else blk: {
       var name = tokens[0];
       break :blk self.ctx.typScope.lookup(name.value);
     };
-    if (found) |ty| {
+  }
+
+  fn findType(self: *Self, typ: *Type, from_gen: bool) ?*Type {
+    // TODO: augment to return failing name token
+    if (self.lookupVarType(typ)) |ty| {
+      // if this variable occurs in the pair stack before we push it,
+      // then it's cyclic/recursive
+      if (self.checkTVar(typ, ty)) |rec| {
+        // if the type isn't from a generic lookup or if we're certain 
+        // we're resolving an infinite type, then return a recursive type
+        if (!from_gen or self.in_inf) {
+          _ = rec.typeid();
+          return Type.newRecursive(rec, rec.debug).box(self.ctx.allocator);
+        }
+      }
       var result = switch (ty.kind) {
         .Concrete, .Variable => ty,
         else => self.ctx.copyType(ty),
       };
-      if (self.repair) |pair| {
-        // if we find a matching union type, it must be recursive
-        if (pair.key == ty and ty.isUnion()) {
-          pair.value.union_().recursive = true;
-          return pair.value;
-        }
-      } else {
-        // cache the type.
-        self.repair = Pair {.key = ty, .value = result};
-      }
+      // cache the type.
+      self.insertTVar(typ, MultiPair{.setter = typ, .key = ty, .value = result});
       return result;
     }
     return null;
   }
 
-  fn lookupType(self: *Self, typ: *Type) !*Type {
-    if (self.findType(typ)) |found| {
+  fn lookupType(self: *Self, typ: *Type, from_gen: bool) !*Type {
+    if (self.findType(typ, from_gen)) |found| {
       return found;
     } else {
       return self.error_(typ.debug, "Could not resolve type with name: '{s}'", .{typ.getName()});
     }
   }
 
-  inline fn assertMaxSubStepsNotExceeded(self: *Self, typ: *Type) !void {
-    if (self.sub_steps >= MAX_SUB_STEPS) {
+  inline fn assertMaxSubStepsNotExceeded(self: *Self, typ: *Type, emit: bool) !void {
+    errdefer {
+      self.cyc_scope.decls.clearAndFree();
+      self.cyc_scope = PairScope.init(self.ctx.allocator);
+    }
+    if (self.sub_steps >= MAX_DEPTH) {
+      if (!emit) return error.TypeLinkError;
       return self.error_(
         typ.debugToken(),
         "Potentially infinite substitutions arising from probable self-referencing types", 
@@ -233,22 +307,48 @@ pub const TypeLinker = struct {
     if (l_gen.tparams_len() != r_gen.tparams_len()) {
       return self.error_(
         typ.debug,
-        "Parameter mismatch in generic type instantiion. Expected {} generic arguments, got {}", 
+        "Parameter mismatch in generic type instantiation. Expected {} generic argument(s), got {}", 
         .{l_gen.tparams_len(), r_gen.tparams_len()},
       );
     }
   }
 
   fn resolveType(self: *Self, typ: *Type) TypeLinkError!*Type {
-    if (typ.isSimple()) {
+    try self.assertMaxSubStepsNotExceeded(typ, false);
+    if (typ.isSimple() or typ.isRecursive()) {
       return typ;
     }
     if (typ.isGeneric()) {
+      self.sub_steps += 1;
       var gen = typ.generic();
       if (gen.base.isVariable()) {
-        var eqn = try self.lookupType(gen.base);
+        var eqn = try self.lookupType(gen.base, true);
+        // specially handle recursive generic types
+        if (eqn.isRecursive()) {
+          var rec = eqn.recursive();
+          if (rec.base.alias_info) |alias_info| {
+            if (!alias_info.lhs.isGeneric()) {
+              return self.error_(typ.debug, "Non-generic type instantiated as generic", .{});
+            }
+            // check that the tparams of this generic type matches it's type alias tparams exactly.
+            try self.assertGenericAliasSubMatches(alias_info.lhs, typ);
+            var alias = alias_info.lhs.generic();
+            for (alias.tparams.items, 0..) |tparam, i| {
+              var param = gen.tparams.items[i];
+              if (!param.isVariable() or !tparam.variable().eql(param.variable())) {
+                return self.error_(
+                  typ.debug,
+                  "A recursive generic type must match its type alias exactly when used in its definition",
+                  .{}
+                );
+              }
+            }
+            return eqn;
+          }
+          unreachable;
+        }
         // only instantiate generic type variables when the alias type is guaranteed to be generic
-        if (eqn.alias_info == null or !eqn.alias_info.?.lhs.isGeneric()) {
+        else if (eqn.alias_info == null or !eqn.alias_info.?.lhs.isGeneric()) {
           return self.error_(typ.debug, "Non-generic type instantiated as generic", .{});
         }
         var alias = eqn.alias_info.?.lhs;
@@ -258,8 +358,9 @@ pub const TypeLinker = struct {
         var alias_gen = alias.generic();
         for (alias_gen.getSlice(), 0..) |tvar, i| {
           var tsub = gen.tparams.items[i];
+          // var r_tsub = try self.resolveType(tsub);
           std.debug.assert(tvar.variable().tokens.items.len == 1);
-          self.ctx.typScope.insert(tvar.variable().tokens.items[0].value, tsub);
+          self.ctx.typScope.insert(tvar.variable().tokens.items[0].value, tsub); // r_tsub
         }
         if (eqn.isGeneric()) {
           var eqn_gen = eqn.generic();
@@ -271,6 +372,7 @@ pub const TypeLinker = struct {
         var sol = try self.resolveType(eqn);
         self.using_tvar -= 1;
         self.ctx.typScope.popScope();
+        self.delTVar(gen.base);
         return sol;
       } else {
         for (gen.getSlice(), 0..) |param, i| {
@@ -293,15 +395,19 @@ pub const TypeLinker = struct {
       for (old_variants.values()) |variant| {
         uni.set(try self.resolveType(variant));
       }
+      // no need to clear and free old variants since, arena
       return typ;
     }
     if (typ.isVariable()) {
-      var eqn = try self.lookupType(typ);
-      if (eqn.alias_info) |alias| {
+      // if this variable occurs in the pair stack before we push it, then it's cyclic/recursive
+      // when we begin resolving a variable - we push it on the pair stack
+      var eqn = try self.lookupType(typ, false);
+      var alias_info = if (eqn.isRecursive()) eqn.recursive().base.alias_info else eqn.alias_info;
+      if (alias_info) |alias| {
         if (alias.lhs.isGeneric()) {
           // check if this is a regular generic type called without instantiation, 
-          // or a recursive generic type called without instantiation (for this, eqn must be union)
-          if (self.using_tvar == 0 or (eqn.isUnion() and eqn.union_().recursive)) {
+          // or a recursive generic type called without instantiation
+          if (self.using_tvar == 0 or (eqn.isRecursive())) {
             return self.error_(
               typ.debug,
               "Generic type '{s}' may not have been instantiated correctly",
@@ -310,20 +416,41 @@ pub const TypeLinker = struct {
           }
         }
       }
-      return try self.resolveType(eqn);
+      var sol = try self.resolveType(eqn);
+      // when we finish resolving the variable - we pop it off the pair stack
+      self.delTVar(typ);
+      return sol;
     }
     return typ;
   }
 
-  fn resolve(self: *Self, typ: *Type) !*Type {
+  fn tryResolveType(self: *Self, typ: *Type) TypeLinkError!*Type {
     self.sub_steps = 0;
-    const ty = try self.resolveType(typ);
-    const has = ty.hasVariable(MAX_SUB_STEPS) catch {
-      return self.error_(ty.debug, "Unable to resolve potentially self-referencing type.", .{});
+    self.in_inf = false;
+    var start = self.ctx.typScope.len();
+    self.cyc_scope.pushScope();
+    var sol =  self.resolveType(typ) catch |e| blk: {
+      // if max depth isn't yet exhausted, then it must be another kind of error
+      if (self.sub_steps < MAX_DEPTH) return e;
+      // At this point, we're heuristically certain `typ` is inifinite/recursive,
+      // so we try again (smarter)
+      self.sub_steps = 0;
+      self.in_inf = true;
+      self.ctx.typScope.popScopes(self.ctx.typScope.len() - start);
+      self.cyc_scope.pushScope();
+      break :blk try self.resolveType(typ);
     };
-    if (has) return self.error_(ty.debug, "Could not resolve type, probable undefined", .{});
-    // reset pair
-    self.repair = null;
+    self.cyc_scope.popScope();
+    return sol;
+  }
+
+  fn resolve(self: *Self, typ: *Type) !*Type {
+    const ty = try self.tryResolveType(typ);
+    // set alias info for debugging
+    if (typ.alias_info == null) {
+      // TODO: does this need to be set only for variable types?
+      ty.alias_info = types.AliasInfo.init(typ, ty);
+    }
     return ty;
   }
 
@@ -393,7 +520,11 @@ pub const TypeLinker = struct {
   }
 
   fn linkNType(self: *Self, node: *ast.TypeNode) !void {
-    node.typ = (try self.resolveType(&node.typ)).*;
+    // TODO: using an indirection here because somehow using the `node.typ` 
+    //      itself leads to aliasing issues in Zig.
+    var typ = node.typ.box(self.ctx.allocator);
+    var tmp = try self.resolve(typ);
+    node.typ = tmp.*;
   }
 
   fn linkCast(self: *Self, node: *ast.CastNode) !void {
@@ -449,5 +580,4 @@ pub const TypeLinker = struct {
   pub fn linkTypes(self: *Self, node: *Node) !void {
     try self.link(node);
   }
-
 };

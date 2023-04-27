@@ -145,7 +145,6 @@ test "maps" {
     "{'abc': 123}",
     "{'abc' as bool | str: 123, true: 0xff, 'obs': 0b101}",
     "{}",
-    // "{'abc': 123, true: 0xff, 'obs': 'fin', 0.123: {'abc': 123, true: 0xff, 'obs': 'fin'}}",
     "{24: [1, 2, 3]}",
   };
   for (srcs) |src| {
@@ -381,6 +380,21 @@ test "recursive types" {
   \\ type A{T} = T
   \\ let x: A{A{num}} = 5
   \\
+  ;
+  _ = try doTest(src);
+}
+
+test "circularity" {
+  var src =
+  \\ type T{K} = str | S{str}
+  \\ type S{K} = num | T{num}
+  \\ let p: T{num} = 5
+  \\ p
+  \\ type T = T
+  \\ type S = S
+  \\ type Q = T | S
+  \\ let Q: Q? = nil
+  \\ Q
   ;
   _ = try doTest(src);
 }

@@ -298,8 +298,8 @@ pub const TypeLinker = struct {
     } else if (!typ.isGeneric()) {
       return self.error_(
         typ.debug,
-        "Type is not generic, but instantiated with {} parameters", 
-        .{alias.generic().tparams_len()},
+        "Type alias is generic, but used without instantiation", 
+        .{},
       );
     }
     var l_gen = alias.generic();
@@ -332,16 +332,10 @@ pub const TypeLinker = struct {
             }
             // check that the tparams of this generic type matches it's type alias tparams exactly.
             try self.assertGenericAliasSubMatches(alias_info.lhs, typ);
-            var alias = alias_info.lhs.generic();
-            for (alias.tparams.items, 0..) |tparam, i| {
-              var param = gen.tparams.items[i];
-              if (!param.isVariable() or !tparam.variable().eql(param.variable())) {
-                return self.error_(
-                  typ.debug,
-                  "A recursive generic type must match its type alias exactly when used in its definition",
-                  .{}
-                );
-              }
+            // A generic recursive type's tparams will never be resolved and substituted for, so
+            // just ensure that the tparam is actually valid.
+            for (gen.tparams.items) |tparam| {
+              _ = try self.resolveType(tparam);
             }
             return eqn;
           }

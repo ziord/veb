@@ -612,6 +612,11 @@ pub const Parser = struct {
       .Nullable => |nul| {
         return self.checkGenericTParam(tvar, nul.subtype);
       },
+      // .Variable => |*vr| {
+      //   if (vr.eql(&tvar.kind.Variable)) {
+      //     return &vr.tokens.items[0];
+      //   }
+      // },
       else => {},
     }
     return null;
@@ -655,7 +660,8 @@ pub const Parser = struct {
     var node = self.newNode();
     // check that generic type variable parameters in `AbstractType` are not generic in `ConcreteType`
     self.assertNoGenericParameterTypeVariable(&alias_typ, &aliasee.AstNType.typ);
-    self.assertNoDirectRecursiveAlias(&alias_typ, &aliasee.AstNType.typ);
+    // TODO: should this be disallowed? It poses no issues at the moment.
+    // self.assertNoDirectRecursiveAlias(&alias_typ, &aliasee.AstNType.typ);
     node.* = .{.AstAlias = ast.AliasNode.init(type_tok, &alias.AstNType, &aliasee.AstNType)};
     self.consumeNlOrEof();
     return node;

@@ -286,9 +286,9 @@ pub inline fn valueFalsy(val: Value) bool {
   return (
     (isBool(val) and !asBool(val)) or isNil(val) or 
     (isNumber(val) and asNumber(val) == 0) or 
-    (isString(val) and asString(val).len > 0) or
-    (isList(val) and asList(val).len > 0) or
-    (isMap(val) and asMap(val).meta.len > 0)
+    (isString(val) and asString(val).len == 0) or
+    (isList(val) and asList(val).len == 0) or
+    (isMap(val) and asMap(val).meta.len == 0)
   );
 }
 
@@ -337,6 +337,45 @@ pub fn printObject(val: Value) void {
       asMap(val).meta.display();
     }
   }
+}
+
+pub fn objectToString(val: Value, vm: *VM) Value {
+  switch (asObj(val).id) {
+    .ObjStr => return val,
+    .ObjValMap => {
+      var buff: [20]u8 = undefined;
+      var fmt = std.fmt.bufPrint(&buff, "@map[{}]", .{asMap(val).meta.len}) catch "";
+      return createStringV(vm, &vm.strings, fmt, false);
+    },
+    .ObjLst => {
+      var buff: [15]u8 = undefined;
+      var fmt = std.fmt.bufPrint(&buff, "@list[{}]", .{asList(val).len}) catch "";
+      return createStringV(vm, &vm.strings, fmt, false);
+    }
+  }
+  unreachable;
+}
+
+pub fn valueToString(val: Value, vm: *VM) Value {
+  if (isObj(val)) return objectToString(val, vm);
+  if (isNumber(val)) {
+    var num = asNumber(val);
+    if (std.math.isNan(num)) {
+      return createStringV(vm, &vm.strings, "nan", false);
+    } else if (std.math.isInf(num)) {
+      return createStringV(vm, &vm.strings, if (num > 0) "inf" else "-inf", false);
+    } else {
+      // TODO
+      var buff: [25]u8 = undefined;
+      var fmt = std.fmt.bufPrint(&buff, "{d}", .{num}) catch "";
+      return createStringV(vm, &vm.strings, fmt, false);
+    }
+  } else if (isBool(val)) {
+    return createStringV(vm, &vm.strings, if (asBool(val)) "true" else "false", false);
+  } else if (isNil(val)) {
+    return createStringV(vm, &vm.strings, "nil", false);
+  }
+  unreachable;
 }
 
 pub fn hashString(str: []const u8) u64 {
@@ -424,4 +463,8 @@ pub fn createMap(vm: *VM, len: usize) *ObjMap {
   map.meta = ValueHashMap.init();
   map.meta.ensureCapacity(vm, len);
   return map;
+}
+
+pub inline fn createStringV(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: bool) Value {
+  return objVal(createString(vm, map, str, is_alloc));
 }

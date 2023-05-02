@@ -24,6 +24,7 @@ pub const AstType = enum {
   AstNType,
   AstAlias,
   AstCast,
+  AstSubscript,
   AstNil,
   AstEmpty,
   AstProgram,
@@ -58,6 +59,23 @@ pub const BinaryNode = struct {
       .right = right,
       .op = lex.Optr.init(op),
       .line = op.line,
+    };
+  }
+};
+
+pub const SubscriptNode = struct {
+  expr: *AstNode,
+  index: *AstNode,
+  line: usize,
+  token: Token,
+  typ: ?*Type = null,
+
+  pub fn init(expr: *AstNode, index: *AstNode, token: Token) @This() {
+    return @This() {
+      .expr = expr,
+      .index = index,
+      .token = token,
+      .line = token.line,
     };
   }
 };
@@ -229,6 +247,7 @@ pub const AstNode = union(AstType) {
   AstNType: TypeNode,
   AstAlias: AliasNode,
   AstCast: CastNode,
+  AstSubscript: SubscriptNode,
   AstEmpty: EmptyNode,
   AstProgram: ProgramNode,
 
@@ -252,23 +271,9 @@ pub const AstNode = union(AstType) {
     };
   }
 
-  pub fn isNum(self: *@This()) bool {
+  pub fn isComptimeConst(self: *@This()) bool {
     return switch (self.*) {
-      .AstNumber => true,
-      else => false,
-    };
-  }
-
-  pub fn isEmptyNode(self: *@This()) bool {
-    return switch (self.*) {
-      .AstEmpty => true,
-      else => false,
-    };
-  }
-
-  pub fn isNumOrBoolNode(self: *@This()) bool {
-    return switch (self.*) {
-      .AstNumber, .AstBool => true,
+      .AstNumber, .AstString, .AstBool, .AstNil => true,
       else => false,
     };
   }
@@ -287,6 +292,7 @@ pub const AstNode = union(AstType) {
       .AstNType => |typn| @constCast(&typn.typ),
       .AstAlias => |ali| ali.typ,
       .AstCast => |cst| @constCast(&cst.typn.typ),
+      .AstSubscript => |sub| sub.typ,
       else => unreachable,
     };
   }

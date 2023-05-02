@@ -56,62 +56,62 @@ pub const Parser = struct {
     infix: ?InfixFn
   };
   const ptable = [_]ExprParseTable{
-    .{.bp = .Term, .prefix = Self.unary, .infix = Self.binary},   // TkPlus
-    .{.bp = .Term, .prefix = Self.unary, .infix = Self.binary},   // TkMinus
-    .{.bp = .Factor, .prefix = null, .infix = Self.binary},       // TkSlash
-    .{.bp = .Factor, .prefix = null, .infix = Self.binary},       // TkStar
-    .{.bp = .Term, .prefix = Self.grouping, .infix = null},       // TkLBracket
-    .{.bp = .None, .prefix = null, .infix = null},                // TkRBracket
-    .{.bp = .None, .prefix = Self.listing, .infix = null},        // TkLSqrBracket
-    .{.bp = .None, .prefix = null, .infix = null},                // TkRSqrBracket
-    .{.bp = .None, .prefix = null, .infix = null},                // TkSemic
-    .{.bp = .None, .prefix = null, .infix = null},                // TkColon
-    .{.bp = .Comparison, .prefix = null, .infix = Self.binary},   // TkLthan
-    .{.bp = .Comparison, .prefix = null, .infix = Self.binary},   // TkGthan
-    .{.bp = .None, .prefix = null, .infix = null},                // TkEqual
-    .{.bp = .None, .prefix = Self.mapping, .infix = null},        // TkLCurly
-    .{.bp = .None, .prefix = null, .infix = null},                // TkRCurly
-    .{.bp = .BitAnd, .prefix = null, .infix = Self.binary},       // TkAmp
-    .{.bp = .Factor, .prefix = null, .infix = Self.binary},       // TkPerc
-    .{.bp = .None, .prefix = null, .infix = null},                // TkComma
-    .{.bp = .Unary, .prefix = Self.unary, .infix = null},         // TkExMark
-    .{.bp = .BitXor, .prefix = null, .infix = Self.binary},       // TkCaret
-    .{.bp = .BitOr, .prefix = null, .infix = Self.binary},        // TkPipe
-    .{.bp = .Unary, .prefix = Self.unary, .infix = null},         // TkTilde
-    .{.bp = .Access, .prefix = null, .infix = null},              // TkDot
-    .{.bp = .None, .prefix = null, .infix = null},                // TkQMark
-    .{.bp = .None, .prefix = null, .infix = null},                // TkNewline
-    .{.bp = .Comparison, .prefix = null, .infix = Self.binary},   // TkLeq
-    .{.bp = .Comparison, .prefix = null, .infix = Self.binary},   // TkGeq
-    .{.bp = .Equality, .prefix = null, .infix = Self.binary},     // Tk2Eq
-    .{.bp = .Equality, .prefix = null, .infix = Self.binary},     // TkNeq
-    .{.bp = .Shift, .prefix = null, .infix = Self.binary},        // Tk2Lthan
-    .{.bp = .Shift, .prefix = null, .infix = Self.binary},        // Tk2Rthan
-    .{.bp = .Access, .prefix = null, .infix = Self.casting},      // TkAs
-    .{.bp = .None, .prefix = null, .infix = null},                // TkDo
-    .{.bp = .None, .prefix = null, .infix = null},                // TkIf
-    .{.bp = .Or, .prefix = null, .infix = Self.binary},           // TkOr
-    .{.bp = .None, .prefix = null, .infix = null},                // TkFor
-    .{.bp = .And, .prefix = null, .infix = Self.binary},          // TkAnd
-    .{.bp = .None, .prefix = null, .infix = null},                // TkEnd
-    .{.bp = .None, .prefix = null, .infix = null},                // TkLet
-    .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkNum
-    .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkMap
-    .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkStr
-    .{.bp = .None, .prefix = Self.nullable, .infix = null},       // TkNil
-    .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkBool
-    .{.bp = .None, .prefix = Self.typing, .infix = null},         // TkList
-    .{.bp = .None, .prefix = null, .infix = null},                // TkType
-    .{.bp = .None, .prefix = null, .infix = null},                // TkElse
-    .{.bp = .None, .prefix = Self.boolean, .infix = null},        // TkTrue
-    .{.bp = .None, .prefix = Self.boolean, .infix = null},        // TkFalse
-    .{.bp = .None, .prefix = null, .infix = null},                // TkWhile
-    .{.bp = .None, .prefix = null, .infix = null},                // TkReturn
-    .{.bp = .None, .prefix = Self.number, .infix = null},         // TkNumber
-    .{.bp = .None, .prefix = Self.string, .infix = null},         // TkString
-    .{.bp = .None, .prefix = Self.variable, .infix = null},       // TkIdent
-    .{.bp = .None, .prefix = null, .infix = null},                // TkErr
-    .{.bp = .None, .prefix = null, .infix = null},                // TkEof
+    .{.bp = .Term, .prefix = Self.unary, .infix = Self.binary},         // TkPlus
+    .{.bp = .Term, .prefix = Self.unary, .infix = Self.binary},         // TkMinus
+    .{.bp = .Factor, .prefix = null, .infix = Self.binary},             // TkSlash
+    .{.bp = .Factor, .prefix = null, .infix = Self.binary},             // TkStar
+    .{.bp = .Term, .prefix = Self.grouping, .infix = null},             // TkLBracket
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkRBracket
+    .{.bp = .Access, .prefix = Self.listing, .infix = Self.indexing},   // TkLSqrBracket
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkRSqrBracket
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkSemic
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkColon
+    .{.bp = .Comparison, .prefix = null, .infix = Self.binary},         // TkLthan
+    .{.bp = .Comparison, .prefix = null, .infix = Self.binary},         // TkGthan
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkEqual
+    .{.bp = .None, .prefix = Self.mapping, .infix = null},              // TkLCurly
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkRCurly
+    .{.bp = .BitAnd, .prefix = null, .infix = Self.binary},             // TkAmp
+    .{.bp = .Factor, .prefix = null, .infix = Self.binary},             // TkPerc
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkComma
+    .{.bp = .Unary, .prefix = Self.unary, .infix = null},               // TkExMark
+    .{.bp = .BitXor, .prefix = null, .infix = Self.binary},             // TkCaret
+    .{.bp = .BitOr, .prefix = null, .infix = Self.binary},              // TkPipe
+    .{.bp = .Unary, .prefix = Self.unary, .infix = null},               // TkTilde
+    .{.bp = .Access, .prefix = null, .infix = null},                    // TkDot
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkQMark
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkNewline
+    .{.bp = .Comparison, .prefix = null, .infix = Self.binary},         // TkLeq
+    .{.bp = .Comparison, .prefix = null, .infix = Self.binary},         // TkGeq
+    .{.bp = .Equality, .prefix = null, .infix = Self.binary},           // Tk2Eq
+    .{.bp = .Equality, .prefix = null, .infix = Self.binary},           // TkNeq
+    .{.bp = .Shift, .prefix = null, .infix = Self.binary},              // Tk2Lthan
+    .{.bp = .Shift, .prefix = null, .infix = Self.binary},              // Tk2Rthan
+    .{.bp = .Access, .prefix = null, .infix = Self.casting},            // TkAs
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkDo
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkIf
+    .{.bp = .Or, .prefix = null, .infix = Self.binary},                 // TkOr
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkFor
+    .{.bp = .And, .prefix = null, .infix = Self.binary},                // TkAnd
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkEnd
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkLet
+    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkNum
+    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkMap
+    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkStr
+    .{.bp = .None, .prefix = Self.nullable, .infix = null},             // TkNil
+    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkBool
+    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkList
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkType
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkElse
+    .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkTrue
+    .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkFalse
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkWhile
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkReturn
+    .{.bp = .None, .prefix = Self.number, .infix = null},               // TkNumber
+    .{.bp = .None, .prefix = Self.string, .infix = null},               // TkString
+    .{.bp = .None, .prefix = Self.variable, .infix = null},             // TkIdent
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkErr
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkEof
   };
 
   pub fn init(src: []const u8, filename: []const u8, allocator: *NovaAllocator) Self {
@@ -189,6 +189,7 @@ pub const Parser = struct {
     // If not, check that the current token is Eof, else error
     if (!self.match(.TkNewline)) {
       if (!self.check(.TkEof)) {
+        // error, since we originally expected Newline
         self.consume(.TkNewline);
       }
     }
@@ -204,8 +205,12 @@ pub const Parser = struct {
     const assignable = bp_val <= @enumToInt(BindingPower.Assignment);
     var node = prefix.?(self, assignable);
     while (bp_val < @enumToInt(ptable[@enumToInt(self.current_tok.ty)].bp)) {
-      const infix = ptable[@enumToInt(self.current_tok.ty)].infix.?;
-      node = infix(self, node, assignable);
+      var infix = ptable[@enumToInt(self.current_tok.ty)].infix;
+      if (infix == null) {
+        self.current_tok.msg = "Invalid token for infix";
+        self.err(self.current_tok);
+      }
+      node = infix.?(self, node, assignable);
     }
     return node;
   }
@@ -257,6 +262,7 @@ pub const Parser = struct {
       lit.value = 0;
       num.* = .{.AstNumber = lit};
       node.* = .{.AstBinary = ast.BinaryNode.init(num, expr, op)};
+      return node;
     } else if (op.ty.optype() == .OpAdd) {
       // rewrite +expr to expr
       return expr;
@@ -344,7 +350,20 @@ pub const Parser = struct {
     return node;
   }
 
+  fn indexing(self: *Self, left: *Node, assignable: bool) *Node {
+    self.incNl();
+    self.consume(.TkLSqrBracket);
+    var token = self.current_tok;
+    var index = self.parseExpr();
+    self.decNl();
+    self.consume(.TkRSqrBracket);
+    var node = self.newNode();
+    node.* = .{.AstSubscript = ast.SubscriptNode.init(left, index, token)};
+    return self.handleAugAssign(node, assignable);
+  }
+
   fn handleAugAssign(self: *Self, left: *Node, assignable: bool) *Node {
+    // assignments are not expressions, but statements
     if (!assignable) return left;
     var node = left;
     if (self.current_tok.ty.isAssignLikeOp() and self.lexer.currentChar() == '=') {
@@ -359,13 +378,22 @@ pub const Parser = struct {
       right.* = .{.AstBinary = ast.BinaryNode.init(left, value, op_sign)};
       node = self.newNode();
       node.* = .{.AstAssign = ast.BinaryNode.init(left, right, op_eq)};
+      // only ascertain that a newline or eof is present, if not, error
+      if (!self.check(.TkNewline) and !self.check(.TkEof)) self.consumeNlOrEof();
+      // if present, exprStmt() would consume it for us.
+      return node;
     } else if (self.match(.TkEqual)) {
       var token = self.previous_tok;
       var value = self.parseExpr();
       node = self.newNode();
       node.* = .{.AstAssign = ast.BinaryNode.init(left, value, token)};
+      // only ascertain that a newline or eof is present, if not, error
+      if (!self.check(.TkNewline) and !self.check(.TkEof)) self.consumeNlOrEof();
+      // if present, exprStmt() would consume it for us.
+      return node;
+    } else {
+      return node;
     }
-    return node;
   }
 
   fn variable(self: *Self, assignable: bool) *Node {
@@ -719,12 +747,6 @@ pub const Parser = struct {
     return node;
   }
 
-  fn emptyStmt(self: *Self) *Node {
-    var node = self.newNode();
-    node.* = .{.AstEmpty = ast.EmptyNode.init(self.previous_tok)};
-    return node;
-  }
-
   fn statement(self: *Self) *Node {
     if (self.check(.TkLet)) {
       return self.varDecl();
@@ -733,7 +755,7 @@ pub const Parser = struct {
     } else if (self.check(.TkDo)) {
       return self.blockStmt();
     } else if (self.match(.TkNewline)) {
-      return self.emptyStmt();
+      return self.statement();
     }
     return self.exprStmt();
   }
@@ -743,10 +765,7 @@ pub const Parser = struct {
     var program = self.newNode();
     program.* = .{.AstProgram = ast.ProgramNode.init(self.allocator, self.current_tok.line)};
     while (!self.match(.TkEof)) {
-      var node = self.statement();
-      if (!node.isEmptyNode()) {
-        util.append(*Node, &program.AstProgram.decls, node);
-      }
+      util.append(*Node, &program.AstProgram.decls, self.statement());
     }
     return program;
   }

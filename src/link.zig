@@ -259,6 +259,10 @@ pub const TypeLinker = struct {
     }
   }
 
+  fn lookupTypeAbs(self: *Self, typ: *Type, from_gen: bool) ?*Type {
+    return self.findType(typ, from_gen);
+  }
+
   inline fn assertMaxSubStepsNotExceeded(self: *Self, typ: *Type, emit: bool) !void {
     errdefer {
       self.cyc_scope.decls.clearAndFree();
@@ -313,6 +317,68 @@ pub const TypeLinker = struct {
     }
   }
 
+  fn resolveTypeAbs(self: *Self, typ: *Type) TypeLinkError!bool {
+    // resolve a type alias abstractly by walking the alias chain without substituting
+    if (typ.isGeneric()) {
+      var gen = typ.generic();
+      if (gen.base.isVariable()) {
+        var eqn = try self.lookupType(gen.base, false);
+        if (eqn.isRecursive()) return true;
+        if (eqn.isGeneric()) {
+          var eqn_gen = eqn.generic();
+          for (eqn_gen.getSlice()) |param| {
+            if (try self.resolveTypeAbs(param)) {
+              return true;
+            }
+          }
+        }
+        var ret = try self.resolveTypeAbs(eqn);
+        self.delTVar(gen.base);
+        return ret;
+      }
+      // gen.base is not a Variable, so nothing to lookup.
+      // Instead, resolve the tparams which may be Variable or some interesting type
+      for (gen.getSlice()) |param| {
+        if (try self.resolveTypeAbs(param)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    if (typ.isNullable()) {
+      if (try self.resolveTypeAbs(typ.nullable().subtype)) {
+        return true;
+      }
+      return false;
+    }
+    if (typ.isUnion()) {
+      for (typ.union_().variants.values()) |variant| {
+        if (try self.resolveTypeAbs(variant)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    if (typ.isVariable()) {
+      // if this variable occurs in the pair stack before we push it, then it's cyclic/recursive
+      // when we begin resolving a variable - we push it on the pair stack
+      var eqn = self.lookupTypeAbs(typ, false);
+      // could be null from an unsubstituted aliasee of a type alias, e.g. type Foo{T} = list{T}
+      // `T` here would be null since resolveTypeAbs() doesn't do substitutions
+      if (eqn == null) return false;
+      if (eqn.?.isRecursive()) {
+        return true;
+      }
+      if (try self.resolveTypeAbs(eqn.?)) {
+        return true;
+      }
+      // when we finish resolving the variable - we pop it off the pair stack
+      self.delTVar(typ);
+      return false;
+    }
+    return false;
+  }
+
   fn resolveType(self: *Self, typ: *Type) TypeLinkError!*Type {
     try self.assertMaxSubStepsNotExceeded(typ, false);
     if (typ.isSimple() or typ.isRecursive()) {
@@ -356,6 +422,8 @@ pub const TypeLinker = struct {
           std.debug.assert(tvar.variable().tokens.items.len == 1);
           self.ctx.typScope.insert(tvar.variable().tokens.items[0].value, tsub); // r_tsub
         }
+        // `eqn` is the type alias' aliasee, and may not be generic, so we add an extra guard.
+        // for ex: type Foo{T} = T  # <-- aliasee/eqn 'T' is not generic here.
         if (eqn.isGeneric()) {
           var eqn_gen = eqn.generic();
           for (eqn_gen.getSlice(), 0..) |param, i| {
@@ -421,19 +489,13 @@ pub const TypeLinker = struct {
   fn tryResolveType(self: *Self, typ: *Type) TypeLinkError!*Type {
     self.sub_steps = 0;
     self.in_inf = false;
-    var start = self.ctx.typScope.len();
-    self.cyc_scope.pushScope();
-    var sol =  self.resolveType(typ) catch |e| blk: {
-      // if max depth isn't yet exhausted, then it must be another kind of error
-      if (self.sub_steps < MAX_DEPTH) return e;
-      // At this point, we're heuristically certain `typ` is inifinite/recursive,
-      // so we try again (smarter)
-      self.sub_steps = 0;
-      self.in_inf = true;
-      self.ctx.typScope.popScopes(self.ctx.typScope.len() - start);
+    if (typ.isLikeGeneric()) {
       self.cyc_scope.pushScope();
-      break :blk try self.resolveType(typ);
-    };
+      self.in_inf = try self.resolveTypeAbs(typ);
+      self.cyc_scope.popScope();
+    }
+    self.cyc_scope.pushScope();
+    var sol = try self.resolveType(typ);
     self.cyc_scope.popScope();
     return sol;
   }
@@ -540,6 +602,11 @@ pub const TypeLinker = struct {
     self.ctx.typScope.insert(tokens.items[0].value, &node.aliasee.typ);
   }
 
+  fn linkSubscript(self: *Self, node: *ast.SubscriptNode) !void {
+    try self.link(node.expr);
+    try self.link(node.index);
+  }
+
   fn linkProgram(self: *Self, node: *ast.ProgramNode) !void {
     self.ctx.enterScope();
     for (node.decls.items) |item| {
@@ -566,8 +633,9 @@ pub const TypeLinker = struct {
       .AstNType => |*nd| try self.linkNType(nd),
       .AstAlias => |*nd| try self.linkAlias(nd),
       .AstCast => |*nd| try self.linkCast(nd),
-      .AstEmpty => unreachable,
+      .AstSubscript => |*nd| try self.linkSubscript(nd),
       .AstProgram => |*nd| try self.linkProgram(nd),
+      .AstEmpty => unreachable,
     }
   }
 

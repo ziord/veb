@@ -94,7 +94,7 @@ pub const VM = struct {
 
   fn runtimeError(self: *Self, comptime fmt: []const u8, args: anytype) RuntimeError {
     _ = self;
-    std.debug.print(fmt, args);
+    std.debug.print(fmt ++ "\n", args);
     return error.RuntimeError;
   }
 
@@ -372,11 +372,27 @@ pub const VM = struct {
           var rk2: u32 = undefined;
           self.read3Args(inst, &rx, &rk1, &rk2);
           var list = vl.asList(self.stack[rx]);
-          const idx = vl.asIntNumber(usize, self.RK(rk1));
+          var idx = vl.asIntNumber(i64, self.RK(rk1));
+          if (idx < 0) idx += @intCast(i64, list.len);
           if (idx >= list.len) {
             return self.runtimeError("IndexError: list index out of range: {}", .{idx});
           }
-          list.items[idx] = self.RK(rk2);
+          list.items[@intCast(usize, idx)] = self.RK(rk2);
+          continue;
+        },
+        .Glst => {
+          // glst rx, rk(idx), rk(list)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          var list = vl.asList(self.RK(rk2));
+          var idx = vl.asIntNumber(i64, self.RK(rk1));
+          if (idx < 0) idx += @intCast(i64, list.len);
+          if (idx >= list.len) {
+            return self.runtimeError("IndexError: list index out of range: {}", .{idx});
+          }
+          self.stack[rx] = list.items[@intCast(usize, idx)];
           continue;
         },
         .Nmap => {
@@ -389,7 +405,7 @@ pub const VM = struct {
           continue;
         },
         .Smap => {
-          // nmap rx, rk(key), rk(val)
+          // smap rx, rk(key), rk(val)
           var rx: u32 = undefined;
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
@@ -397,6 +413,21 @@ pub const VM = struct {
           var map = vl.asMap(self.stack[rx]);
           _ = map.meta.put(self.RK(rk1), self.RK(rk2), self);
           continue;
+        },
+        .Gmap => {
+          // gmap rx, rk(key), rk(val)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          var map = vl.asMap(self.RK(rk2));
+          const key = self.RK(rk1);
+          if (map.meta.get(key)) |v| {
+            self.stack[rx] = v;
+            continue;
+          }
+          var kstr = vl.asString(vl.valueToString(key, self));
+          return self.runtimeError("KeyError: map has no key: '{s}'", .{kstr.str[0..kstr.len]});
         },
         .Bcst => {
           // bcst rx, rk(x): rk(x) == bx

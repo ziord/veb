@@ -154,7 +154,7 @@ pub const TokenType = enum (u8) {
       .TkTilde => "~",
       .TkDot => ".",
       .TkQMark => "?",
-      .TkNewline => "\n",
+      .TkNewline => "<newline>",
       .TkLeq => "<=",
       .TkGeq => ">=",
       .Tk2Eq => "==",

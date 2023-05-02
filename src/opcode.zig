@@ -74,6 +74,10 @@ pub const OpCode = enum (u8) {
   // [6]  [8]   [9]      [9]
   Slst,
 
+  // glst rx, rk(idx), rk(val)
+  // [6]  [8]   [9]      [9]
+  Glst,
+
   // nmap rx, size
   // [6] [8] [18]
   Nmap,
@@ -81,6 +85,10 @@ pub const OpCode = enum (u8) {
   // smap rx, rk(key), rk(val)
   // [6]  [8]   [9]      [9]
   Smap,
+
+  // gmap rx, rk(key), rk(val)
+  // [6]  [8]   [9]      [9]
+  Gmap,
 
   // gglb rx, bx -> r(x) = G[K(bx)]
   // [6] [8] [18]

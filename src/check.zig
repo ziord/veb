@@ -14,6 +14,7 @@ const TContext = link.TContext;
 const Node = link.Node;
 const TypeLinker = link.TypeLinker;
 const TypeHashSet = types.TypeHashSet;
+const TypeList = types.TypeList;
 
 pub const TypeChecker = struct {
   allocator: std.mem.Allocator,
@@ -40,16 +41,13 @@ pub const TypeChecker = struct {
     };
   }
 
-  fn error_(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) TypeCheckError {
-    token.showError(self.ctx.filename, "TypeError: " ++ fmt, args);
+  fn error_(self: *Self, emit: bool, token: Token, comptime fmt: []const u8, args: anytype) TypeCheckError {
+    if (emit) token.showError(self.ctx.filename, "TypeError: " ++ fmt, args);
     return error.TypeCheckError;
   }
 
-  fn errorOrEmit(self: *Self, emit: bool, token: Token, comptime fmt: []const u8, args: anytype) TypeCheckError {
-    if (emit) {
-      return self.error_(token, fmt, args);
-    }
-    return error.TypeCheckError;
+  inline fn warn(self: *Self, emit: bool, token: Token, comptime fmt: []const u8, args: anytype) void {
+    if (emit) token.showError(self.ctx.filename, "TypeWarning: " ++ fmt, args);
   }
 
   fn findType(self: *Self, name: []const u8) ?*Type {
@@ -77,18 +75,57 @@ pub const TypeChecker = struct {
     if (self.findName(ident.token.value)) |found| {
       return found;
     } else {
-      return self.error_(ident.token, "Could not resolve type of ident: '{s}'", .{ident.token.value});
+      return self.error_(true, ident.token, "Could not resolve type of ident: '{s}'", .{ident.token.value});
     }
   }
 
   fn validateGenericParamSize(self: *Self, size: usize, exp_size: usize, token: Token) !void {
     if (size != exp_size) {
       return self.error_(
-        token, 
+        true, token, 
         "Generic type parameter(s) mismatch. Expected {} type parameter(s), but got {}", 
         .{exp_size, size}
       );
     }
+  }
+
+  fn compressTypes(self: *Self, typeset: *TypeHashSet, debug: Token) *Type {
+    // combine types in typeset as much as possible
+    if (typeset.count() > 1) {
+      var final = TypeList.init(self.allocator);
+      var last_ty: ?*Type = null;
+      var has_nil = false;
+      for (typeset.values()) |typ| {
+        // skip related types & nil types
+        if (typ.isNilTy()) {
+          has_nil = true;
+          continue;
+        }
+        if (last_ty) |ty| {
+          // TODO: would this be good for classes?
+          if (ty.isRelatedTo(typ, .RCAny, self.allocator)) {
+            continue;
+          }
+        }
+        last_ty = typ;
+        final.append(typ) catch break;
+      }
+      // convert types to a single union type
+      return blk: {
+        var tmp: *Type = undefined;
+        if (final.items.len > 1) {
+          tmp = Type.newUnion(self.allocator, debug).box(self.allocator);
+          tmp.union_().addAll(&final);
+        } else {
+          tmp = final.items[0];
+        }
+        if (has_nil) {
+          tmp = Type.newNullable(tmp, debug).box(self.allocator);
+        }
+        break :blk tmp;
+      };
+    }
+    return typeset.values()[0];
   }
 
   fn getTypename(self: *Self, typ: *Type) []const u8 {
@@ -138,14 +175,7 @@ pub const TypeChecker = struct {
       typeset.put(typ.typeid(), typ) catch break;
     }
     var gen = node.typ.?.generic();
-    if (typeset.count() > 1) {
-      // convert types to a single union type
-      var unionTy = Type.newUnion(self.allocator, node.token).box(self.allocator);
-      unionTy.union_().addAll(&typeset);
-      gen.append(unionTy);
-    } else {
-      gen.append(typeset.values()[0]);
-    }
+    gen.append(self.compressTypes(&typeset, node.token));
     return node.typ.?;
   }
 
@@ -170,7 +200,7 @@ pub const TypeChecker = struct {
         var typ = try self.infer(pair.key);
         _ = self.checkAssign(key_typ, typ, typ.debug, false) catch {
           return self.error_(
-            node.token,
+            true, typ.debug,
             "expected key type '{s}', but found '{s}'",
             .{self.getTypename(key_typ), self.getTypename(typ)}
           );
@@ -178,12 +208,21 @@ pub const TypeChecker = struct {
         typ = try self.infer(pair.value);
         _ = self.checkAssign(val_typ, typ, typ.debug, false) catch {
           return self.error_(
-            node.token,
+            true, typ.debug,
             "expected value type '{s}', but found '{s}'",
             .{self.getTypename(val_typ), self.getTypename(typ)}
           );
         };
       }
+    }
+    if (key_typ.isUnion()) {
+      // we don't want active types in a map's key union as this can 
+      // confuse the type checker on permissible operations during casting
+      key_typ.union_().active = null;
+    }
+    if (val_typ.isUnion()) {
+      // ditto
+      val_typ.union_().active = null;
     }
     var gen = node.typ.?.generic();
     gen.append(key_typ);
@@ -201,8 +240,9 @@ pub const TypeChecker = struct {
       try self.checkUnary(node, @constCast(&UnitTypes.tyNumber));
     } else {
       std.debug.assert(node.op.optype == .OpNot);
-      // ! accepts any type and returns a boolean. 
+      // `!` accepts any type and returns a boolean. 
       // It applies an implicit bool cast to such a type.
+      node.typ = UnitTypes.bol.toType(node.typ.?.debug).box(self.allocator);
     }
     return node.typ.?;
   }
@@ -222,6 +262,8 @@ pub const TypeChecker = struct {
   }
 
   fn inferVar(self: *Self, node: *ast.VarNode) !*Type {
+    // TODO: Do we need to always fetch the updated type?
+    // if (node.typ) |typ| return typ;
     node.typ = try self.lookupName(node);
     return node.typ.?;
   }
@@ -239,6 +281,7 @@ pub const TypeChecker = struct {
     var typ = try self.checkAssign(lhsTy, rhsTy, node.op.token, true);
     // update type.
     switch (node.left.*) {
+      // need to always update, because lookup copies.
       .AstVar => |ident| self.ctx.varScope.insert(ident.token.value, typ),
       else => {}
     }
@@ -272,6 +315,23 @@ pub const TypeChecker = struct {
     return node.ident.typ.?;
   }
 
+  fn inferSubscript(self: *Self, node: *ast.SubscriptNode) !*Type {
+    if (node.typ) |typ| {
+      return typ;
+    }
+    var expr_ty = try self.infer(node.expr);
+    // fail fast
+    if (!expr_ty.isGeneric()) {
+      return self.error_(
+        true, node.token,
+        "Type '{s}' is not indexable", .{self.getTypename(expr_ty)}
+      );
+    }
+    var index_ty = try self.infer(node.index);
+    try self.checkSubscript(node, expr_ty, index_ty);
+    return node.typ.?;
+  }
+
   fn inferBlock(self: *Self, node: *ast.BlockNode) !*Type {
     self.ctx.enterScope();
     for (node.nodes.items) |item| {
@@ -293,39 +353,53 @@ pub const TypeChecker = struct {
   }
 
   fn checkCast(self: *Self, node_ty: *Type, cast_ty: *Type, debug: Token, emit: bool) TypeCheckError!*Type {
-    _ = node_ty.canBeCastTo(cast_ty, self.allocator) catch {
-      return self.errorOrEmit(
+    var ty = node_ty.canBeCastTo(cast_ty, self.allocator) catch |e| {
+      if (e == error.UnionCastError) {
+        var active = if (node_ty.isUnion()) self.getTypename(node_ty.union_().active.?) else "different";
+        return self.error_(
+          emit, debug,
+          "Cannot cast from type '{s}' to type '{s}' because the active type is {s}",
+          .{self.getTypename(node_ty), self.getTypename(cast_ty), active}
+        );
+      }
+      return self.error_(
         emit, debug,
         "Cannot cast from type '{s}' to type '{s}'",
         .{self.getTypename(node_ty), self.getTypename(cast_ty)}
       );
     };
-    return cast_ty;
+    if (ty == node_ty) {
+      self.warn(
+        emit, debug,
+        "Could not cast from type '{s}' to type '{s}' because the active type is unknown",
+        .{self.getTypename(node_ty), self.getTypename(cast_ty)}
+      );
+    } 
+    return ty;
   }
 
   fn checkAssign(self: *Self, target: *Type, source: *Type, debug: ?Token, emit: bool) !*Type {
     var typ = target.canBeAssigned(source, self.allocator);
     if (typ == null) {
-      return self.errorOrEmit(
-        emit,
-        if (debug) |deb| deb else source.debug,
+      return self.error_(
+        emit, if (debug) |deb| deb else source.debug,
         "Cannot assign type '{s}' to type '{s}'",
         .{self.getTypename(source), self.getTypename(target)}
       );
-    }
+    } 
     return typ.?;
   }
 
   fn checkNil(self: *Self, node: *ast.LiteralNode, typ: *Type) !void {
     _ = typ;
-    return self.error_(node.token, "Should not be checking nil",  .{});
+    return self.error_(true, node.token, "Should not be checking nil",  .{});
   }
 
   fn checkUnary(self: *Self, node: *ast.UnaryNode, expected: *Type) !void {
     if (node.typ.?.typeid() != expected.typeid()) {
       const op = node.op.token.value;
       return self.error_(
-        node.op.token,
+        true, node.op.token,
         "Expected type {s} '{s}', but got {s} '{s}'",
         .{op, self.getTypename(expected), op, self.getTypename(node.typ.?)}
       );
@@ -338,7 +412,7 @@ pub const TypeChecker = struct {
     if (node.op.optype == .OpEqq or node.op.optype == .OpNeq) {
       _ = self.checkCast(node.typ.?, source, node.op.token, false) catch {
         return self.error_(
-          node.op.token,
+          true, node.op.token,
           "types must be assignable for equality comparison",
           .{}
         );
@@ -365,13 +439,52 @@ pub const TypeChecker = struct {
     if (errTy != null) {
       const name = self.getTypename(@constCast(&UnitTypes.tyNumber));
       return self.error_(
-        node.op.token,
+        true, node.op.token,
         "Expected type '{s}' {s} '{s}', but got '{s}' {s} '{s}'",
         .{
           name, op, name,
           self.getTypename(node.typ.?), op, self.getTypename(source)
         }
       );
+    }
+  }
+
+  fn checkSubscript(self: *Self, node: *ast.SubscriptNode, expr_ty: *Type, index_ty: *Type) !void {
+    if (!expr_ty.isListTy() and !expr_ty.isMapTy()) {
+      return self.error_(
+        true, node.token,
+        "Type '{s}' is not indexable", .{self.getTypename(expr_ty)}
+      );
+    }
+    if (expr_ty.generic().tparams_len() == 0) {
+      return self.error_(
+        true, node.token,
+        "Cannot index empty or non-specialized '{s}' type", .{self.getTypename(expr_ty)}
+      );
+    }
+    if (expr_ty.isListTy()) {
+      if (!index_ty.isNumTy()) {
+        return self.error_(
+          true, node.token,
+          "Cannot index '{s}' type with type '{s}'",
+          .{self.getTypename(expr_ty), self.getTypename(index_ty)}
+        );
+      }
+      node.typ = expr_ty.generic().tparams.items[0];
+    } else if (expr_ty.isMapTy()) {
+      // k-v. index with k, get v.
+      var gen = expr_ty.generic();
+      std.debug.assert(gen.tparams_len() == 2);
+      var key_typ = gen.tparams.items[0];
+      var val_typ = gen.tparams.items[1];
+      _ = self.checkAssign(key_typ, index_ty, index_ty.debug, false) catch {
+        return self.error_(
+          true, node.token,
+          "Cannot index type '{s}' with type '{s}'",
+          .{self.getTypename(expr_ty), self.getTypename(index_ty)}
+        );
+      };
+      node.typ = val_typ;
     }
   }
 
@@ -393,6 +506,7 @@ pub const TypeChecker = struct {
       .AstAlias => |*nd| try self.inferAlias(nd),
       .AstNil => |*nd| try self.inferNil(nd),
       .AstCast => |*nd| try self.inferCast(nd),
+      .AstSubscript => |*nd| try self.inferSubscript(nd),
       .AstEmpty => unreachable,
       .AstProgram => |*nd| try self.inferProgram(nd),
     };

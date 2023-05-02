@@ -97,6 +97,8 @@ pub const Compiler = struct {
   locals_count: u32 = 0,
   gsyms_count: u32 = 0,
   vm: *VM,
+  optimizeRK: u32 = 0, // can optimize for rk
+  optimizeBX: u32 = 0, // can optimize for bx
   
   const Self = @This();
 
@@ -135,6 +137,30 @@ pub const Compiler = struct {
     };
   }
 
+  inline fn optimizeConstRK(self: *Self) void {
+    self.optimizeRK += 1;
+  }
+
+  inline fn deoptimizeConstRK(self: *Self) void {
+    self.optimizeRK -= 1;
+  }
+
+  inline fn optimizeConstBX(self: *Self) void {
+    self.optimizeBX += 1;
+  }
+
+  inline fn deoptimizeConstBX(self: *Self) void {
+    self.optimizeBX -= 1;
+  }
+
+  inline fn canOptimizeConstRK(self: *Self) bool {
+    return self.optimizeRK > 0;
+  }
+
+  inline fn canOptimizeConstBX(self: *Self) bool {
+    return self.optimizeBX > 0;
+  }
+
   /// return true if within RK limit else false
   fn withinRKLimit(self: *Self, num_operands: usize) bool {
     // check that we don't exceed the 9 bits of rk (+ num_operands for number of operands to be added)
@@ -144,7 +170,7 @@ pub const Compiler = struct {
   /// return true if within BX limit else false
   fn withinBXLimit(self: *Self) bool {
     // check that we don't exceed the 18 bits of bx (+ 1 for the new addition)
-    return ((self.code.values.items.len + 1) <= value.Code._18bits);
+    return ((self.code.values.items.len + value.MAX_REGISTERS + 1) <= value.Code._18bits);
   }
 
   fn addLocal(self: *Self, node: *ast.VarNode) u32 {
@@ -313,10 +339,17 @@ pub const Compiler = struct {
     }
   }
 
-  fn cConst(self: *Self, reg: u32, val: value.Value, line: usize) void {
+  fn cConst(self: *Self, reg: u32, val: value.Value, line: usize) u32 {
     // load rx, memidx
     const memidx = self.code.writeValue(val, self.vm);
-    self.code.write2ArgsInst(.Load, reg, memidx, @intCast(u32, line), self.vm);
+    if (self.canOptimizeConstRK() and self.withinRKLimit(1)) {
+      return memidx + value.MAX_REGISTERS;
+    } else if (self.canOptimizeConstBX() and self.withinBXLimit()) {
+      return memidx + value.MAX_REGISTERS;
+    } else {
+      self.code.write2ArgsInst(.Load, reg, memidx, @intCast(u32, line), self.vm);
+      return reg;
+    }
   }
 
   fn storeVar(self: *Self, node: *ast.VarNode) u32 {
@@ -326,50 +359,34 @@ pub const Compiler = struct {
 
   fn cNumber(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
     // load rx, memidx
-    self.cConst(dst, value.numberVal(node.value), node.line);
-    return dst;
+    return self.cConst(dst, value.numberVal(node.value), node.line);
   }
 
   fn cBool(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
     // load rx, memidx
-    self.cConst(dst, value.boolVal(node.token.is(.TkTrue)), node.line);
-    return dst;
+    return self.cConst(dst, value.boolVal(node.token.is(.TkTrue)), node.line);
   }
 
   fn cString(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
-    self.cConst(
+    return self.cConst(
       dst,
       value.objVal(value.createString(self.vm, &self.vm.strings, node.token.value, node.token.is_alloc)),
       node.line
     );
-    return dst;
   }
 
   fn cNil(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
     // load rx, memidx
-    self.cConst(dst, value.nilVal(), node.line);
-    return dst;
+    return self.cConst(dst, value.nilVal(), node.line);
   }
 
   fn cUnary(self: *Self, node: *ast.UnaryNode, reg: u32) u32 {
+    self.optimizeConstBX();
     const inst_op = node.op.optype.toInstOp();
-    const isConst = node.expr.isNumOrBoolNode();
-    const rx = reg;
-    // check that we don't exceed the 18 bits of rk/bx (+ 1 for expr)
-    if (isConst and self.withinBXLimit()) {
-      // for now, only numbers and booleans are recognized as consts
-      var rk: u32 = undefined;
-      if (node.expr.isNum()) {
-        rk = self.code.storeConst(value.numberVal(node.expr.AstNumber.value), self.vm);
-      } else {
-        rk = self.code.storeConst(value.boolVal(node.expr.AstBool.token.is(.TkTrue)), self.vm);
-      }
-      self.code.write2ArgsInst(inst_op, rx, rk, @intCast(u32, node.line), self.vm);
-      return rx;
-    }
     const rk = self.c(node.expr, reg);
-    self.code.write2ArgsInst(inst_op, rx, rk, @intCast(u32, node.line), self.vm);
-    return rx;
+    self.code.write2ArgsInst(inst_op, reg, rk, @intCast(u32, node.line), self.vm);
+    self.deoptimizeConstBX();
+    return reg;
   }
 
   inline fn cCmp(self: *Self, node: *ast.BinaryNode) void {
@@ -380,48 +397,36 @@ pub const Compiler = struct {
 
   inline fn cLgc(self: *Self, node: *ast.BinaryNode, reg: u32) u32 {
     // and, or
+    // for and/or we do not want any const optimizations as we need consts to be loaded to registers
+    // since const optimizations can cause no instructions to be emitted for consts. For ex: `4 or 5`
+    var tmpBX = self.optimizeBX;
+    var tmpRK = self.optimizeRK;
+    // turn off const optimizations
+    self.optimizeBX = 0;
+    self.optimizeRK = 0;
     var rx = self.c(node.left, reg);
     const end_jmp = self.code.write2ArgsJmp(node.op.optype.toInstOp(), rx, self.lastLine(), self.vm);
     rx = self.c(node.right, reg);
     self.code.patch2ArgsJmp(end_jmp);
-    return rx;
+    // restore const optimizations
+    self.optimizeBX = tmpBX;
+    self.optimizeRK = tmpRK;
+    return reg;
   }
 
   fn cBinary(self: *Self, node: *ast.BinaryNode, dst: u32) u32 {
     // handle and | or
     if (node.op.optype.isLgcOp()) return self.cLgc(node, dst);
-    // handle other binary ops
-    const lhsIsNum = node.left.isNum();
-    const rhsIsNum = node.right.isNum();
+    self.optimizeConstRK();
+    var rk1 = self.c(node.left, dst);
+    const dst2 = self.getReg();
+    var rk2 = self.c(node.right, dst2);
+    // we own this register, so we can free
+    self.vreg.releaseReg(dst2);
     const inst_op = node.op.optype.toInstOp();
-    // check that we don't exceed the 9 bits of rk (+ 2 for lhs and rhs)
-    if (lhsIsNum and rhsIsNum) {
-      if (self.withinRKLimit(2)) {
-        const rk1 = self.code.storeConst(value.numberVal(node.left.AstNumber.value), self.vm);
-        const rk2 = self.code.storeConst(value.numberVal(node.right.AstNumber.value), self.vm);
-        self.code.write3ArgsInst(inst_op, dst, rk1, rk2, @intCast(u32, node.line), self.vm);
-        self.cCmp(node);
-        return dst;
-      }
-    }
-    // fallthrough
-    var rk1: u32 = undefined;
-    var rk2: u32 = undefined;
-    if (lhsIsNum and self.withinRKLimit(1)) { // 2 * (3 * (4 * 5))
-      rk1 = self.code.storeConst(value.numberVal(node.left.AstNumber.value), self.vm);
-    } else {
-      rk1 = self.c(node.left, dst);
-    }
-    if (rhsIsNum and self.withinRKLimit(1)) {
-      rk2 = self.code.storeConst(value.numberVal(node.right.AstNumber.value), self.vm);
-    } else {
-      const dst2 = self.getReg();
-      rk2 = self.c(node.right, dst2);
-      // we own this register, so we can free
-      self.vreg.releaseReg(dst2);
-    }
     self.code.write3ArgsInst(inst_op, dst, rk1, rk2, @intCast(u32, node.line), self.vm);
     self.cCmp(node);
+    self.deoptimizeConstRK();
     return dst;
   }
 
@@ -437,7 +442,7 @@ pub const Compiler = struct {
         idx = self.code.storeConst(val, self.vm);
       } else {
         idx = self.getReg();
-        self.cConst(idx, val, node.line);
+        _ = self.cConst(idx, val, node.line);
         self.vreg.releaseReg(idx);
       }
       self.code.write3ArgsInst(.Slst, dst, idx, rk_val, node.line, self.vm);
@@ -505,10 +510,31 @@ pub const Compiler = struct {
     }
   }
 
+  fn cSubscriptAssign(self: *Self, node: *ast.SubscriptNode, rhs: *Node, dst: u32) u32 {
+    self.optimizeConstRK();
+    // lhs-expr
+    var rx = self.c(node.expr, dst);
+    // index
+    var idx_reg = self.getReg();
+    var rk_idx = self.c(node.index, idx_reg);
+    // rhs-expr
+    var val_reg = self.getReg();
+    var rk_val = self.c(rhs, val_reg);
+    var op: OpCode = if (node.expr.getType().?.isListTy()) .Slst else .Smap;
+    self.code.write3ArgsInst(op, rx, rk_idx, rk_val, node.line, self.vm);
+    self.vreg.releaseReg(idx_reg);
+    self.vreg.releaseReg(val_reg);
+    self.deoptimizeConstRK();
+    return dst;
+  }
+
   fn cAssign(self: *Self, node: *ast.BinaryNode, reg: u32) u32 {
     return switch (node.left.*) {
       .AstVar => |*vr| {
         return self.cVarAssign(vr, node.right, reg);
+      },
+      .AstSubscript => |*sub| {
+        return self.cSubscriptAssign(sub, node.right, reg);
       },
       // would be unreachable after type checking
       else => self.compileError("invalid assignment target", .{}),
@@ -517,25 +543,13 @@ pub const Compiler = struct {
 
   fn cCast(self: *Self, node: *ast.CastNode, dst: u32) u32 {
     const ty = node.expr.getType();
+    // generate code for bool cast, if the expression is not already a bool type
     if (ty != null and !ty.?.isBoolTy()) {
       if (node.typn.typ.isSimple() and node.typn.typ.isBoolTy()) {
-        // TODO: optimize this.
-        var rk: u32 = undefined;
-        if (self.withinRKLimit(1)) {
-          rk = switch (node.expr.*) {
-            .AstNumber => self.code.storeConst(value.numberVal(node.expr.AstNumber.value), self.vm),
-            .AstBool => self.code.storeConst(value.boolVal(node.expr.AstBool.token.is(.TkTrue)), self.vm),
-            .AstNil => self.code.storeConst(value.nilVal(), self.vm),
-            .AstString => blk: {
-              var obj = value.objVal(value.createString(self.vm, &self.vm.strings, node.token.value, node.token.is_alloc));
-              break :blk self.code.storeConst(obj, self.vm);
-            },
-            else => self.c(node.expr, dst),
-          };
-        } else {
-          rk = self.c(node.expr, dst);
-        }
+        self.optimizeConstRK();
+        var rk = self.c(node.expr, dst);
         self.code.write2ArgsInst(.Bcst, dst, rk, node.line, self.vm);
+        self.deoptimizeConstRK();
         return dst;
       }
     }
@@ -583,6 +597,30 @@ pub const Compiler = struct {
     return reg;
   }
 
+  fn cSubscript(self: *Self, node: *ast.SubscriptNode, dst: u32) u32 {
+    if (node.expr.getType()) |typ| {
+      self.optimizeConstRK();
+      if (typ.isListTy()) {
+        // list index
+        var rk_val = self.c(node.expr, dst);
+        var reg = self.getReg();
+        var rk_idx = self.c(node.index, reg);
+        self.code.write3ArgsInst(.Glst, dst, rk_idx, rk_val, node.line, self.vm);
+        self.vreg.releaseReg(reg);
+      } else {
+        // map access
+        var rk_val = self.c(node.expr, dst);
+        var reg = self.getReg();
+        var rk_key = self.c(node.index, reg);
+        self.code.write3ArgsInst(.Gmap, dst, rk_key, rk_val, node.line, self.vm);
+        self.vreg.releaseReg(reg);
+      }
+      self.deoptimizeConstRK();
+      return dst;
+    }
+    unreachable;
+  }
+
   fn cBlock(self: *Self, node: *ast.BlockNode, reg: u32) u32 {
     self.scope += 1;
     for (node.nodes.items) |nd| {
@@ -618,15 +656,16 @@ pub const Compiler = struct {
       .AstAlias => reg, // TODO
       .AstNil => |*nd| self.cNil(nd, reg),
       .AstCast => |*nd| self.cCast(nd, reg),
-      .AstEmpty => unreachable,
+      .AstSubscript => |*nd| self.cSubscript(nd, reg),
       .AstProgram => |*nd| self.cProgram(nd, reg),
+      .AstEmpty => unreachable,
     };
   }
 
   pub fn compile(self: *Self) void {
     self.preallocateGlobals(&self.node.AstProgram.decls);
     util.assert(self.c(self.node, VRegister.DummyReg) == VRegister.DummyReg, "should be a dummy register");
-    const last_line = self.code.lines.items[self.code.lines.items.len - 1];
+    const last_line = if (self.code.lines.items.len > 0) self.code.lines.items[self.code.lines.items.len - 1] else 0;
     self.code.writeNoArgInst(.Ret, last_line, self.vm);
     self.validateNoUnpatchedGlobals();
     // release memory associated with the arena, since we're done with it at this point.

@@ -472,8 +472,20 @@ test "type summation" {
   \\ let p: list{num?} = []
   \\ let q: list{num?} = [nil as num?]
   \\ let r: list{num?} = [nil, 5, nil]
+  \\ let r: list{(num | str)?} = [nil, 5, nil, 'foo']
   // \\ let s: list{num? | str} = [nil, 5 as num? | str, nil]
   \\ let t: list{(num | str)?} = [nil, 5 as num | str, nil]
+  ;
+  _ = try doTest(src);
+}
+
+test "nil access" {
+  var src =
+  \\ let x: num? = 5
+  \\ let p = x.? + 10
+  \\ let f = {'foo': 5 as num?}
+  \\ let j = f['foo'].? + 5
+  \\ j == 10
   ;
   _ = try doTest(src);
 }

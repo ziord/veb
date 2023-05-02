@@ -110,6 +110,10 @@ pub const OpCode = enum (u8) {
   // [6] [8]  [9]
   Mov,
 
+  // asrt rx
+  // [6] [8]
+  Asrt,
+
   // load rx, bx
   //  [6] [8]  [18]
   Load,

@@ -607,6 +607,10 @@ pub const TypeLinker = struct {
     try self.link(node.index);
   }
 
+  fn linkDeref(self: *Self, node: *ast.DerefNode) !void {
+    try self.link(node.expr);
+  }
+
   fn linkProgram(self: *Self, node: *ast.ProgramNode) !void {
     self.ctx.enterScope();
     for (node.decls.items) |item| {
@@ -634,6 +638,7 @@ pub const TypeLinker = struct {
       .AstAlias => |*nd| try self.linkAlias(nd),
       .AstCast => |*nd| try self.linkCast(nd),
       .AstSubscript => |*nd| try self.linkSubscript(nd),
+      .AstDeref => |*nd| try self.linkDeref(nd),
       .AstProgram => |*nd| try self.linkProgram(nd),
       .AstEmpty => unreachable,
     }

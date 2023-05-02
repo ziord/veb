@@ -332,6 +332,12 @@ pub const TypeChecker = struct {
     return node.typ.?;
   }
 
+  fn inferDeref(self: *Self, node: *ast.DerefNode) !*Type {
+    var expr_ty = try self.infer(node.expr);
+    try self.checkDeref(node, expr_ty);
+    return node.typ.?;
+  }
+
   fn inferBlock(self: *Self, node: *ast.BlockNode) !*Type {
     self.ctx.enterScope();
     for (node.nodes.items) |item| {
@@ -488,6 +494,17 @@ pub const TypeChecker = struct {
     }
   }
 
+  fn checkDeref(self: *Self, node: *ast.DerefNode, expr_ty: *Type) !void {
+    if (!expr_ty.isNullable()) {
+      return self.error_(
+        true, node.token,
+        "Cannot dereference non-nullable type: '{s}'",
+        .{self.getTypename(expr_ty)}
+      );
+    }
+    node.typ = expr_ty.nullable().subtype;
+  }
+
   fn infer(self: *Self, node: *Node) TypeCheckError!*Type {
     return switch (node.*) {
       .AstNumber => |*nd| try self.inferNumber(nd),
@@ -507,6 +524,7 @@ pub const TypeChecker = struct {
       .AstNil => |*nd| try self.inferNil(nd),
       .AstCast => |*nd| try self.inferCast(nd),
       .AstSubscript => |*nd| try self.inferSubscript(nd),
+      .AstDeref => |*nd| try self.inferDeref(nd),
       .AstEmpty => unreachable,
       .AstProgram => |*nd| try self.inferProgram(nd),
     };

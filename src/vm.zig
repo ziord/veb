@@ -156,6 +156,17 @@ pub const VM = struct {
           self.stack[rx] = self.stack[ry];
           continue;
         },
+        .Asrt => {
+          // asrt rx
+          var rx: u32 = undefined;
+          var dum1: u32 = undefined;
+          var dum2: u32 = undefined;
+          self.read3Args(inst, &rx, &dum1, &dum2);
+          if (vl.isNil(self.stack[rx])) {
+            return self.runtimeError("Attempt to use value 'nil'", .{});
+          }
+          continue;
+        },
         .Add => {
           // add rx, rk(x), rk(x)
           var rx: u32 = undefined;

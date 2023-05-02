@@ -27,6 +27,7 @@ pub const AstType = enum {
   AstSubscript,
   AstNil,
   AstEmpty,
+  AstDeref,
   AstProgram,
 };
 
@@ -196,6 +197,17 @@ pub const AliasNode = struct {
   }
 };
 
+/// null dereference: expr.?
+pub const DerefNode = struct {
+  token: Token,
+  expr: *AstNode,
+  typ: ?*Type = null,
+
+  pub fn init(expr: *AstNode, token: Token) @This() {
+    return @This() {.expr = expr, .token = token};
+  }
+};
+
 pub const EmptyNode = struct {
   token: Token,
 
@@ -249,6 +261,7 @@ pub const AstNode = union(AstType) {
   AstCast: CastNode,
   AstSubscript: SubscriptNode,
   AstEmpty: EmptyNode,
+  AstDeref: DerefNode,
   AstProgram: ProgramNode,
 
   pub fn line(self: *@This()) usize {
@@ -267,6 +280,8 @@ pub const AstNode = union(AstType) {
       .AstAlias => |ali| ali.token.line,
       .AstCast => |cst| cst.line,
       .AstEmpty => |emp| emp.token.line,
+      .AstSubscript => |sub| sub.line,
+      .AstDeref => |der| der.token.line,
       .AstProgram => |prog| prog.line,
     };
   }
@@ -293,6 +308,7 @@ pub const AstNode = union(AstType) {
       .AstAlias => |ali| ali.typ,
       .AstCast => |cst| @constCast(&cst.typn.typ),
       .AstSubscript => |sub| sub.typ,
+      .AstDeref => |der| der.typ,
       else => unreachable,
     };
   }

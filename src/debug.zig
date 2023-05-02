@@ -81,6 +81,13 @@ pub const Disassembler = struct {
         std.debug.assert(Code.readRK2(word) == 0);
         std.debug.print("mov {}, {}\n", .{a1, a2});
       },
+      .Asrt => {
+        // asrt is a 1-arg inst using a 3-arg format.
+        const a1 = Code.readRX(word);
+        std.debug.assert(Code.readRK1(word) == 0);
+        std.debug.assert(Code.readRK2(word) == 0);
+        std.debug.print("asrt {}\n", .{a1});
+      },
       .Load => {
         __2ArgsInst("load", word);
         var bx = Code.readBX(word);

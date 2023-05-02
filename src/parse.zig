@@ -78,7 +78,7 @@ pub const Parser = struct {
     .{.bp = .BitXor, .prefix = null, .infix = Self.binary},             // TkCaret
     .{.bp = .BitOr, .prefix = null, .infix = Self.binary},              // TkPipe
     .{.bp = .Unary, .prefix = Self.unary, .infix = null},               // TkTilde
-    .{.bp = .Access, .prefix = null, .infix = null},                    // TkDot
+    .{.bp = .Access, .prefix = null, .infix = Self.dotting},            // TkDot
     .{.bp = .None, .prefix = null, .infix = null},                      // TkQMark
     .{.bp = .None, .prefix = null, .infix = null},                      // TkNewline
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},         // TkLeq
@@ -360,6 +360,17 @@ pub const Parser = struct {
     var node = self.newNode();
     node.* = .{.AstSubscript = ast.SubscriptNode.init(left, index, token)};
     return self.handleAugAssign(node, assignable);
+  }
+
+  fn dotting(self: *Self, left: *Node, assignable: bool) *Node {
+    _ = assignable;
+    // expr.?
+    var token = self.current_tok;
+    self.consume(.TkDot);
+    self.consume(.TkQMark);
+    var node = self.newNode();
+    node.* = .{.AstDeref = ast.DerefNode.init(left, token)};
+    return node;
   }
 
   fn handleAugAssign(self: *Self, left: *Node, assignable: bool) *Node {

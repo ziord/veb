@@ -621,6 +621,12 @@ pub const Compiler = struct {
     unreachable;
   }
 
+  fn cDeref(self: *Self, node: *ast.DerefNode, reg: u32) u32 {
+    var rx = self.c(node.expr, reg);
+    self.code.write3ArgsInst(.Asrt, rx, 0, 0, node.token.line, self.vm);
+    return reg;
+  }
+
   fn cBlock(self: *Self, node: *ast.BlockNode, reg: u32) u32 {
     self.scope += 1;
     for (node.nodes.items) |nd| {
@@ -657,6 +663,7 @@ pub const Compiler = struct {
       .AstNil => |*nd| self.cNil(nd, reg),
       .AstCast => |*nd| self.cCast(nd, reg),
       .AstSubscript => |*nd| self.cSubscript(nd, reg),
+      .AstDeref => |*nd| self.cDeref(nd, reg),
       .AstProgram => |*nd| self.cProgram(nd, reg),
       .AstEmpty => unreachable,
     };

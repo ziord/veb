@@ -3,7 +3,7 @@ const lex = @import("lex.zig");
 const ast = @import("ast.zig");
 const types = @import("type.zig");
 const util = @import("util.zig");
-const NovaAllocator = @import("allocator.zig");
+const CnAllocator = @import("allocator.zig");
 
 const Node = ast.AstNode;
 const exit = std.os.exit;
@@ -24,7 +24,7 @@ pub const Parser = struct {
   previous_tok: lex.Token,
   lexer: lex.Lexer,
   allocator: std.mem.Allocator,
-  nva: *NovaAllocator,
+  cna: *CnAllocator,
   filename: []const u8,
   allowNl: usize = 0,
 
@@ -114,12 +114,12 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkEof
   };
 
-  pub fn init(src: []const u8, filename: []const u8, allocator: *NovaAllocator) Self {
+  pub fn init(src: []const u8, filename: []const u8, allocator: *CnAllocator) Self {
     return Self {
       .current_tok = undefined,
       .previous_tok = undefined,
       .lexer = lex.Lexer.init(src, allocator),
-      .nva = allocator,
+      .cna = allocator,
       .filename = filename,
       // use the arena allocator for allocating general nodes.
       .allocator = allocator.getArenaAllocator(),
@@ -128,7 +128,7 @@ pub const Parser = struct {
 
   fn err(self: *Self, token: lex.Token) noreturn {
     token.showError(self.filename, "ParseError: {s}", .{token.msg.?});
-    self.nva.deinitArena();
+    self.cna.deinitArena();
     exit(1);
   }
 

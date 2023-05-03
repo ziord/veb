@@ -359,32 +359,32 @@ pub const Compiler = struct {
 
   fn cNumber(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
     // load rx, memidx
-    return self.cConst(dst, value.numberVal(node.value), node.line);
+    return self.cConst(dst, value.numberVal(node.value), node.line());
   }
 
   fn cBool(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
     // load rx, memidx
-    return self.cConst(dst, value.boolVal(node.token.is(.TkTrue)), node.line);
+    return self.cConst(dst, value.boolVal(node.token.is(.TkTrue)), node.line());
   }
 
   fn cString(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
     return self.cConst(
       dst,
       value.objVal(value.createString(self.vm, &self.vm.strings, node.token.value, node.token.is_alloc)),
-      node.line
+      node.line()
     );
   }
 
   fn cNil(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
     // load rx, memidx
-    return self.cConst(dst, value.nilVal(), node.line);
+    return self.cConst(dst, value.nilVal(), node.line());
   }
 
   fn cUnary(self: *Self, node: *ast.UnaryNode, reg: u32) u32 {
     self.optimizeConstBX();
     const inst_op = node.op.optype.toInstOp();
     const rk = self.c(node.expr, reg);
-    self.code.write2ArgsInst(inst_op, reg, rk, @intCast(u32, node.line), self.vm);
+    self.code.write2ArgsInst(inst_op, reg, rk, @intCast(u32, node.line()), self.vm);
     self.deoptimizeConstBX();
     return reg;
   }
@@ -392,7 +392,7 @@ pub const Compiler = struct {
   inline fn cCmp(self: *Self, node: *ast.BinaryNode) void {
     // <, >, <=, >=, ==, !=
     if (!node.op.optype.isCmpOp()) return;
-    self.code.writeNoArgInst(@intToEnum(OpCode, @enumToInt(node.op.optype)), node.line, self.vm);
+    self.code.writeNoArgInst(@intToEnum(OpCode, @enumToInt(node.op.optype)), node.line(), self.vm);
   }
 
   inline fn cLgc(self: *Self, node: *ast.BinaryNode, reg: u32) u32 {
@@ -424,7 +424,7 @@ pub const Compiler = struct {
     // we own this register, so we can free
     self.vreg.releaseReg(dst2);
     const inst_op = node.op.optype.toInstOp();
-    self.code.write3ArgsInst(inst_op, dst, rk1, rk2, @intCast(u32, node.line), self.vm);
+    self.code.write3ArgsInst(inst_op, dst, rk1, rk2, @intCast(u32, node.line()), self.vm);
     self.cCmp(node);
     self.deoptimizeConstRK();
     return dst;
@@ -432,7 +432,7 @@ pub const Compiler = struct {
 
   fn cList(self: *Self, node: *ast.ListNode, dst: u32) u32 {
     const size = @intCast(u32, node.elems.items.len);
-    self.code.write2ArgsInst(.Nlst, dst, size, node.line, self.vm);
+    self.code.write2ArgsInst(.Nlst, dst, size, node.line(), self.vm);
     var idx: u32 = undefined;
     for (node.elems.items, 0..) |elem, i| {
       var reg = self.getReg();
@@ -442,10 +442,10 @@ pub const Compiler = struct {
         idx = self.code.storeConst(val, self.vm);
       } else {
         idx = self.getReg();
-        _ = self.cConst(idx, val, node.line);
+        _ = self.cConst(idx, val, node.line());
         self.vreg.releaseReg(idx);
       }
-      self.code.write3ArgsInst(.Slst, dst, idx, rk_val, node.line, self.vm);
+      self.code.write3ArgsInst(.Slst, dst, idx, rk_val, node.line(), self.vm);
       self.vreg.releaseReg(reg);
     }
     return dst;
@@ -454,13 +454,13 @@ pub const Compiler = struct {
   fn cMap(self: *Self, node: *ast.MapNode, dst: u32) u32 {
     const size = @intCast(u32, node.pairs.items.len);
     // TODO: specialize map with k-v types
-    self.code.write2ArgsInst(.Nmap, dst, size, node.line, self.vm);
+    self.code.write2ArgsInst(.Nmap, dst, size, node.line(), self.vm);
     for (node.pairs.items) |pair| {
       var reg1 = self.getReg();
       var reg2 = self.getReg();
       var rk_key = self.c(pair.key, reg1);
       var rk_val = self.c(pair.value, reg2);
-      self.code.write3ArgsInst(.Smap, dst, rk_key, rk_val, node.line, self.vm);
+      self.code.write3ArgsInst(.Smap, dst, rk_key, rk_val, node.line(), self.vm);
       self.vreg.releaseReg(reg1);
       self.vreg.releaseReg(reg2);
     }
@@ -482,7 +482,7 @@ pub const Compiler = struct {
     } else if (self.findGlobal(node)) |info| {
       self.validateGlobalVarUse(info, node);
       const inst: OpCode = if(info.isGSym) .Ggsym else .Gglb;
-      self.code.write2ArgsInst(inst, dst, info.pos, node.line, self.vm);
+      self.code.write2ArgsInst(inst, dst, info.pos, node.line(), self.vm);
       return dst;
     } else {
       self.compileError("use of undefined variable '{s}'", .{node.token.value});
@@ -496,14 +496,14 @@ pub const Compiler = struct {
       if (ret != lvar.reg) {
         // this implies the result of expr was stored in a different register.
         // Move it to lvar's register.
-        self.code.write3ArgsInst(.Mov, lvar.reg, ret, 0, node.line, self.vm);
+        self.code.write3ArgsInst(.Mov, lvar.reg, ret, 0, node.line(), self.vm);
       }
       return lvar.reg;
     } else if (self.findGlobal(node)) |info| {
       // sgsym/sglb rx, bx -> GS[bx] = r(x) | G[K(bx)] = r(x)
       var rx = self.c(expr, reg);
       const inst: OpCode = if (info.isGSym) .Sgsym else .Sglb;
-      self.code.write2ArgsInst(inst, rx, info.pos, node.line, self.vm);
+      self.code.write2ArgsInst(inst, rx, info.pos, node.line(), self.vm);
       return rx;
     } else {
       self.compileError("undefined variable '{s}'", .{node.token.value});
@@ -521,7 +521,7 @@ pub const Compiler = struct {
     var val_reg = self.getReg();
     var rk_val = self.c(rhs, val_reg);
     var op: OpCode = if (node.expr.getType().?.isListTy()) .Slst else .Smap;
-    self.code.write3ArgsInst(op, rx, rk_idx, rk_val, node.line, self.vm);
+    self.code.write3ArgsInst(op, rx, rk_idx, rk_val, node.line(), self.vm);
     self.vreg.releaseReg(idx_reg);
     self.vreg.releaseReg(val_reg);
     self.deoptimizeConstRK();
@@ -548,7 +548,7 @@ pub const Compiler = struct {
       if (node.typn.typ.isSimple() and node.typn.typ.isBoolTy()) {
         self.optimizeConstRK();
         var rk = self.c(node.expr, dst);
-        self.code.write2ArgsInst(.Bcst, dst, rk, node.line, self.vm);
+        self.code.write2ArgsInst(.Bcst, dst, rk, node.line(), self.vm);
         self.deoptimizeConstRK();
         return dst;
       }
@@ -591,7 +591,7 @@ pub const Compiler = struct {
       // sgsym rx, bx -> GS[bx] = r(x)
       // sglb rx, bx -> G[K(bx)] = r(x)
       // info.pos is GSym pos or index into valuepool storing GlobalVar name
-      self.code.write2ArgsInst(inst, rx, info.pos, node.line, self.vm);
+      self.code.write2ArgsInst(inst, rx, info.pos, node.line(), self.vm);
       self.vreg.releaseReg(dst);
     }
     return reg;
@@ -605,14 +605,14 @@ pub const Compiler = struct {
         var rk_val = self.c(node.expr, dst);
         var reg = self.getReg();
         var rk_idx = self.c(node.index, reg);
-        self.code.write3ArgsInst(.Glst, dst, rk_idx, rk_val, node.line, self.vm);
+        self.code.write3ArgsInst(.Glst, dst, rk_idx, rk_val, node.line(), self.vm);
         self.vreg.releaseReg(reg);
       } else {
         // map access
         var rk_val = self.c(node.expr, dst);
         var reg = self.getReg();
         var rk_key = self.c(node.index, reg);
-        self.code.write3ArgsInst(.Gmap, dst, rk_key, rk_val, node.line, self.vm);
+        self.code.write3ArgsInst(.Gmap, dst, rk_key, rk_val, node.line(), self.vm);
         self.vreg.releaseReg(reg);
       }
       self.deoptimizeConstRK();

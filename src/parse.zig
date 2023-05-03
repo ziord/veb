@@ -267,7 +267,7 @@ pub const Parser = struct {
       // rewrite +expr to expr
       return expr;
     }
-    node.* = .{.AstUnary = ast.UnaryNode.init(expr, op, line_tok.line)};
+    node.* = .{.AstUnary = ast.UnaryNode.init(expr, op)};
     return node;
   }
 

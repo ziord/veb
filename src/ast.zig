@@ -35,15 +35,14 @@ pub const AstType = enum {
 pub const LiteralNode = struct {
   token: Token,
   value: f64,
-  line: usize,
   typ: ?*Type = null,
 
   pub fn init(token: Token) @This() {
-    return @This() {
-      .token = token,
-      .value = undefined,
-      .line = token.line,
-    };
+    return @This() {.token = token, .value = undefined};
+  }
+
+  pub inline fn line(self: *@This()) usize {
+    return self.token.line;
   }
 };
 
@@ -51,7 +50,6 @@ pub const BinaryNode = struct {
   left: *AstNode,
   right: *AstNode,
   op: lex.Optr,
-  line: usize,
   typ: ?*Type = null,
 
   pub fn init(left: *AstNode, right: *AstNode, op: Token) @This() {
@@ -59,15 +57,17 @@ pub const BinaryNode = struct {
       .left = left,
       .right = right,
       .op = lex.Optr.init(op),
-      .line = op.line,
     };
+  }
+
+  pub inline fn line(self: *@This()) usize {
+    return self.op.token.line;
   }
 };
 
 pub const SubscriptNode = struct {
   expr: *AstNode,
   index: *AstNode,
-  line: usize,
   token: Token,
   typ: ?*Type = null,
 
@@ -76,44 +76,47 @@ pub const SubscriptNode = struct {
       .expr = expr,
       .index = index,
       .token = token,
-      .line = token.line,
     };
+  }
+
+  pub inline fn line(self: *@This()) usize {
+    return self.token.line;
   }
 };
 
 pub const UnaryNode = struct {
   expr: *AstNode,
   op: lex.Optr,
-  line: usize,
   typ: ?*Type = null,
 
-  pub fn init(expr: *AstNode, op: Token, line: usize) @This() {
-    return @This() {
-      .expr = expr,
-      .op = lex.Optr.init(op),
-      .line = line,
-    };
+  pub fn init(expr: *AstNode, op: Token) @This() {
+    return @This() {.expr = expr, .op = lex.Optr.init(op)};
+  }
+
+  pub inline fn line(self: *@This()) usize {
+    return self.op.token.line;
   }
 };
 
 pub const ListNode = struct {
   elems: AstNodeList,
-  line: usize,
   token: Token,
   typ: ?*Type = null,
 
   pub fn init(allocator: std.mem.Allocator, token: Token) @This() {
     return @This() {
       .elems = AstNodeList.init(allocator),
-      .line = token.line,
       .token = token
     };
+  }
+
+  pub inline fn line(self: *@This()) usize {
+    return self.token.line;
   }
 };
 
 pub const MapNode = struct {
   pairs: std.ArrayList(Pair),
-  line: usize,
   token: Token,
   typ: ?*Type = null,
 
@@ -122,23 +125,25 @@ pub const MapNode = struct {
   pub fn init(allocator: std.mem.Allocator, token: Token) @This() {
     return @This() {
       .pairs = std.ArrayList(Pair).init(allocator),
-      .line = token.line,
       .token = token
     };
+  }
+
+  pub inline fn line(self: *@This()) usize {
+    return self.token.line;
   }
 };
 
 pub const VarNode = struct {
   token: lex.Token,
   typ: ?*Type,
-  line: usize,
 
   pub fn init(token: Token) @This() {
-    return @This() {
-      .token = token,
-      .line = token.line,
-      .typ = null,
-    };
+    return @This() {.token = token, .typ = null};
+  }
+
+  pub inline fn line(self: *@This()) usize {
+    return self.token.line;
   }
 };
 
@@ -147,21 +152,20 @@ pub const ExprStmtNode = struct {
   line: usize,
 
   pub fn init(expr: *AstNode, line: usize) @This() {
-    return @This() {.expr = expr, .line = line,};
+    return @This() {.expr = expr, .line = line};
   }
 };
 
 pub const VarDeclNode = struct {
   ident: *VarNode,
   value: *AstNode,
-  line: usize,
 
   pub fn init(ident: *VarNode, value: *AstNode) @This() {
-    return @This() {
-      .ident = ident,
-      .value = value,
-      .line = ident.line,
-    };
+    return @This() {.ident = ident, .value = value};
+  }
+
+  pub inline fn line(self: *@This()) usize {
+    return self.ident.line();
   }
 };
 
@@ -220,15 +224,17 @@ pub const CastNode = struct {
   expr: *AstNode,
   typn: *TypeNode,
   token: Token,
-  line: usize,
 
   pub fn init(expr: *AstNode, typn: *TypeNode, token: Token) @This() {
     return @This() {
       .expr = expr,
       .typn = typn,
-      .line = token.line,
       .token = token
     };
+  }
+
+  pub inline fn line(self: *@This()) usize {
+    return self.token.line;
   }
 };
 
@@ -263,28 +269,6 @@ pub const AstNode = union(AstType) {
   AstEmpty: EmptyNode,
   AstDeref: DerefNode,
   AstProgram: ProgramNode,
-
-  pub fn line(self: *@This()) usize {
-    return switch (self.*) {
-      .AstNumber, .AstString, .AstBool, .AstNil => |lit| lit.line,
-      .AstBinary => |bin| bin.line,
-      .AstUnary => |una| una.line,
-      .AstList => |lst| lst.line,
-      .AstMap => |map| map.line,
-      .AstExprStmt => |expr| expr.line,
-      .AstVarDecl => |decl| decl.line,
-      .AstVar => |id| id.line,
-      .AstAssign => |asi| asi.line,
-      .AstBlock => |blk| blk.line,
-      .AstNType => |typ| typ.token.line,
-      .AstAlias => |ali| ali.token.line,
-      .AstCast => |cst| cst.line,
-      .AstEmpty => |emp| emp.token.line,
-      .AstSubscript => |sub| sub.line,
-      .AstDeref => |der| der.token.line,
-      .AstProgram => |prog| prog.line,
-    };
-  }
 
   pub fn isComptimeConst(self: *@This()) bool {
     return switch (self.*) {

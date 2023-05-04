@@ -3,12 +3,13 @@ const value = @import("value.zig");
 const ast = @import("ast.zig");
 const parse = @import("parse.zig");
 const util = @import("util.zig");
-const NovaAllocator = @import("allocator.zig");
+const CnAllocator = @import("allocator.zig");
 const OpCode = @import("opcode.zig").OpCode;
 const VM = @import("vm.zig").VM;
 
 const Code = value.Code;
 const Node = ast.AstNode;
+const Inst = value.Inst;
 
 const VRegister = struct {
   regs: [value.MAX_REGISTERS]Reg,
@@ -92,20 +93,24 @@ pub const Compiler = struct {
   locals: [VM.MAX_LOCAL_ITEMS]LocalVar,
   globals: std.ArrayList(GlobalVar),
   vreg: VRegister,
-  allocator: *NovaAllocator,
+  allocator: *CnAllocator,
   scope: i32 = GLOBAL_SCOPE, // defaults to global scope
   locals_count: u32 = 0,
   gsyms_count: u32 = 0,
   vm: *VM,
-  optimizeRK: u32 = 0, // can optimize for rk
-  optimizeBX: u32 = 0, // can optimize for bx
+  rk_bx: RkBxPair = RkBxPair{},
   
   const Self = @This();
 
   const GLOBAL_SCOPE = 0;
   const GlobalVarInfo = struct {pos: u32, isGSym: bool, gvar: ?GlobalVar};
+  const RkBxPair = struct {
+    optimizeRK: u32 = 0, // can optimize for rk
+    optimizeBX: u32 = 0, // can optimize for bx
+    in_jmp: u32 = 0,
+  };
 
-  pub fn init(node: *Node, filename: []const u8, vm: *VM, code: *Code, allocator: *NovaAllocator) Self {
+  pub fn init(node: *Node, filename: []const u8, vm: *VM, code: *Code, allocator: *CnAllocator) Self {
     var self = Self {
       .code = code,
       .node = node, 
@@ -138,27 +143,35 @@ pub const Compiler = struct {
   }
 
   inline fn optimizeConstRK(self: *Self) void {
-    self.optimizeRK += 1;
+    self.rk_bx.optimizeRK += 1;
   }
 
   inline fn deoptimizeConstRK(self: *Self) void {
-    self.optimizeRK -= 1;
+    self.rk_bx.optimizeRK -= 1;
   }
 
   inline fn optimizeConstBX(self: *Self) void {
-    self.optimizeBX += 1;
+    self.rk_bx.optimizeBX += 1;
   }
 
   inline fn deoptimizeConstBX(self: *Self) void {
-    self.optimizeBX -= 1;
+    self.rk_bx.optimizeBX -= 1;
   }
 
   inline fn canOptimizeConstRK(self: *Self) bool {
-    return self.optimizeRK > 0;
+    return self.rk_bx.optimizeRK > 0 and self.rk_bx.in_jmp == 0;
   }
 
   inline fn canOptimizeConstBX(self: *Self) bool {
-    return self.optimizeBX > 0;
+    return self.rk_bx.optimizeBX > 0 and self.rk_bx.in_jmp == 0;
+  }
+
+  inline fn enterJmp(self: *Self) void {
+    self.rk_bx.in_jmp += 1;
+  }
+
+  inline fn leaveJmp(self: *Self) void {
+    self.rk_bx.in_jmp -= 1;
   }
 
   /// return true if within RK limit else false
@@ -399,18 +412,14 @@ pub const Compiler = struct {
     // and, or
     // for and/or we do not want any const optimizations as we need consts to be loaded to registers
     // since const optimizations can cause no instructions to be emitted for consts. For ex: `4 or 5`
-    var tmpBX = self.optimizeBX;
-    var tmpRK = self.optimizeRK;
     // turn off const optimizations
-    self.optimizeBX = 0;
-    self.optimizeRK = 0;
+    self.enterJmp();
     var rx = self.c(node.left, reg);
     const end_jmp = self.code.write2ArgsJmp(node.op.optype.toInstOp(), rx, self.lastLine(), self.vm);
     rx = self.c(node.right, reg);
     self.code.patch2ArgsJmp(end_jmp);
     // restore const optimizations
-    self.optimizeBX = tmpBX;
-    self.optimizeRK = tmpRK;
+    self.leaveJmp();
     return reg;
   }
 
@@ -637,6 +646,77 @@ pub const Compiler = struct {
     return reg;
   }
 
+  const JmpPatch = struct{jmp_to_next: usize, jmp_to_end: usize};
+
+  fn cIf(self: *Self, node: *ast.IfNode, dst: u32) u32 {
+    // self.enterJmp();
+    var reg = self.getReg();
+    // if-
+    var rx = self.c(node.cond, reg);
+    // jmp to elif, if any
+    var cond_to_elif_or_else = self.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
+    _ = self.cBlock(&node.then, reg);
+    var should_patch_if_then_to_end = true;
+    var if_then_to_end = blk: {
+      // as a simple optimization, if we only have an if-end statement, i.e. no elif & else,
+      // we don't need to jump after the last statement in the if-then block, control
+      // would naturally fallthrough to outside the if-end statement.
+      if (node.elifs.items.len == 0 and node.els.nodes.items.len == 0) {
+        should_patch_if_then_to_end = false;
+        break :blk @as(usize, 0);
+      }
+      break :blk self.code.write2ArgsJmp(.Jmp, 0, self.lastLine(), self.vm);
+    };
+    var elifs_then_to_end: std.ArrayList(usize) = undefined;
+    // elifs-
+    if (node.elifs.items.len > 0) {
+      // first, patch cond_to_elif_or_else here
+      self.code.patch2ArgsJmp(cond_to_elif_or_else);
+      elifs_then_to_end = std.ArrayList(usize).init(self.allocator.getArenaAllocator());
+      var last_patch: ?JmpPatch = null;
+      for (node.elifs.items) |*elif| {
+        if (last_patch) |pch| {
+          // we want the last compiled elif's failing cond to jump here; 
+          // - just before the next elif code
+          self.code.patch2ArgsJmp(pch.jmp_to_next);
+        }
+        var patch: JmpPatch = self.cElif(elif, reg);
+        util.append(usize, &elifs_then_to_end, patch.jmp_to_end);
+        last_patch = patch;
+      }
+      // the last elif in `elifs` would not be patched considering we're 
+      // patching the first only after we've seen the second, hence, we patch it here
+      self.code.patch2ArgsJmp(last_patch.?.jmp_to_next);
+    } else {
+      self.code.patch2ArgsJmp(cond_to_elif_or_else);
+    }
+    // else-
+    _ = self.cBlock(&node.els, reg);
+    if (node.elifs.items.len > 0) {
+      // patch up elif_then_to_end 
+      for (elifs_then_to_end.items) |idx| {
+        self.code.patch2ArgsJmp(idx);  // TODO: signed patch
+      }
+    }
+    if (should_patch_if_then_to_end) {
+      self.code.patch2ArgsJmp(if_then_to_end);  // TODO: signed patch
+    }
+    // self.leaveJmp();
+    self.vreg.releaseReg(reg);
+    return dst;
+  }
+
+  /// returns jmp_to_next for patching the jmp to the next elif/else/,
+  /// and jmp_to_end for patching the jmp to the end of the entire if-stmt
+  fn cElif(self: *Self, node: *ast.ElifNode, reg: u32) JmpPatch {
+    var rx = self.c(node.cond, reg);
+    // jmp to else, if any
+    var cond_jmp = self.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
+    _ = self.cBlock(&node.then, reg);
+    var then_jmp = self.code.write2ArgsJmp(.Jmp, 0, self.lastLine(), self.vm);
+    return .{.jmp_to_next = cond_jmp, .jmp_to_end = then_jmp};
+  }
+
   fn cProgram(self: *Self, node: *ast.ProgramNode, reg: u32) u32 {
     for (node.decls.items) |nd| {
       _ = self.c(nd, reg);
@@ -664,8 +744,9 @@ pub const Compiler = struct {
       .AstCast => |*nd| self.cCast(nd, reg),
       .AstSubscript => |*nd| self.cSubscript(nd, reg),
       .AstDeref => |*nd| self.cDeref(nd, reg),
+      .AstIf => |*nd| self.cIf(nd, reg),
       .AstProgram => |*nd| self.cProgram(nd, reg),
-      .AstEmpty => unreachable,
+      .AstElif, .AstEmpty => unreachable,
     };
   }
 

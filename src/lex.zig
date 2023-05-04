@@ -6,6 +6,7 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"return", .TkReturn},
   .{"if", .TkIf},
   .{"else", .TkElse},
+  .{"elif", .TkElif},
   .{"for", .TkFor},
   .{"while", .TkWhile},
   .{"and", .TkAnd},
@@ -73,6 +74,7 @@ pub const TokenType = enum (u8) {
   TkList,           // list
   TkType,           // type
   TkElse,           // else
+  TkElif,           // elif
   TkTrue,           // true
   TkFalse,          // false
   TkWhile,          // while
@@ -177,6 +179,7 @@ pub const TokenType = enum (u8) {
       .TkList => "list",
       .TkType => "type",
       .TkElse => "else",
+      .TkElif => "elif",
       .TkTrue => "true",
       .TkFalse => "false",
       .TkWhile => "while",
@@ -354,7 +357,7 @@ pub const Lexer = struct {
   at_error: bool,
   src: []const u8,
   allocator: std.mem.Allocator,
-  allowNl: usize = 0,
+  allow_nl: usize = 0,
 
   const Self = @This();
 
@@ -449,7 +452,7 @@ pub const Lexer = struct {
       switch(char) {
         ' ', '\r', '\t' => self.adv(),
         '\n' => {
-          if (self.allowNl > 0) self.adv() else return;
+          if (self.allow_nl > 0) self.adv() else return;
         },
         '#' => {
          self.skipComment();

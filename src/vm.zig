@@ -73,6 +73,12 @@ pub const VM = struct {
     a2.* = word & Code._18bits;
   }
 
+  inline fn read2ArgsSigned(self: *Self, word: u32, a1: *u32, a2: *i32) void {
+    _ = self;
+    a1.* = (word >> 18) & Code._8bits;
+    a2.* = @intCast(i32, word & Code._18bits);
+  }
+
   inline fn read1Arg(self: *Self, word: u32, a: *u32) void {
     _ = self;
     a.* = word & Code._26bits;
@@ -350,6 +356,14 @@ pub const VM = struct {
           if (vl.valueFalsy(self.stack[rx])) {
             self.ip += bx;
           }
+          continue;
+        },
+        .Jmp => {
+          // jmp rx, bx
+          var dum: u32 = undefined;
+          var bx: u32 = undefined; // TODO: signed bx
+          self.read2Args(inst, &dum, &bx);
+          self.ip += bx;
           continue;
         },
         .Not => {

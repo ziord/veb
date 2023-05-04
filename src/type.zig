@@ -682,6 +682,10 @@ pub const Type = struct {
     unreachable;
   }
 
+  pub inline fn isEitherWayRelatedTo(this: *Self, other: *Self, ctx: RelationContext, A: std.mem.Allocator) bool {
+    return this.isRelatedTo(other, ctx, A) or other.isRelatedTo(this, ctx, A);
+  }
+
   pub fn canBeCastTo(node_ty: *Type, cast_ty: *Type, A: std.mem.Allocator) error{CastError, UnionCastError}!*Type {
     switch (cast_ty.kind) {
       .Concrete => |conc| {

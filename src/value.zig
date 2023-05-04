@@ -6,9 +6,11 @@ const Map = @import("map.zig").Map;
 const OpCode = @import("opcode.zig").OpCode;
 pub const OpType = @import("lex.zig").OpType;
 
+/// a register-encoded instruction
+pub const Inst = u32;
 
 pub const Code = struct {
-  words: Vec(u32),
+  words: Vec(Inst),
   values: Vec(Value),
   lines: Vec(u32),
 
@@ -22,7 +24,7 @@ pub const Code = struct {
 
   pub fn init() Self {
     return Self {
-      .words = Vec(u32).init(),
+      .words = Vec(Inst).init(),
       .values = Vec(Value).init(),
       .lines = Vec(u32).init()
     };
@@ -75,6 +77,12 @@ pub const Code = struct {
     // op rx [bx] 
     // 6  8   18
     return word & _18bits;
+  }
+
+  pub inline fn readSBX(word: u32) i32 {
+    // op rx [sbx] 
+    // 6  8   18
+    return @intCast(i32, word & _18bits);
   }
 
   pub fn writeValue(self: *Self, value: Value, vm: *VM) u32 {

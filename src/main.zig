@@ -489,3 +489,101 @@ test "nil access" {
   ;
   _ = try doTest(src);
 }
+
+test "if statement" {
+  // if-elif-else
+  var src =
+  \\ let x: num = 5
+  \\ let t: num? = 15
+  \\ let p = 0
+  \\ if x == t.? / 3 -1
+  \\   p = x + 10
+  \\ elif t == nil
+  \\   p = 29
+  \\ elif t != nil
+  \\   p = 12
+  \\   p = p << 12 - p >> 3
+  \\ else
+  \\   p = x - 10
+  \\   p -= -1111
+  \\ end
+  \\ p == 1
+  ;
+  _ = try doTest(src);
+  // if-else
+  var src2 =
+  \\ let x: num = 5
+  \\ let t: num? = 15
+  \\ let p = 0
+  \\ if x == t.? / 3
+  \\   p = x + 10
+  \\   p *= 3
+  \\ else
+  \\   p = x - 10
+  \\   p -= -1111
+  \\ end
+  \\ p == 0x2d
+  ;
+  _ = try doTest(src2);
+
+  // if-end local
+  var src3 =
+  \\ do
+  \\    let x: num = 5
+  \\    let t: num? = 15
+  \\    let p = 0
+  \\    if x == t.? / 3
+  \\      p = x + 10
+  \\      p *= 3
+  \\      p = x - 10
+  \\      p -= -1111
+  \\      p += 0b1111_1111_1111
+  \\    end
+  \\    p == 0b1010001010001
+  \\ end
+  ;
+  _ = try doTest(src3);
+
+  // if-end
+  var src4 =
+  \\ let x: num = 5
+  \\ let t: num? = 15
+  \\ let p = 0
+  \\ if x == t.? / 3
+  \\   p = x + 10
+  \\   p *= 3
+  \\   p = x - 10
+  \\   p -= -1111
+  \\   p += 0b1111_1111_1111
+  \\ end
+  \\ p == 0b1010001010001
+  ;
+  _ = try doTest(src4);
+  // if-else
+  var src5 =
+  \\ let x: num = 5
+  \\ let t: num? = 15
+  \\ let p = 0
+  \\ if 0xf == x - t.?
+  \\   p = x + 10
+  \\ else
+  \\   p = x - 10
+  \\   p -= -1111
+  \\ end
+  \\ p == 0o2122 and p == 0x452
+  \\ let p: str | num = 5
+  \\ let q = "fox"
+  \\ let w = 0
+  \\ if p == q
+  \\   w = p as num
+  \\ else 
+  \\   w = 123
+  \\ end
+  \\ w == 123
+  \\ if q == 'fox'
+  \\   w /= 2
+  \\ end
+  \\ w == 61.5
+  ;
+  _ = try doTest(src5);
+}

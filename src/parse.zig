@@ -26,7 +26,7 @@ pub const Parser = struct {
   allocator: std.mem.Allocator,
   cna: *CnAllocator,
   filename: []const u8,
-  allowNl: usize = 0,
+  allow_nl: usize = 0,
 
   const Self = @This();
 
@@ -103,6 +103,7 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkList
     .{.bp = .None, .prefix = null, .infix = null},                      // TkType
     .{.bp = .None, .prefix = null, .infix = null},                      // TkElse
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkElif
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkTrue
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkFalse
     .{.bp = .None, .prefix = null, .infix = null},                      // TkWhile
@@ -175,13 +176,13 @@ pub const Parser = struct {
   }
 
   inline fn incNl(self: *Self) void {
-    self.allowNl += 1;
-    self.lexer.allowNl = self.allowNl;
+    self.allow_nl += 1;
+    self.lexer.allow_nl = self.allow_nl;
   }
 
   inline fn decNl(self: *Self) void {
-    self.allowNl -= 1;
-    self.lexer.allowNl = self.allowNl;
+    self.allow_nl -= 1;
+    self.lexer.allow_nl = self.allow_nl;
   }
 
   inline fn consumeNlOrEof(self: *Self) void {
@@ -749,6 +750,41 @@ pub const Parser = struct {
     return decl;
   }
 
+  fn ifStmt(self: *Self) *Node {
+    // if expr nl body (elif expr nl body)* else nl body end
+    var token = self.current_tok;
+    const cond = self.parseExpr();
+    self.consume(.TkNewline);
+    var then = ast.BlockNode.init(self.allocator, self.previous_tok.line);
+    while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
+      util.append(*Node, &then.nodes, self.statement());
+    }
+    var elifs = std.ArrayList(ast.ElifNode).init(self.allocator);
+    while (self.match(.TkElif)) {
+      var elif_token = self.previous_tok;
+      var elif_cond = self.parseExpr();
+      self.consume(.TkNewline);
+      var elif_then = ast.BlockNode.init(self.allocator, self.previous_tok.line);
+      while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
+        util.append(*Node, &elif_then.nodes, self.statement());
+      }
+      var elif = ast.ElifNode.init(elif_cond, elif_then, elif_token);
+      util.append(ast.ElifNode, &elifs, elif);
+    }
+    var els = ast.BlockNode.init(self.allocator, self.previous_tok.line);
+    if (self.match(.TkElse)) {
+      self.consume(.TkNewline);
+      while (!self.check(.TkEof) and !self.check(.TkEnd)) {
+        util.append(*Node, &els.nodes, self.statement());
+      }
+    }
+    self.consume(.TkEnd);
+    self.consumeNlOrEof();
+    var node = self.newNode();
+    node.* = .{.AstIf = ast.IfNode.init(cond, then, elifs, els, token)};
+    return node;
+  }
+
   fn exprStmt(self: *Self) *Node {
     const line = self.current_tok.line;
     const expr = self.parseExpr();
@@ -767,6 +803,8 @@ pub const Parser = struct {
       return self.blockStmt();
     } else if (self.match(.TkNewline)) {
       return self.statement();
+    } else if (self.match(.TkIf)) {
+      return self.ifStmt();
     }
     return self.exprStmt();
   }

@@ -611,6 +611,20 @@ pub const TypeLinker = struct {
     try self.link(node.expr);
   }
 
+  fn linkIf(self: *Self, node: *ast.IfNode) !void {
+    try self.link(node.cond);
+    try self.linkBlock(&node.then);
+    for (node.elifs.items) |*elif| {
+      try self.linkElif(elif);
+    }
+    try self.linkBlock(&node.els);
+  }
+
+  fn linkElif(self: *Self, node: *ast.ElifNode) !void {
+    try self.link(node.cond);
+    try self.linkBlock(&node.then);
+  }
+
   fn linkProgram(self: *Self, node: *ast.ProgramNode) !void {
     self.ctx.enterScope();
     for (node.decls.items) |item| {
@@ -639,6 +653,8 @@ pub const TypeLinker = struct {
       .AstCast => |*nd| try self.linkCast(nd),
       .AstSubscript => |*nd| try self.linkSubscript(nd),
       .AstDeref => |*nd| try self.linkDeref(nd),
+      .AstIf => |*nd| try self.linkIf(nd),
+      .AstElif => |*nd| try self.linkElif(nd),
       .AstProgram => |*nd| try self.linkProgram(nd),
       .AstEmpty => unreachable,
     }

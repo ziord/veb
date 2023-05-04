@@ -348,6 +348,24 @@ pub const TypeChecker = struct {
     return undefined;
   }
 
+  fn inferIf(self: *Self, node: *ast.IfNode) !*Type {
+    var ty = try self.infer(node.cond);
+    _ = try self.inferBlock(&node.then);
+    for (node.elifs.items) |*elif| {
+      _ = try self.inferElif(elif);
+    }
+    _ = try self.inferBlock(&node.els);    
+    try self.checkIfCond(ty, node.token);
+    return undefined;
+  }
+
+  fn inferElif(self: *Self, node: *ast.ElifNode) !*Type {
+    var ty = try self.infer(node.cond);
+    _ = try self.inferBlock(&node.then);
+    try self.checkIfCond(ty, node.token);
+    return undefined;
+  }
+
   fn inferProgram(self: *Self, node: *ast.ProgramNode) !*Type {
     self.ctx.enterScope();
     for (node.decls.items) |item| {
@@ -416,13 +434,13 @@ pub const TypeChecker = struct {
     // source is type of rhs
     // node.typ is type of lhs
     if (node.op.optype == .OpEqq or node.op.optype == .OpNeq) {
-      _ = self.checkCast(node.typ.?, source, node.op.token, false) catch {
+      if (!node.typ.?.isEitherWayRelatedTo(source, .RCAny, self.allocator)) {
         return self.error_(
           true, node.op.token,
-          "types must be assignable for equality comparison",
+          "types must be related for equality comparison",
           .{}
         );
-      };
+      }
       return;
     }
     const op = node.op.token.value;
@@ -505,6 +523,16 @@ pub const TypeChecker = struct {
     node.typ = expr_ty.nullable().subtype;
   }
 
+  fn checkIfCond(self: *Self, cond_ty: *Type, debug: Token) !void {
+    if (!cond_ty.isBoolTy()) {
+      return self.error_(
+        true, debug, 
+        "Expected type 'bool' in condition, but got '{s}'", 
+        .{self.getTypename(cond_ty)}
+      );
+    }
+  }
+
   fn infer(self: *Self, node: *Node) TypeCheckError!*Type {
     return switch (node.*) {
       .AstNumber => |*nd| try self.inferNumber(nd),
@@ -525,8 +553,10 @@ pub const TypeChecker = struct {
       .AstCast => |*nd| try self.inferCast(nd),
       .AstSubscript => |*nd| try self.inferSubscript(nd),
       .AstDeref => |*nd| try self.inferDeref(nd),
-      .AstEmpty => unreachable,
+      .AstIf => |*nd| try self.inferIf(nd),
+      .AstElif => |*nd| try self.inferElif(nd),
       .AstProgram => |*nd| try self.inferProgram(nd),
+      .AstEmpty => unreachable,
     };
   }
 

@@ -28,6 +28,8 @@ pub const AstType = enum {
   AstNil,
   AstEmpty,
   AstDeref,
+  AstIf,
+  AstElif,
   AstProgram,
 };
 
@@ -226,15 +228,33 @@ pub const CastNode = struct {
   token: Token,
 
   pub fn init(expr: *AstNode, typn: *TypeNode, token: Token) @This() {
-    return @This() {
-      .expr = expr,
-      .typn = typn,
-      .token = token
-    };
+    return @This() {.expr = expr, .typn = typn, .token = token};
   }
 
   pub inline fn line(self: *@This()) usize {
     return self.token.line;
+  }
+};
+
+pub const ElifNode = struct {
+  cond: *AstNode,
+  then: BlockNode,
+  token: Token,
+
+  pub fn init(cond: *AstNode, then: BlockNode, token: Token) @This() {
+    return @This() {.cond = cond, .then = then, .token = token};
+  }
+};
+
+pub const IfNode = struct {
+  cond: *AstNode,
+  then: BlockNode,
+  elifs: std.ArrayList(ElifNode),
+  els: BlockNode,
+  token: Token,
+
+  pub fn init(cond: *AstNode, then: BlockNode, elifs: std.ArrayList(ElifNode), els: BlockNode, token: Token) @This() {
+    return @This() {.cond = cond, .then = then, .elifs = elifs, .els = els, .token = token};
   }
 };
 
@@ -268,6 +288,8 @@ pub const AstNode = union(AstType) {
   AstSubscript: SubscriptNode,
   AstEmpty: EmptyNode,
   AstDeref: DerefNode,
+  AstIf: IfNode,
+  AstElif: ElifNode,
   AstProgram: ProgramNode,
 
   pub fn isComptimeConst(self: *@This()) bool {
@@ -293,6 +315,9 @@ pub const AstNode = union(AstType) {
       .AstCast => |cst| @constCast(&cst.typn.typ),
       .AstSubscript => |sub| sub.typ,
       .AstDeref => |der| der.typ,
+      .AstBlock => null,
+      .AstIf => null,
+      .AstElif => null,
       else => unreachable,
     };
   }

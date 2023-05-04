@@ -62,6 +62,10 @@ pub const OpCode = enum (u8) {
   // [6] [8]  [18]
   Jf,
 
+  // jmp sbx as jmp rx, sbx
+  //  `-->     [6] [8]  [18]
+  Jmp,  // NOTE: bx is signed (sbx).
+
   // not rx, bx
   // [6] [8] [18]
   Not,

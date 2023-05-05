@@ -25,11 +25,13 @@ pub const TypeChecker = struct {
     const str = types.Concrete.init(.TyString);
     const bol = types.Concrete.init(.TyBool);
     const nil = types.Concrete.init(.TyNil);
+    const tyty = types.Concrete.init(.TyType);
 
     const tyNumber: Type = Type.init(.{.Concrete = num}, Token.getDefault());
     const tyString: Type = Type.init(.{.Concrete = str}, Token.getDefault());
     const tyBool: Type = Type.init(.{.Concrete = bol}, Token.getDefault());
     const tyNil: Type = Type.init(.{.Concrete = nil}, Token.getDefault());
+    const TyTy: Type = Type.init(.{.Concrete = tyty}, Token.getDefault());
   };
   const Self = @This();
   pub const TypeCheckError = error{TypeCheckError};
@@ -290,6 +292,11 @@ pub const TypeChecker = struct {
 
   fn inferNType(self: *Self, node: *ast.TypeNode) !*Type {
     _ = self;
+    // if this type node was found in an expression 
+    // (i.e. not in an alias or annotation context), then return TyType
+    if (!node.from_alias_or_annotation) {
+      return @constCast(&UnitTypes.TyTy);
+    }
     return &node.typ;
   }
 

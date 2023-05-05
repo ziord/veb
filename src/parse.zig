@@ -7,7 +7,7 @@ const CnAllocator = @import("allocator.zig");
 
 const Node = ast.AstNode;
 const exit = std.os.exit;
-const TypeKind = types.TypeKind;
+pub const TypeKind = types.TypeKind;
 const Type = types.Type;
 const Generic = types.Generic;
 const Union = types.Union;
@@ -89,6 +89,7 @@ pub const Parser = struct {
     .{.bp = .Shift, .prefix = null, .infix = Self.binary},              // Tk2Rthan
     .{.bp = .Access, .prefix = null, .infix = Self.casting},            // TkAs
     .{.bp = .None, .prefix = null, .infix = null},                      // TkDo
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkIs
     .{.bp = .None, .prefix = null, .infix = null},                      // TkIf
     .{.bp = .Or, .prefix = null, .infix = Self.binary},                 // TkOr
     .{.bp = .None, .prefix = null, .infix = null},                      // TkFor
@@ -710,6 +711,7 @@ pub const Parser = struct {
   fn annotation(self: *Self, ident: *ast.VarNode) void {
     if (self.match(.TkColon)) {
       var typ_node = &self.typing(false).AstNType;
+      typ_node.from_alias_or_annotation = true;
       typ_node.typ.ident = ident;
       ident.typ = &typ_node.typ;
     }

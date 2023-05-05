@@ -11,6 +11,9 @@ pub const TypeHashSet = std.AutoArrayHashMap(u32, *Type);
 pub const TypeList = std.ArrayList(*Type);
 
 pub const TypeKind = enum (u8) {
+  /// 'type' type:
+  /// type of all types
+  TyType,
   /// boolean type:
   ///  bool
   TyBool,
@@ -529,6 +532,7 @@ pub const Type = struct {
           .TyString => self.tid = 3 << ID_HASH,
           .TyNil =>    self.tid = 4 << ID_HASH,
           .TyClass =>  self.tid = 5 << ID_HASH,
+          .TyType =>   self.tid = 12 << ID_HASH,
         }
       },
       .Generic => |*gen| {
@@ -840,6 +844,7 @@ pub const Type = struct {
         .TyNumber => "num",
         .TyString => "str",
         .TyNil =>    "nil",
+        .TyType => "Type",
         .TyClass => conc.name.?,
       },
       .Generic => |*gen| {

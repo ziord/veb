@@ -183,6 +183,8 @@ pub const BlockNode = struct {
 pub const TypeNode = struct {
   typ: Type,
   token: Token,
+  /// track whether this type was created in an alias or annotation context
+  from_alias_or_annotation: bool = false,
 
   pub fn init(typ: Type, token: Token) @This() {
     return @This() {.typ = typ, .token = token};
@@ -199,6 +201,8 @@ pub const AliasNode = struct {
     const info = types.AliasInfo.init(&alias.typ, &aliasee.typ);
     alias.typ.alias_info = info;
     aliasee.typ.alias_info = info;
+    alias.from_alias_or_annotation = true;
+    aliasee.from_alias_or_annotation = true;
     return @This() {.alias = alias, .aliasee = aliasee, .token = typ_token, .typ = &alias.typ};
   }
 };

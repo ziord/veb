@@ -10,6 +10,7 @@ const VM = @import("vm.zig").VM;
 const Code = value.Code;
 const Node = ast.AstNode;
 const Inst = value.Inst;
+const TypeKind = parse.TypeKind;
 
 const VRegister = struct {
   regs: [value.MAX_REGISTERS]Reg,
@@ -646,6 +647,19 @@ pub const Compiler = struct {
     return reg;
   }
 
+  fn cNType(self: *Self, node: *ast.TypeNode, reg: u32) u32 {
+    // only compile if not in annotation/alias context
+    if (!node.from_alias_or_annotation) {
+      return self.cConst(
+        reg, value.numberVal(@intToFloat(f64, @enumToInt(TypeKind.TyType))),
+        // TODO: should we use the typeid() instead of a singular value each time?
+        // reg, value.numberVal(@intToFloat(f64, node.typ.typeid())),
+        node.token.line
+      );
+    }
+    return reg;
+  }
+
   const JmpPatch = struct{jmp_to_next: usize, jmp_to_end: usize};
 
   fn cIf(self: *Self, node: *ast.IfNode, dst: u32) u32 {
@@ -738,7 +752,7 @@ pub const Compiler = struct {
       .AstVarDecl => |*nd| self.cVarDecl(nd, reg),
       .AstAssign => |*nd| self.cAssign(nd, reg),
       .AstBlock => |*nd| self.cBlock(nd, reg),
-      .AstNType => reg, // TODO
+      .AstNType => |*nd| self.cNType(nd, reg),
       .AstAlias => reg, // TODO
       .AstNil => |*nd| self.cNil(nd, reg),
       .AstCast => |*nd| self.cCast(nd, reg),

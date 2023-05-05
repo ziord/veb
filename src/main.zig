@@ -587,3 +587,19 @@ test "if statement" {
   ;
   _ = try doTest(src5);
 }
+
+test "type expressions" {
+  var src =
+  \\ let p = num
+  \\ p = str
+  \\ let q = list{num}
+  \\ q = p
+  \\ let x = map{str, num}
+  \\ x = p
+  \\ let w = [num, str, bool, list{str}]
+  \\ w = [num, bool]
+  \\ let q = {'bar': list{map{str, num}}}
+  \\ q = {'fox': num, 'foo': bool, 'bar': list{map{str, num}}}
+  ;
+  _ = try doTest(src);
+}

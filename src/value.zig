@@ -21,6 +21,7 @@ pub const Code = struct {
   pub const _18bits: u32 = 0x3ffff;
   pub const _26bits: u32 = 0x3ffffff;
   pub const _32bits: u32 = 0xffffffff;
+  pub const _sign: u32 = 0x20000;
 
   pub fn init() Self {
     return Self {
@@ -82,7 +83,8 @@ pub const Code = struct {
   pub inline fn readSBX(word: u32) i32 {
     // op rx [sbx] 
     // 6  8   18
-    return @intCast(i32, word & _18bits);
+    const sbx = @intCast(i32, word & _18bits);
+    return if (sbx & _sign == _sign) sbx - (1 << 18) else sbx;
   }
 
   pub fn writeValue(self: *Self, value: Value, vm: *VM) u32 {

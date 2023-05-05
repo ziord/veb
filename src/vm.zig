@@ -7,6 +7,7 @@ const NovaAllocator = @import("allocator.zig");
 
 const Value = vl.Value;
 const Code = vl.Code;
+const Inst = vl.Inst;
 const StringHashMap = vl.StringHashMap;
 
 pub const VM = struct {
@@ -55,31 +56,32 @@ pub const VM = struct {
     self.mem.deinit();
   }
 
-  inline fn readWord(self: *Self) u32 {
+  inline fn readWord(self: *Self) Inst {
     self.ip += 1;
+    @setRuntimeSafety(false);
     return self.code.words.items[self.ip - 1];
   }
 
-  inline fn read3Args(self: *Self, word: u32, a1: *u32, a2: *u32, a3: *u32) void {
+  inline fn read3Args(self: *Self, word: Inst, a1: *u32, a2: *u32, a3: *u32) void {
     _ = self;
     a1.* = (word >> 18) & Code._8bits;
     a2.* = (word >> 9) & Code._9bits;
     a3.* = word & Code._9bits;
   }
 
-  inline fn read2Args(self: *Self, word: u32, a1: *u32, a2: *u32) void {
+  inline fn read2Args(self: *Self, word: Inst, a1: *u32, a2: *u32) void {
     _ = self;
     a1.* = (word >> 18) & Code._8bits;
     a2.* = word & Code._18bits;
   }
 
-  inline fn read2ArgsSigned(self: *Self, word: u32, a1: *u32, a2: *i32) void {
+  inline fn read2ArgsSigned(self: *Self, word: Inst, a1: *u32, a2: *i32) void {
     _ = self;
     a1.* = (word >> 18) & Code._8bits;
-    a2.* = @intCast(i32, word & Code._18bits);
+    a2.* = vl.Code.readSBX(word);
   }
 
-  inline fn read1Arg(self: *Self, word: u32, a: *u32) void {
+  inline fn read1Arg(self: *Self, word: Inst, a: *u32) void {
     _ = self;
     a.* = word & Code._26bits;
   }
@@ -164,11 +166,7 @@ pub const VM = struct {
         },
         .Asrt => {
           // asrt rx
-          var rx: u32 = undefined;
-          var dum1: u32 = undefined;
-          var dum2: u32 = undefined;
-          self.read3Args(inst, &rx, &dum1, &dum2);
-          if (vl.isNil(self.stack[rx])) {
+          if (vl.isNil(self.stack[vl.Code.readRX(inst)])) {
             return self.runtimeError("Attempt to use value 'nil'", .{});
           }
           continue;
@@ -360,10 +358,11 @@ pub const VM = struct {
         },
         .Jmp => {
           // jmp rx, bx
-          var dum: u32 = undefined;
-          var bx: u32 = undefined; // TODO: signed bx
-          self.read2Args(inst, &dum, &bx);
-          self.ip += bx;
+          var direction: u32 = undefined;
+          var bx: u32 = undefined;
+          self.read2Args(inst, &direction, &bx);
+          // 0 -> jmp fwd, 1 -> jmp bck
+          self.ip = if (direction == 0) self.ip + bx else self.ip - bx;
           continue;
         },
         .Not => {

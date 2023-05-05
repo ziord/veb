@@ -695,11 +695,11 @@ pub const Compiler = struct {
     if (node.elifs.items.len > 0) {
       // patch up elif_then_to_end 
       for (elifs_then_to_end.items) |idx| {
-        self.code.patch2ArgsJmp(idx);  // TODO: signed patch
+        self.code.patch2ArgsJmp(idx);
       }
     }
     if (should_patch_if_then_to_end) {
-      self.code.patch2ArgsJmp(if_then_to_end);  // TODO: signed patch
+      self.code.patch2ArgsJmp(if_then_to_end);
     }
     // self.leaveJmp();
     self.vreg.releaseReg(reg);

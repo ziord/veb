@@ -427,6 +427,7 @@ pub const Compiler = struct {
   fn cBinary(self: *Self, node: *ast.BinaryNode, dst: u32) u32 {
     // handle and | or
     if (node.op.optype.isLgcOp()) return self.cLgc(node, dst);
+    if (node.op.optype == .OpIs) return self.cIs(node, dst);
     self.optimizeConstRK();
     var rk1 = self.c(node.left, dst);
     const dst2 = self.getReg();
@@ -436,6 +437,31 @@ pub const Compiler = struct {
     const inst_op = node.op.optype.toInstOp();
     self.code.write3ArgsInst(inst_op, dst, rk1, rk2, @intCast(u32, node.line()), self.vm);
     self.cCmp(node);
+    self.deoptimizeConstRK();
+    return dst;
+  }
+
+  fn cIs(self: *Self, node: *ast.BinaryNode, dst: u32) u32 {
+    self.optimizeConstRK();
+    var rk1 = self.c(node.left, dst);
+    const dst2 = self.getReg();
+    var rk2 = blk: {
+      var typ = node.right.getType().?;
+      var tag = tb: {
+        if (typ.isGeneric()) {
+          break :tb if (typ.isListTy()) @enumToInt(TypeKind.TyClass) else  @enumToInt(TypeKind.TyClass) + 1;
+        } else {
+          break :tb @enumToInt(typ.concrete().tkind);
+        }
+      };
+      break :blk self.cConst(
+        // - 1 to properly exclude TyType
+        dst2, value.numberVal(@intToFloat(f64, tag - 1)),
+        node.op.token.line
+      );
+    };
+    self.vreg.releaseReg(dst2);
+    self.code.write3ArgsInst(OpCode.Is, dst, rk1, rk2, @intCast(u32, node.line()), self.vm);
     self.deoptimizeConstRK();
     return dst;
   }
@@ -650,10 +676,12 @@ pub const Compiler = struct {
   fn cNType(self: *Self, node: *ast.TypeNode, reg: u32) u32 {
     // only compile if not in annotation/alias context
     if (!node.from_alias_or_annotation) {
+      // TODO: should we be using the typeid() instead of a singular value 
+      // (@enumToInt(TypeKind.TyType)) each time?
+      // this makes sense for now, since having num == str be true is kinda counterintuitive
+      // but again, no one should even be doing this in the first place! 
       return self.cConst(
-        reg, value.numberVal(@intToFloat(f64, @enumToInt(TypeKind.TyType))),
-        // TODO: should we use the typeid() instead of a singular value each time?
-        // reg, value.numberVal(@intToFloat(f64, node.typ.typeid())),
+        reg, value.numberVal(@intToFloat(f64, node.typ.typeid())),
         node.token.line
       );
     }

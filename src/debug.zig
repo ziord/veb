@@ -56,6 +56,7 @@ pub const Disassembler = struct {
       .Xor => _3ArgsInst("xor", word),
       .Or => _3ArgsInst("or", word),
       .And => _3ArgsInst("and", word),
+      .Is => _3ArgsInst("is", word),
       .Shl => _3ArgsInst("shl", word),
       .Shr => _3ArgsInst("shr", word),
       .Not => _3ArgsInst("not", word),

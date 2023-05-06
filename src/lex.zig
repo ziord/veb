@@ -16,6 +16,7 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"or", .TkOr},
   .{"as", .TkAs},
   .{"end", .TkEnd},
+  .{"not", .TkNot},
   .{"true", .TkTrue},
   .{"false", .TkFalse},
   .{"num", .TkNum},
@@ -67,6 +68,7 @@ pub const TokenType = enum (u8) {
   TkFor,            // for
   TkAnd,            // and
   TkEnd,            // end
+  TkNot,            // not
   TkLet,            // let
   TkNum,            // num
   TkMap,            // map
@@ -111,6 +113,7 @@ pub const TokenType = enum (u8) {
       .TkTilde => .OpBitInvert,
       .TkAnd => .OpAnd,
       .TkOr => .OpOr,
+      .TkIs => .OpIs,
       else => unreachable,
     };
   }
@@ -173,6 +176,7 @@ pub const TokenType = enum (u8) {
       .TkFor => "for",
       .TkAnd => "and",
       .TkEnd => "end",
+      .TkNot => "not",
       .TkLet => "let",
       .TkNum => "num",
       .TkMap => "map",
@@ -218,6 +222,8 @@ pub const OpType = enum (u8) {
   OpBitInvert,
   OpAnd,
   OpOr,
+  OpIs,
+  OpIsNot,
 
   pub fn toInstOp(self: @This()) OpCode {
     return switch (self) {
@@ -234,6 +240,7 @@ pub const OpType = enum (u8) {
       .OpBitInvert => OpCode.Inv,
       .OpAnd => OpCode.Jf,
       .OpOr => OpCode.Jt,
+      .OpIs => OpCode.Is,
       .OpNot => OpCode.Not,
       .OpLess, .OpGrt, .OpLeq, .OpGeq, .OpEqq, .OpNeq => OpCode.Cmp,
       else => unreachable, // todo

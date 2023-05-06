@@ -223,6 +223,10 @@ pub inline fn isNumber(val: Value) bool {
   return (val & QNAN) != QNAN;
 }
 
+pub fn isNumberNoInline(val: Value) bool {
+  return isNumber(val);
+}
+
 pub inline fn boolVal(bl: bool) Value {
   return if (bl) TRUE_VAL else FALSE_VAL;
 }
@@ -235,12 +239,20 @@ pub inline fn isBool(val: Value) bool {
   return (val | 1) == TRUE_VAL;
 }
 
+pub fn isBoolNoInline(val: Value) bool {
+  return isBool(val);
+}
+
 pub inline fn nilVal() Value {
   return NIL_VAL;
 }
 
 pub inline fn isNil(val: Value) bool {
   return val == NIL_VAL;
+}
+
+pub fn isNilNoInline(val: Value) bool {
+  return isNil(val);
 }
 
 pub inline fn isNothing(val: Value) bool {
@@ -267,12 +279,24 @@ pub inline fn isString(val: Value) bool {
   return isObjType(val, .ObjStr);
 }
 
+pub fn isStringNoInline(val: Value) bool {
+  return isString(val);
+}
+
 pub inline fn isList(val: Value) bool {
   return isObjType(val, .ObjLst);
 }
 
+pub fn isListNoInline(val: Value) bool {
+  return isList(val);
+}
+
 pub inline fn isMap(val: Value) bool {
   return isObjType(val, .ObjValMap);
+}
+
+pub fn isMapNoInline(val: Value) bool {
+  return isMap(val);
 }
 
 pub inline fn asString(val: Value) *ObjString {

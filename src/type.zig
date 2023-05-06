@@ -475,6 +475,10 @@ pub const Type = struct {
     return self.isConcreteTypeEq(.TyClass);
   }
 
+  pub inline fn isTypeTy(self: *Self) bool {
+    return self.isConcreteTypeEq(.TyType);
+  }
+
   pub fn isListTy(self: *Self) bool {
     return self.isXClassTy("list");
   }

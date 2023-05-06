@@ -600,6 +600,74 @@ test "type expressions" {
   \\ w = [num, bool]
   \\ let q = {'bar': list{map{str, num}}}
   \\ q = {'fox': num, 'foo': bool, 'bar': list{map{str, num}}}
+  \\ let t: num = 5
+  \\ if num == num
+  \\   t += 5
+  \\ else
+  \\  t -= 3
+  \\ end
+  \\ t
+  ;
+  _ = try doTest(src);
+}
+
+test "is expression" {
+  var src =
+  \\ # is
+  \\ # direct checks
+  \\ 'fox' is str
+  \\ 5 is num
+  \\ nil is nil
+  \\ [] is list
+  \\ {} is map
+  \\ true is bool
+  \\ nil is nil
+  \\ nil as list{num}? is nil
+  \\ let p: str? = nil
+  \\ p is nil
+  \\ !([5] as list{num}? is nil)
+  \\
+  \\ # indirect checks
+  \\ let n: str | num | list{num} | map{str, num} = {}
+  \\ n is list == false
+  \\ n is map == true
+  \\ n = 'foo'
+  \\ n is str == true
+  \\ n is num == false
+  \\ n = 5
+  \\ n is num == true
+  \\ !!n is bool == true
+  \\ bool == bool is bool == true
+  \\ ((bool == bool) is bool) == true  # same as above
+  \\
+  \\ # is not
+  \\ # direct checks
+  \\ 'fox' is not str
+  \\ 5 is not num
+  \\ nil is not nil
+  \\ [] is not list
+  \\ {} is not map
+  \\ true is not bool
+  \\ nil is not nil
+  \\ nil as list{num}? is not nil
+  \\ let p: str? = nil
+  \\ p is not nil
+  \\ !([5] as list{num}? is not nil)
+  \\
+  \\ # indirect checks
+  \\ let n: str | num | list{num} | map{str, num} = {}
+  \\ n is not list == false
+  \\ n is not map == true
+  \\ n = 'foo'
+  \\ n is not str == true
+  \\ n is not num == false
+  \\ n = 5
+  \\ n is not num == true
+  \\ !!n is not bool == true
+  \\ bool == bool is not bool == true
+  \\ !({} is not map)
+  \\ ((bool == bool) is not bool) == true  # same as above
+  \\ num == str
   ;
   _ = try doTest(src);
 }

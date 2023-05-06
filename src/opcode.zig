@@ -34,6 +34,10 @@ pub const OpCode = enum (u8) {
   // [6] [8]  [9]    [9]
   And,
 
+  // is rx, rk(x), rk(y)
+  // [6] [8]  [9]    [9]
+  Is,
+
   // shr rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
   Shr,
@@ -42,7 +46,7 @@ pub const OpCode = enum (u8) {
   // [6] [8]  [9]    [9]
   Shl,
 
-  // cmp rx, rk(x), rk(y) | cmp_op 
+  // cmp rx, rk(x), rk(y) | cmp_op
   // [6] [8]  [9]    [9]     [32]
   Cmp,
 

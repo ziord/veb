@@ -27,6 +27,7 @@ pub const Parser = struct {
   cna: *CnAllocator,
   filename: []const u8,
   allow_nl: usize = 0,
+  using_is: u32 = 0,
 
   const Self = @This();
 
@@ -38,7 +39,7 @@ pub const Parser = struct {
     BitOr,       // |
     BitXor,      // ^
     BitAnd,      // &
-    Equality,    // !=, ==
+    Equality,    // !=, ==, is
     Comparison,  // >, >=, <, <=
     Shift,       // >>, <<
     Term,        // +, -
@@ -89,12 +90,13 @@ pub const Parser = struct {
     .{.bp = .Shift, .prefix = null, .infix = Self.binary},              // Tk2Rthan
     .{.bp = .Access, .prefix = null, .infix = Self.casting},            // TkAs
     .{.bp = .None, .prefix = null, .infix = null},                      // TkDo
-    .{.bp = .None, .prefix = null, .infix = null},                      // TkIs
+    .{.bp = .Equality, .prefix = null, .infix = Self.binIs},           // TkIs
     .{.bp = .None, .prefix = null, .infix = null},                      // TkIf
     .{.bp = .Or, .prefix = null, .infix = Self.binary},                 // TkOr
     .{.bp = .None, .prefix = null, .infix = null},                      // TkFor
     .{.bp = .And, .prefix = null, .infix = Self.binary},                // TkAnd
     .{.bp = .None, .prefix = null, .infix = null},                      // TkEnd
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkNot
     .{.bp = .None, .prefix = null, .infix = null},                      // TkLet
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkNum
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkMap
@@ -184,6 +186,18 @@ pub const Parser = struct {
   inline fn decNl(self: *Self) void {
     self.allow_nl -= 1;
     self.lexer.allow_nl = self.allow_nl;
+  }
+
+  inline fn incIs(self: *Self) void {
+    self.using_is += 1;
+  }
+
+  inline fn decIs(self: *Self) void {
+    self.using_is -= 1;
+  }
+
+  inline fn parsingIs(self: *Self) bool {
+    return self.using_is > 0;
   }
 
   inline fn consumeNlOrEof(self: *Self) void {
@@ -281,6 +295,27 @@ pub const Parser = struct {
     const rhs = self._parse(bp);
     const node = self.newNode();
     node.* = .{.AstBinary = ast.BinaryNode.init(lhs, rhs, op)};
+    return node;
+  }
+
+  fn binIs(self: *Self, lhs: *Node, assignable: bool) *Node {
+    _ = assignable;
+    self.incIs();
+    const bp = ptable[@enumToInt(self.current_tok.ty)].bp;
+    const op = self.current_tok;
+    self.advance();
+    var is_not = self.match(.TkNot);
+    var not_token = self.previous_tok;
+    const rhs = self._parse(bp);
+    const node = self.newNode();
+    node.* = .{.AstBinary = ast.BinaryNode.init(lhs, rhs, op)};    
+    self.decIs();
+    if (is_not) {
+      var neg = self.newNode();
+      not_token.ty = .TkExMark;
+      neg.* = .{.AstUnary = ast.UnaryNode.init(node, not_token)};
+      return neg;
+    }
     return node;
   }
 
@@ -561,6 +596,9 @@ pub const Parser = struct {
   fn tGeneric(self: *Self) Type {
     // Generic := ( Primary | Primary "{" Expression ( "," Expression )* "}" ) "?"?
     var typ = self.tPrimary();
+    if (self.parsingIs()) {
+      return typ;
+    }
     if (self.match(.TkLCurly)) {
       if (typ.isSimple()) {
         self.previous_tok.msg = "Cannot instantiate simple type as generic";
@@ -603,6 +641,9 @@ pub const Parser = struct {
   fn tUnion(self: *Self) Type {
     // Union := Generic ( “|” Generic )*
     var typ = self.tGeneric();
+    if (self.parsingIs()) {
+      return typ;
+    }
     if (self.check(.TkPipe)) {
       var token = self.current_tok;
       var uni = Union.init(self.allocator);

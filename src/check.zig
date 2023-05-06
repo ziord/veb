@@ -160,9 +160,6 @@ pub const TypeChecker = struct {
   }
 
   fn inferList(self: *Self, node: *ast.ListNode) !*Type {
-    if (node.typ) |typ| {
-      return typ;
-    }
     // create a new type
     var base = Type.newConcrete(.TyClass, "list", node.token).box(self.allocator);
     node.typ = Type.newGeneric(self.allocator, base, node.token).box(self.allocator);
@@ -182,9 +179,6 @@ pub const TypeChecker = struct {
   }
 
   fn inferMap(self: *Self, node: *ast.MapNode) !*Type {
-     if (node.typ) |typ| {
-      return typ;
-    }
     // create a new type
     var base = Type.newConcrete(.TyClass, "map", node.token).box(self.allocator);
     node.typ = Type.newGeneric(self.allocator, base, node.token).box(self.allocator);
@@ -233,9 +227,6 @@ pub const TypeChecker = struct {
   }
 
   fn inferUnary(self: *Self, node: *ast.UnaryNode) !*Type {
-    if (node.typ) |typ| {
-      return typ;
-    }
     node.typ = try self.infer(node.expr);
     // unary op: ~, !, -, +
     if (node.op.optype == .OpBitInvert or node.op.optype == .OpAdd or node.op.optype == .OpSub) {
@@ -250,8 +241,8 @@ pub const TypeChecker = struct {
   }
 
   fn inferBinary(self: *Self, node: *ast.BinaryNode) !*Type {
-    if (node.typ) |typ| {
-      return typ;
+    if (node.op.optype == .OpIs) {
+      return self.inferIs(node);
     }
     var lhsTy = try self.infer(node.left);
     var rhsTy = try self.infer(node.right);
@@ -260,6 +251,41 @@ pub const TypeChecker = struct {
     if (node.op.optype.isCmpOp()) {
       node.typ = UnitTypes.bol.toType(lhsTy.debug).box(self.allocator);
     }
+    return node.typ.?;
+  }
+
+  fn inferIs(self: *Self, node: *ast.BinaryNode) !*Type {
+    var lhsTy = try self.infer(node.left);
+    var rhsTy = try self.infer(node.right);
+    // lhs must not be type Type, and rhs must be type Type or nil.
+    if (lhsTy.isTypeTy()) {
+      return self.error_(
+        true, node.left.getType().?.debug,
+        "Expected type instance in lhs of `is` operator but found {s}",
+        .{self.getTypename(lhsTy)}
+      );
+    } else if (!rhsTy.isTypeTy() and !rhsTy.isNilTy()) {
+      return self.error_(
+        true, node.right.getType().?.debug,
+        "Expected 'Type' in rhs of `is` operator but found {s}",
+        .{self.getTypename(rhsTy)}
+      );
+    }
+    // at this point, rhs is a TypeNode or Nil type
+    var ty = node.right.getType().?;
+    if (!ty.isConcrete() and ty.isGeneric() and ty.generic().tparams_len() != 0) {
+      return self.error_(
+        true, ty.debug,
+        "Expected a concrete/class type in rhs of `is` operator but found {s}",
+        .{self.getTypename(ty)}
+      );
+    }
+    // temporarily assign lhsTy for checking
+    node.typ = lhsTy;
+    // use the actual type on rhs for checks
+    try self.checkBinary(node, ty);
+    // `is` returns type bool, so reassign
+    node.typ = UnitTypes.bol.toType(lhsTy.debug).box(self.allocator);
     return node.typ.?;
   }
 
@@ -323,9 +349,6 @@ pub const TypeChecker = struct {
   }
 
   fn inferSubscript(self: *Self, node: *ast.SubscriptNode) !*Type {
-    if (node.typ) |typ| {
-      return typ;
-    }
     var expr_ty = try self.infer(node.expr);
     // fail fast
     if (!expr_ty.isGeneric()) {
@@ -440,12 +463,11 @@ pub const TypeChecker = struct {
   fn checkBinary(self: *Self, node: *ast.BinaryNode, source: *Type) !void {
     // source is type of rhs
     // node.typ is type of lhs
-    if (node.op.optype == .OpEqq or node.op.optype == .OpNeq) {
+    if (node.op.optype == .OpEqq or node.op.optype == .OpNeq or node.op.optype == .OpIs) {
       if (!node.typ.?.isEitherWayRelatedTo(source, .RCAny, self.allocator)) {
         return self.error_(
           true, node.op.token,
-          "types must be related for equality comparison",
-          .{}
+          "types must be related for comparison", .{}
         );
       }
       return;

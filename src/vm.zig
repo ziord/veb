@@ -26,6 +26,10 @@ pub const VM = struct {
   pub const MAX_GSYM_ITEMS = vl.MAX_REGISTERS << 1;
   pub const MAX_LOCAL_ITEMS = vl.MAX_REGISTERS << 1;
   const RuntimeError = error{RuntimeError};
+  const TypeTag2CheckFunc = [_]*const fn(Value) bool {
+    vl.isBoolNoInline, vl.isNumberNoInline, vl.isStringNoInline,
+    vl.isNilNoInline, vl.isListNoInline, vl.isMapNoInline,
+  };
 
   pub fn init(allocator: *NovaAllocator, code: *Code) Self {
     return Self {
@@ -298,6 +302,18 @@ pub const VM = struct {
           self.assert(vl.isNumber(a));
           self.assert(vl.isNumber(b));
           self.stack[rx] = vl.numberVal(@intToFloat(f64, (vl.asIntNumber(i64, a) & vl.asIntNumber(i64, b))));
+          continue;
+        },
+        .Is => {
+          // is rx, rk(x), rk(x)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          const val = self.RK(rk1);
+          const ty_tag = vl.asIntNumber(usize, self.RK(rk2));
+          @setRuntimeSafety(false);
+          self.stack[rx] = vl.boolVal(TypeTag2CheckFunc[ty_tag](val));
           continue;
         },
         .Shl => {

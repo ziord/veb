@@ -1,10 +1,11 @@
 const std = @import("std");
 const lex = @import("lex.zig");
 const types = @import("type.zig");
+const util = @import("util.zig");
 const Type = types.Type;
 
-const Token = lex.Token;
 const OpType = lex.OpType;
+pub const Token = lex.Token;
 pub const AstNodeList = std.ArrayList(*AstNode);
 
 // ast node types
@@ -29,7 +30,9 @@ pub const AstType = enum {
   AstEmpty,
   AstDeref,
   AstIf,
+  AstCondition,
   AstElif,
+  AstSimpleIf,
   AstProgram,
 };
 
@@ -71,6 +74,7 @@ pub const SubscriptNode = struct {
   expr: *AstNode,
   index: *AstNode,
   token: Token,
+  narrowed: ?VarNode = null,
   typ: ?*Type = null,
 
   pub fn init(expr: *AstNode, index: *AstNode, token: Token) @This() {
@@ -178,6 +182,12 @@ pub const BlockNode = struct {
   pub fn init(allocator: std.mem.Allocator, line: usize) @This() {
     return @This() {.nodes = AstNodeList.init(allocator), .line = line};
   }
+
+  pub fn newEmptyBlock(line: usize, alloc: std.mem.Allocator) *AstNode {
+    var block = util.alloc(AstNode, alloc);
+    block.* = .{.AstBlock = BlockNode.init(alloc, line)};
+    return block;
+  }
 };
 
 pub const TypeNode = struct {
@@ -211,10 +221,20 @@ pub const AliasNode = struct {
 pub const DerefNode = struct {
   token: Token,
   expr: *AstNode,
+  narrowed: ?VarNode = null,
   typ: ?*Type = null,
 
   pub fn init(expr: *AstNode, token: Token) @This() {
     return @This() {.expr = expr, .token = token};
+  }
+};
+
+pub const ConditionNode = struct {
+  cond: *AstNode,
+  token: Token,
+
+  pub fn init(cond: *AstNode, token: Token) @This() {
+    return @This() {.cond = cond, .token = token};
   }
 };
 
@@ -242,23 +262,43 @@ pub const CastNode = struct {
 
 pub const ElifNode = struct {
   cond: *AstNode,
-  then: BlockNode,
+  then: *AstNode,
   token: Token,
 
-  pub fn init(cond: *AstNode, then: BlockNode, token: Token) @This() {
+  pub fn init(cond: *AstNode, then: *AstNode, token: Token) @This() {
     return @This() {.cond = cond, .then = then, .token = token};
+  }
+
+  pub fn toIf(self: *ElifNode, alloc: std.mem.Allocator) IfNode {
+    var list = AstNodeList.init(alloc);
+    return IfNode.init(
+      self.cond, self.then, list,
+      BlockNode.newEmptyBlock(self.token.line, alloc),
+      self.token
+    );
   }
 };
 
 pub const IfNode = struct {
   cond: *AstNode,
-  then: BlockNode,
-  elifs: std.ArrayList(ElifNode),
-  els: BlockNode,
+  then: *AstNode,
+  elifs: AstNodeList,
+  els: *AstNode,
   token: Token,
 
-  pub fn init(cond: *AstNode, then: BlockNode, elifs: std.ArrayList(ElifNode), els: BlockNode, token: Token) @This() {
+  pub fn init(cond: *AstNode, then: *AstNode, elifs: AstNodeList, els: *AstNode, token: Token) @This() {
     return @This() {.cond = cond, .then = then, .elifs = elifs, .els = els, .token = token};
+  }
+};
+
+pub const SimpleIfNode = struct {
+  cond: *AstNode,
+  then: *AstNode,
+  els: *AstNode,
+  token: Token,
+
+  pub fn init(cond: *AstNode, then: *AstNode, els: *AstNode, token: Token) @This() {
+    return @This() {.cond = cond, .then = then, .els = els, .token = token};
   }
 };
 
@@ -294,12 +334,86 @@ pub const AstNode = union(AstType) {
   AstDeref: DerefNode,
   AstIf: IfNode,
   AstElif: ElifNode,
+  AstSimpleIf: SimpleIfNode,
+  AstCondition: ConditionNode,
   AstProgram: ProgramNode,
 
-  pub fn isComptimeConst(self: *@This()) bool {
+  pub inline fn isComptimeConst(self: *@This()) bool {
     return switch (self.*) {
       .AstNumber, .AstString, .AstBool, .AstNil => true,
       else => false,
+    };
+  }
+
+  pub inline fn isVariable(self: *@This()) bool {
+    return switch (self.*) {
+      .AstVar => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isSubscript(self: *@This()) bool {
+    return switch (self.*) {
+      .AstSubscript => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isUnary(self: *@This()) bool {
+    return switch (self.*) {
+      .AstUnary => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isBinary(self: *@This()) bool {
+    return switch (self.*) {
+      .AstBinary => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isCondition(self: *@This()) bool {
+    return switch (self.*) {
+      .AstCondition => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isDeref(self: *@This()) bool {
+    return switch (self.*) {
+      .AstDeref => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isNilLiteral(self: *@This()) bool {
+    return switch (self.*) {
+      .AstNil => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isCast(self: *@This()) bool {
+    return switch (self.*) {
+      .AstCast => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isTypeAlias(self: *@This()) bool {
+    return switch (self.*) {
+      .AstAlias => true,
+      else => false,
+    };
+  }
+
+  pub fn getNarrowed(self: *@This()) ?VarNode {
+    return switch (self.*) {
+      .AstVar => |vr| vr,
+      .AstSubscript => |*sub| sub.narrowed,
+      .AstDeref => |*der| der.narrowed,
+      else => null,
     };
   }
 
@@ -317,11 +431,10 @@ pub const AstNode = union(AstType) {
       .AstNType => |typn| @constCast(&typn.typ),
       .AstAlias => |ali| ali.typ,
       .AstCast => |cst| @constCast(&cst.typn.typ),
-      .AstSubscript => |sub| sub.typ,
-      .AstDeref => |der| der.typ,
-      .AstBlock => null,
-      .AstIf => null,
-      .AstElif => null,
+      .AstSubscript => |sub| if (sub.narrowed) |nrw| nrw.typ else sub.typ,
+      .AstDeref => |der| if (der.narrowed) |nrw| nrw.typ else der.typ,
+      .AstCondition => |cnd| cnd.cond.getType(),
+      .AstBlock, .AstIf, .AstElif => null,
       else => unreachable,
     };
   }

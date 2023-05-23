@@ -79,7 +79,7 @@ pub const Parser = struct {
     .{.bp = .BitXor, .prefix = null, .infix = Self.binary},             // TkCaret
     .{.bp = .BitOr, .prefix = null, .infix = Self.binary},              // TkPipe
     .{.bp = .Unary, .prefix = Self.unary, .infix = null},               // TkTilde
-    .{.bp = .Access, .prefix = null, .infix = Self.dotting},            // TkDot
+    .{.bp = .Access, .prefix = null, .infix = Self.dotderef},            // TkDot
     .{.bp = .None, .prefix = null, .infix = null},                      // TkQMark
     .{.bp = .None, .prefix = null, .infix = null},                      // TkNewline
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},         // TkLeq
@@ -306,8 +306,13 @@ pub const Parser = struct {
     self.advance();
     var is_not = self.match(.TkNot);
     var not_token = self.previous_tok;
-    const rhs = self._parse(bp);
+    var rhs = self._parse(bp);
     const node = self.newNode();
+    // wrap nil literal as nil TypeNode
+    if (rhs.isNilLiteral()) {
+      var nil = Type.newConcrete(.TyNil, null, self.previous_tok);
+      rhs.* = .{.AstNType = ast.TypeNode.init(nil, self.previous_tok)};
+    }
     node.* = .{.AstBinary = ast.BinaryNode.init(lhs, rhs, op)};    
     self.decIs();
     if (is_not) {
@@ -399,15 +404,14 @@ pub const Parser = struct {
     return self.handleAugAssign(node, assignable);
   }
 
-  fn dotting(self: *Self, left: *Node, assignable: bool) *Node {
-    _ = assignable;
+  fn dotderef(self: *Self, left: *Node, assignable: bool) *Node {
     // expr.?
     var token = self.current_tok;
     self.consume(.TkDot);
     self.consume(.TkQMark);
     var node = self.newNode();
     node.* = .{.AstDeref = ast.DerefNode.init(left, token)};
-    return node;
+    return self.handleAugAssign(node, assignable);
   }
 
   fn handleAugAssign(self: *Self, left: *Node, assignable: bool) *Node {
@@ -425,7 +429,10 @@ pub const Parser = struct {
       var right = self.newNode();
       right.* = .{.AstBinary = ast.BinaryNode.init(left, value, op_sign)};
       node = self.newNode();
-      node.* = .{.AstAssign = ast.BinaryNode.init(left, right, op_eq)};
+      node.* = .{.AstAssign = ast.BinaryNode.init(
+        if (left.isDeref()) left.AstDeref.expr else left,
+        right, op_eq
+      )};
       // only ascertain that a newline or eof is present, if not, error
       if (!self.check(.TkNewline) and !self.check(.TkEof)) self.consumeNlOrEof();
       // if present, exprStmt() would consume it for us.
@@ -434,7 +441,10 @@ pub const Parser = struct {
       var token = self.previous_tok;
       var value = self.parseExpr();
       node = self.newNode();
-      node.* = .{.AstAssign = ast.BinaryNode.init(left, value, token)};
+      node.* = .{.AstAssign = ast.BinaryNode.init(
+        if (left.isDeref()) left.AstDeref.expr else left,
+        value, token
+      )};
       // only ascertain that a newline or eof is present, if not, error
       if (!self.check(.TkNewline) and !self.check(.TkEof)) self.consumeNlOrEof();
       // if present, exprStmt() would consume it for us.
@@ -802,7 +812,7 @@ pub const Parser = struct {
     while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
       util.append(*Node, &then.nodes, self.statement());
     }
-    var elifs = std.ArrayList(ast.ElifNode).init(self.allocator);
+    var elifs = ast.AstNodeList.init(self.allocator);
     while (self.match(.TkElif)) {
       var elif_token = self.previous_tok;
       var elif_cond = self.parseExpr();
@@ -811,8 +821,11 @@ pub const Parser = struct {
       while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
         util.append(*Node, &elif_then.nodes, self.statement());
       }
-      var elif = ast.ElifNode.init(elif_cond, elif_then, elif_token);
-      util.append(ast.ElifNode, &elifs, elif);
+      var elif_then_node = self.newNode();
+      var elif_node = self.newNode();
+      elif_then_node.* = .{.AstBlock = elif_then};
+      elif_node.* = .{.AstElif = ast.ElifNode.init(elif_cond, elif_then_node, elif_token)};
+      util.append(*Node, &elifs, elif_node);
     }
     var els = ast.BlockNode.init(self.allocator, self.previous_tok.line);
     if (self.match(.TkElse)) {
@@ -823,8 +836,12 @@ pub const Parser = struct {
     }
     self.consume(.TkEnd);
     self.consumeNlOrEof();
+    var then_node = self.newNode();
+    var els_node = self.newNode();
     var node = self.newNode();
-    node.* = .{.AstIf = ast.IfNode.init(cond, then, elifs, els, token)};
+    then_node.* = .{.AstBlock = then};
+    els_node.* = .{.AstBlock = els};
+    node.* = .{.AstIf = ast.IfNode.init(cond, then_node, elifs, els_node, token)};
     return node;
   }
 
@@ -837,6 +854,10 @@ pub const Parser = struct {
     return node;
   }
 
+  fn emptyStmt(self: *Self) *Node {
+    return ast.BlockNode.newEmptyBlock(self.previous_tok.line, self.allocator);
+  }
+
   fn statement(self: *Self) *Node {
     if (self.check(.TkLet)) {
       return self.varDecl();
@@ -845,7 +866,7 @@ pub const Parser = struct {
     } else if (self.check(.TkDo)) {
       return self.blockStmt();
     } else if (self.match(.TkNewline)) {
-      return self.statement();
+      return self.emptyStmt();
     } else if (self.match(.TkIf)) {
       return self.ifStmt();
     }

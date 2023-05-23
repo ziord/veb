@@ -39,7 +39,7 @@ fn CreateMap(comptime K: type, comptime V: type) type {
   };
 }
 
-fn GenScope(comptime K: type, comptime V: type) type {
+pub fn GenScope(comptime K: type, comptime V: type) type {
   return struct {
     decls: std.ArrayList(ScopeMap),
     allocator: std.mem.Allocator,
@@ -71,7 +71,7 @@ fn GenScope(comptime K: type, comptime V: type) type {
       }
     }
 
-    fn current(self: *@This()) ScopeMap {
+    pub fn current(self: *@This()) ScopeMap {
       return self.decls.getLast();
     }
 
@@ -107,6 +107,12 @@ fn GenScope(comptime K: type, comptime V: type) type {
         util.error_("insert into empty scope-list", .{});
       }
       self.decls.items[self.len() - 1].put(name, ty);
+    }
+
+    pub fn clear(self: *@This()) void {
+      while (self.decls.items.len > 0) {
+        _ = self.decls.pop();
+      }
     }
   };
 }
@@ -613,16 +619,16 @@ pub const TypeLinker = struct {
 
   fn linkIf(self: *Self, node: *ast.IfNode) !void {
     try self.link(node.cond);
-    try self.linkBlock(&node.then);
-    for (node.elifs.items) |*elif| {
-      try self.linkElif(elif);
+    try self.linkBlock(&node.then.AstBlock);
+    for (node.elifs.items) |elif| {
+      try self.linkElif(&elif.AstElif);
     }
-    try self.linkBlock(&node.els);
+    try self.linkBlock(&node.els.AstBlock);
   }
 
   fn linkElif(self: *Self, node: *ast.ElifNode) !void {
     try self.link(node.cond);
-    try self.linkBlock(&node.then);
+    try self.linkBlock(&node.then.AstBlock);
   }
 
   fn linkProgram(self: *Self, node: *ast.ProgramNode) !void {
@@ -656,7 +662,7 @@ pub const TypeLinker = struct {
       .AstIf => |*nd| try self.linkIf(nd),
       .AstElif => |*nd| try self.linkElif(nd),
       .AstProgram => |*nd| try self.linkProgram(nd),
-      .AstEmpty => unreachable,
+      .AstSimpleIf, .AstCondition, .AstEmpty => unreachable,
     }
   }
 

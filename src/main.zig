@@ -6,6 +6,7 @@ const debug = @import("debug.zig");
 const value = @import("value.zig");
 const link = @import("link.zig");
 const check = @import("check.zig");
+const flow = @import("flow.zig");
 const CnAllocator = @import("allocator.zig");
 const Vec = @import("vec.zig").Vec;
 
@@ -500,7 +501,7 @@ test "if statement" {
   \\   p = x + 10
   \\ elif t == nil
   \\   p = 29
-  \\ elif t != nil
+  \\ elif t > 10
   \\   p = 12
   \\   p = p << 12 - p >> 3
   \\ else
@@ -670,4 +671,292 @@ test "is expression" {
   \\ num == str
   ;
   _ = try doTest(src);
+}
+
+test "narrowing-1" {
+  var src =
+  \\ let x: (str | num)? = 'foobar'
+  \\ let p = 10
+  \\ if x is not nil and !!!(x is str) and x > p
+  \\   x += p
+  \\ end
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-2" {
+  var src =
+  \\ let x: list{num} | map{str, num} = [5]
+  \\ let p = 10
+  \\ if x is list
+  \\   p += x[0]
+  \\ end
+  \\ p
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-3" {
+  var src =
+  \\ let x: list{num} | map{str, num} = [5]
+  \\ let p = 10
+  \\ if x is list and x[0] == 5
+  \\   x[0] ^= 12
+  \\ end
+  \\ x
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-4" {
+  var src =
+  \\ let x: list{list{num | str}} | map{str, num} = [[5 as num | str]]
+  \\ let p = 10
+  \\ if x is list and x[0][0] is num and x[0][0] + 2 > 0
+  \\   x[0]
+  \\ end
+  \\ p
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-5" {
+  var src =
+  \\ let x: list{list{num | str}} | map{str, list{num | str}} = [[5 as num | str]]
+  \\ let p = 10
+  \\ if x is map and x['a'][0] is num and x['a'][0] + 2 > 0
+  \\   x['foobar'] = [1 as num | str, 2]
+  \\ end
+  \\ x
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-6" {
+  var src =
+  \\ let x: list{list{num | str}} | map{str, list{num | str}} = [[5 as num | str]]
+  \\ let p = 10
+  \\ if x is map and x['a'][0] is num and x['a'][0] + 2 > 0xff
+  \\   x['a'][0] + 5
+  \\ end
+  \\ p
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-7" {
+  var src =
+  \\ let x: list{list{num | str}} | map{str, list{num | str}} = [[5 as num | str]]
+  \\ let p = 10
+  \\ if x is map and x['a'][0] is num and x['a'][0] + 2 > 0
+  \\   p += x['a'][0]
+  \\ end
+  \\ p
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-8" {
+  var src =
+  \\ let x: list{list{num | str}} | map{str, list{num | str}} = [[5 as num | str]]
+  \\ let y: str | bool | num = false
+  \\ let p = 10
+  \\ if y is not str and y is not num
+  \\   !y
+  \\ elif y is not str
+  \\  y + p # num
+  \\ end
+  \\ p
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-9" {
+  var src =
+  \\ let x: num? = 9
+  \\ if x is not nil and x is num
+  \\   x + 5
+  \\ else 
+  \\   !!x
+  \\ end
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-10" {
+  var src =
+  \\ let x: str | num = 5
+  \\ let p = 0
+  \\ if x is num
+  \\    p /= 5
+  \\ elif x is str
+  \\    !x
+  \\ else
+  \\    x # never
+  \\ end
+  \\ p
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-11" {
+  var src =
+  \\ let x: list{num | list{num}} | num = [9 as num | list{num}]
+  \\ let p = 0
+  \\ if x is list
+  \\    if x[0] is list
+  \\        p /= 5
+  \\    end
+  \\ elif x is num
+  \\    p += x
+  \\ else
+  \\    x  # never
+  \\ end
+  \\ p
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-12" {
+  var src =
+  \\ let x: str | num = 5
+  \\ let p = 0
+  \\ if x is num
+  \\    p /= 5
+  \\ end
+  \\ if x is str
+  \\    !x
+  \\ else
+  \\    p = x * x
+  \\ end
+  \\ p
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-13" {
+  var src =
+  \\ let x: str | num = 5
+  \\ let p = 0
+  \\ if x is num
+  \\    p /= 5
+  \\ end
+  \\ if x is str
+  \\    !x
+  \\ elif x is num
+  \\    p *= x
+  \\ else
+  \\    x # never
+  \\ end
+  \\ p
+  ;
+  _ = try doTest(src);
+}
+
+
+test "narrowing-14" {
+  var src =
+  \\ let x: (list{num} | str)? = [5]
+  \\ if x.? is list and x.?[0] is num
+  \\    x.?[0] += 5
+  \\ else
+  \\    x.?
+  \\ end
+  \\ x
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-15" {
+  var src =
+  \\ let x: num? = 9
+  \\ if x is not nil and x is num
+  \\   x += 5
+  \\ else 
+  \\   !!x
+  \\ end
+  \\ x
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-16" {
+  var src =
+  \\ let x: str | num = 5
+  \\ if (x is num and 5 > 2) or x is num
+  \\    x += 5
+  \\ else
+  \\    x # str
+  \\ end
+  \\ x
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-17" {
+  var src =
+  \\ let x: num? = 9
+  \\ if x is not nil and x is num
+  \\   x -= 5
+  \\ else 
+  \\   !!x
+  \\ end
+  \\ x
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-18" {
+  var src =
+  \\ let x: str | num = 5
+  \\ let y: str | num = 10
+  \\ if x is num and y is num or y is num
+  \\    x # num | str
+  \\    y *= 5
+  \\ else
+  \\    x # num | str
+  \\    y # str
+  \\ end
+  \\ y
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-19" {
+  var src =
+  \\ let x: list{list{num | str}} | map{str, list{num | str}} = [[5 as num | str]]
+  \\ let p = 10
+  \\ if x is map 
+  \\   if x['a'][0] is num and x['a'][0] + 2 > 0xff
+  \\      x['a'][0] + 5
+  \\   else
+  \\     x # list{...}
+  \\   end
+  \\ else
+  \\   if x[0][0] is num
+  \\      p -= x[0][0]
+  \\   end
+  \\ end
+  \\ p
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-20" {
+  var src =
+  \\ let x: str | num? = 5
+  \\ if x is not str
+  \\    x.? += 10
+  \\ end
+  \\ x
+  ;
+  _ = try doTest(src);
+  var src2 =
+  \\ let x: str | num? = 5
+  \\ if x is not str and x is not nil
+  \\    x += 10
+  \\ end
+  \\ x
+  ;
+  _ = try doTest(src2);
 }

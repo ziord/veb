@@ -273,12 +273,12 @@ pub const Optr = struct {
 
 pub const Token = struct {
   ty: TokenType,
-  value: []const u8,
-  msg: ?[]const u8,
   line: usize,
   column: usize,
   offset: usize,
+  value: []const u8,
   src: []const u8,
+  msg: ?[]const u8,
   is_alloc: bool = false,
 
   pub inline fn is(self: @This(), ty: TokenType) bool {
@@ -342,6 +342,12 @@ pub const Token = struct {
       .src = "",
       .is_alloc = false,
     };
+  }
+
+  pub fn tokenFrom(token: *Token) Token {
+    var new: Token = undefined;
+    new = token.*;
+    return new;
   }
 
   pub fn showError(self: @This(), filename: []const u8, comptime fmt: []const u8, args: anytype) void {

@@ -645,6 +645,7 @@ pub const Compiler = struct {
         self.vreg.releaseReg(reg);
       } else {
         // map access
+        std.debug.assert(typ.isMapTy());
         var rk_val = self.c(node.expr, dst);
         var reg = self.getReg();
         var rk_key = self.c(node.index, reg);
@@ -697,13 +698,13 @@ pub const Compiler = struct {
     var rx = self.c(node.cond, reg);
     // jmp to elif, if any
     var cond_to_elif_or_else = self.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
-    _ = self.cBlock(&node.then, reg);
+    _ = self.cBlock(&node.then.AstBlock, reg);
     var should_patch_if_then_to_end = true;
     var if_then_to_end = blk: {
       // as a simple optimization, if we only have an if-end statement, i.e. no elif & else,
       // we don't need to jump after the last statement in the if-then block, control
       // would naturally fallthrough to outside the if-end statement.
-      if (node.elifs.items.len == 0 and node.els.nodes.items.len == 0) {
+      if (node.elifs.items.len == 0 and node.els.AstBlock.nodes.items.len == 0) {
         should_patch_if_then_to_end = false;
         break :blk @as(usize, 0);
       }
@@ -716,13 +717,13 @@ pub const Compiler = struct {
       self.code.patch2ArgsJmp(cond_to_elif_or_else);
       elifs_then_to_end = std.ArrayList(usize).init(self.allocator.getArenaAllocator());
       var last_patch: ?JmpPatch = null;
-      for (node.elifs.items) |*elif| {
+      for (node.elifs.items) |elif| {
         if (last_patch) |pch| {
           // we want the last compiled elif's failing cond to jump here; 
           // - just before the next elif code
           self.code.patch2ArgsJmp(pch.jmp_to_next);
         }
-        var patch: JmpPatch = self.cElif(elif, reg);
+        var patch: JmpPatch = self.cElif(&elif.AstElif, reg);
         util.append(usize, &elifs_then_to_end, patch.jmp_to_end);
         last_patch = patch;
       }
@@ -733,7 +734,7 @@ pub const Compiler = struct {
       self.code.patch2ArgsJmp(cond_to_elif_or_else);
     }
     // else-
-    _ = self.cBlock(&node.els, reg);
+    _ = self.cBlock(&node.els.AstBlock, reg);
     if (node.elifs.items.len > 0) {
       // patch up elif_then_to_end 
       for (elifs_then_to_end.items) |idx| {
@@ -754,7 +755,7 @@ pub const Compiler = struct {
     var rx = self.c(node.cond, reg);
     // jmp to else, if any
     var cond_jmp = self.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
-    _ = self.cBlock(&node.then, reg);
+    _ = self.cBlock(&node.then.AstBlock, reg);
     var then_jmp = self.code.write2ArgsJmp(.Jmp, 0, self.lastLine(), self.vm);
     return .{.jmp_to_next = cond_jmp, .jmp_to_end = then_jmp};
   }
@@ -788,7 +789,7 @@ pub const Compiler = struct {
       .AstDeref => |*nd| self.cDeref(nd, reg),
       .AstIf => |*nd| self.cIf(nd, reg),
       .AstProgram => |*nd| self.cProgram(nd, reg),
-      .AstElif, .AstEmpty => unreachable,
+      .AstSimpleIf, .AstElif, .AstCondition, .AstEmpty => unreachable,
     };
   }
 

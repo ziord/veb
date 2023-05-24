@@ -12,7 +12,6 @@ const Type = types.Type;
 const Generic = types.Generic;
 const Union = types.Union;
 const Variable = types.Variable;
-const Nullable = types.Nullable;
 const Concrete = types.Concrete;
 
 // maximum number of elements of a list literal 
@@ -638,12 +637,7 @@ pub const Parser = struct {
       self.assertBuiltinExpTParams(typ.generic());
     }
     if (self.match(.TkQMark)) {
-      var subtype = typ;
-      if (subtype.isNullable()) {
-        self.previous_tok.msg = "Nullable type cannot be nullable";
-        self.err(self.previous_tok);
-      }
-      typ = Type.newNullable(subtype.box(self.allocator), self.previous_tok);
+      typ = Type.newNullable(typ.box(self.allocator), self.previous_tok, self.allocator).*;
     }
     return typ;
   }
@@ -700,9 +694,6 @@ pub const Parser = struct {
             return tok;
           }
         }
-      },
-      .Nullable => |nul| {
-        return self.checkGenericTParam(tvar, nul.subtype);
       },
       // .Variable => |*vr| {
       //   if (vr.eql(&tvar.kind.Variable)) {

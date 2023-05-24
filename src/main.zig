@@ -230,6 +230,14 @@ test "types" {
   \\ type T{K, V} = K | V
   \\ let p: T{num, str} = 5
   \\ p as num + 3
+  \\ let x: num? | str = 5
+  \\ let y: num | str? = x
+  \\ let z: (num | str)? = x as num + y as num
+  \\ let z2: num | str = x as num + y as num
+  \\ let q: num | str = z.? or z2
+  \\ q == z # okay because types are still related (i.e. not disjoint).
+  \\ let x: num | num = 5
+  \\ x += x
   ;
   _ = try doTest(src);
 }
@@ -940,6 +948,14 @@ test "narrowing-19" {
   \\ p
   ;
   _ = try doTest(src);
+  var src2 =
+  \\ let x: (num | str?) = 'fox'
+  \\ if x != nil and x is not str
+  \\    x += 10
+  \\ end
+  \\ x
+  ;
+  _ = try doTest(src2);
 }
 
 test "narrowing-20" {
@@ -959,4 +975,15 @@ test "narrowing-20" {
   \\ x
   ;
   _ = try doTest(src2);
+  var src3 =
+  \\ do
+  \\   let x: list{num?} = [5 as num?]
+  \\   let p = x as list{num?}
+  \\   if p[0].? is num # redundant but okay
+  \\      p[0].? += 12
+  \\   end
+  \\   x
+  \\ end
+  ;
+  _ = try doTest(src3);
 }

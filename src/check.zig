@@ -489,7 +489,6 @@ pub const TypeChecker = struct {
       } else if (self.canNarrow(node.left)) {
         try self.narrow(node.left, env, assume_true);
         if (node.left.getNarrowed()) |vr| {
-          self.insertType(vr.token.value, vr.typ.?);
           var synth = node.*;
           synth.left = &.{.AstVar = vr};
           try self.narrowBinary(&synth, env, assume_true);
@@ -756,7 +755,7 @@ pub const TypeChecker = struct {
       typeset.put(typ.typeid(), typ) catch break;
     }
     var gen = node.typ.?.generic();
-    gen.append(Type.compressTypes(&typeset, node.token));
+    gen.append(Type.compressTypes(&typeset, node.token, null));
     return node.typ.?;
   }
 
@@ -1140,7 +1139,7 @@ pub const TypeChecker = struct {
         .{self.getTypename(expr_ty)}
       );
     }
-    node.typ = expr_ty.nullable().subtype;
+    node.typ = expr_ty.subtype(self.allocator);
   }
 
   fn checkIfCond(self: *Self, cond_ty: *Type, debug: Token) !void {

@@ -69,7 +69,7 @@ pub const Concrete = struct {
           }
         }
       },
-      .Nullable, .Union, .Generic, .Variable, .Recursive => return false,
+      .Union, .Generic, .Variable, .Recursive => return false,
     }
     return false;
   }
@@ -80,6 +80,7 @@ pub const Union = struct {
   variants: TypeHashSet,
   /// the active type in the union
   active: ?*Type = null,
+  is_nullable: bool = false,
 
   pub fn init(allocator: std.mem.Allocator) @This() {
     return Union{.variants = TypeHashSet.init(allocator)};
@@ -90,10 +91,17 @@ pub const Union = struct {
   }
 
   pub fn set(self: *@This(), typ: *Type) void {
-    self.variants.put(typ.typeid(), typ) catch |e| {
-      std.debug.print("error: {}", .{e});
-      std.os.exit(1);
-    };
+    if (!typ.isUnion()) {
+      util.set(u32, *Type, &self.variants, typ.typeid(), typ);
+    } else {
+      var uni = typ.union_();
+      for (uni.variants.values()) |vr| {
+        util.set(u32, *Type, &self.variants, vr.typeid(), vr);
+      }
+    }
+    if (typ.isNullable() or typ.isNilTy()) {
+      self.is_nullable = true;
+    }
   }
 
   pub fn addAll(self: *@This(), types: *TypeList) void {
@@ -120,7 +128,7 @@ pub const Union = struct {
         }
         return true;
       },
-      .Concrete, .Nullable, .Generic, .Variable, .Recursive => {
+      .Concrete, .Generic, .Variable, .Recursive => {
         if (ctx == .RCTypeParams) return false;
         // related if there exists a variant of T1 that is related to T2
         for (this.variants.values()) |variant| {
@@ -173,45 +181,9 @@ pub const Generic = struct {
         }
         return true;
       },
-      .Concrete, .Nullable, .Union, .Variable, .Recursive => return false,
+      .Concrete, .Union, .Variable, .Recursive => return false,
     }
     return false;
-  }
-};
-
-pub const Nullable = struct {
-  subtype: *Type,
-
-  pub fn init(subtype: *Type) @This() { 
-    return @This() {.subtype = subtype};
-  }
-
-  pub inline fn isRelatedTo(this: *Nullable, other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
-    // unrelated in generic type params ctx
-    if (ctx == .RCTypeParams) {
-      // TODO: safe?!
-      if (!other.isNullable()) return false;
-    }
-    switch (other.kind) {
-      // Nullable & Concrete
-      .Concrete => |*conc| {
-        // related if the subtype of T1 is related to T2
-        if (conc.tkind == .TyNil) return true;
-        return this.subtype.isRelatedTo(other, ctx, A);
-      },
-      .Nullable => |*nul| {
-        // related if the subtype of T1 is related to the subtype of T2 with given context
-        return this.subtype.isRelatedTo(nul.subtype, ctx, A);
-      },
-      .Recursive => {
-        // related if the subtype of T1 is the exact same type as T2
-        return (this.subtype.typeidEql(other));
-      },
-      .Union, .Generic, .Variable => {
-        return this.subtype.isRelatedTo(other, ctx, A);
-      },
-    }
-    unreachable;
   }
 };
 
@@ -241,7 +213,7 @@ pub const Variable = struct {
     _ = ctx;
     return switch (other.kind) {
       .Variable => |*vr| this.eql(vr),
-      .Concrete, .Union, .Nullable, .Recursive, .Generic => false,
+      .Concrete, .Union, .Recursive, .Generic => false,
     };
   }
 };
@@ -281,7 +253,6 @@ pub const AliasInfo = struct {
 
 pub const TypeInfo = union(enum) {
   Concrete: Concrete,
-  Nullable: Nullable,
   Variable: Variable,
   Union: Union,
   Generic: Generic,
@@ -324,7 +295,7 @@ pub const Type = struct {
 
   pub fn clone(self: *Self, A: std.mem.Allocator) *Self {
     switch (self.kind) {
-      .Concrete, .Variable, .Nullable, .Recursive => return self,
+      .Concrete, .Variable, .Recursive => return self,
       .Generic => |*gen| {
         var new = Generic.init(A, gen.base.clone(A));
         new.tparams.ensureTotalCapacity(gen.tparams.capacity) catch {};
@@ -355,9 +326,21 @@ pub const Type = struct {
     return Self.init(.{.Concrete = conc}, debug);
   }
 
-  pub fn newNullable(subtype: *Self, debug: Token) Self {
-    var nul = Nullable.init(subtype);
-    return Self.init(.{.Nullable = nul}, debug);
+  pub fn newNullable(ty: *Self, debug: Token, al: std.mem.Allocator) *Self {
+    if (ty.isUnion()) {
+      var uni = ty.union_();
+      if (uni.is_nullable) return ty;
+      uni.set(Type.newConcrete(.TyNil, null, debug).box(al));
+      uni.is_nullable = true;
+      return ty;
+    } else {
+      var typ = Type.newUnion(al, debug);
+      var uni = typ.union_();
+      uni.set(ty);
+      uni.set(Type.newConcrete(.TyNil, null, debug).box(al));
+      uni.is_nullable = true;
+      return typ.box(al);
+    }
   }
 
   pub fn newVariable(allocator: std.mem.Allocator, debug: Token) Self {
@@ -386,6 +369,17 @@ pub const Type = struct {
     nvr.value = "never";
     ty.variable().append(nvr);
     return ty;
+  }
+
+  pub fn subtype(self: *Self, al: std.mem.Allocator) *Type {
+    std.debug.assert(self.isNullable());
+    var sub = TypeHashSet.init(al);
+    for (self.nullable().variants.values()) |ty| {
+      if (!ty.isNilTy()) {
+        util.set(u32, *Type, &sub, ty.typeid(), ty);
+      }
+    }
+    return compressTypes(&sub, self.debug, null);
   }
  
   /// simple/concrete 'unit' type
@@ -417,7 +411,7 @@ pub const Type = struct {
   /// a nullable type
   pub inline fn isNullable(self: *Self) bool {
     return switch (self.kind) {
-      .Nullable => true,
+      .Union => |*uni| uni.is_nullable,
       else => false,
     };
   }
@@ -448,7 +442,15 @@ pub const Type = struct {
 
   /// a type that may be generic (from annotation usage)
   pub inline fn isLikeGeneric(self: *Self) bool {
-    return self.isGeneric() or self.isNullable() and self.nullable().subtype.isGeneric();
+    if (self.isGeneric()) return true;
+    if (self.isUnion()) {
+      for (self.union_().variants.values()) |vr| {
+        if (vr.isGeneric()) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   inline fn isConcreteTypeEq(self: *Self, kind: TypeKind) bool {
@@ -502,8 +504,8 @@ pub const Type = struct {
   }
 
   /// extract the appropriate typeinfo of this type
-  pub inline fn nullable(self: *Self) Nullable {
-    return self.kind.Nullable;
+  pub inline fn nullable(self: *Self) *Union {
+    return &self.kind.Union;
   }
 
   pub inline fn concrete(self: *Self) Concrete {
@@ -566,10 +568,6 @@ pub const Type = struct {
           self.tid <<= 1; // mix
         }
       },
-      .Nullable => |nul| {
-        self.tid = 7 << ID_HASH;
-        self.tid += nul.subtype.typeid();
-      },
       .Variable => |vr| {
         for (vr.tokens.items) |tok| {
           self.tid += @as(u32, @enumToInt(tok.ty)) << ID_HASH;
@@ -591,17 +589,6 @@ pub const Type = struct {
     return self.typeid() == other.typeid();
   }
 
-  fn getNullVariableType(self: *Self, allocator: std.mem.Allocator, debug: Token) *Type {
-    _ = self;
-    var nul = Self.newVariable(allocator, debug);
-    var token = Token.getDefault();
-    (&token).* = debug;
-    token.value = "$$null$$";
-    token.ty = .TkIdent;
-    nul.variable().append(token);
-    return nul.box(allocator);
-  }
-
   fn _unfoldRecursive(typ: *Self, step: usize, list: *TypeList, visited: *TypeHashSet) void {
     if (step > 0 and typ.isRecursive() and visited.get(typ.typeid()) != null) {
       return;
@@ -609,10 +596,6 @@ pub const Type = struct {
     switch (typ.kind) {
       .Concrete => util.append(*Type, list, typ),
       .Variable => util.append(*Type, list, typ),
-      .Nullable => |nul| {
-        util.append(*Type, list, typ.getNullVariableType(list.allocator, typ.debug));
-        nul.subtype._unfoldRecursive(step + 1, list, visited);
-      },
       .Generic => |*gen| {
         gen.base._unfoldRecursive(step + 1, list, visited);
         for (gen.tparams.items) |param| {
@@ -635,10 +618,6 @@ pub const Type = struct {
     switch (self.kind) {
       .Concrete => util.append(*Type, list, self),
       .Variable => util.append(*Type, list, self),
-      .Nullable => |nul| {
-        util.append(*Type, list, self.getNullVariableType(list.allocator, self.debug));
-        nul.subtype._unfold(list);
-      },
       .Generic => |*gen| {
         gen.base._unfold(list);
         for (gen.tparams.items) |param| {
@@ -688,9 +667,6 @@ pub const Type = struct {
     switch (this.kind) {
       .Concrete => |*conc| {
         return conc.isRelatedTo(other, ctx, A);
-      },
-      .Nullable => |*nul| {
-        return nul.isRelatedTo(other, ctx, A);
       },
       .Union => |*uni| {
         return uni.isRelatedTo(other, ctx, A);
@@ -887,14 +863,6 @@ pub const Type = struct {
           return writer.context.items;
         }
       },
-      .Nullable => |nul| {
-        var sub = try nul.subtype._typename(allocator, depth);
-        if (std.mem.containsAtLeast(u8, sub, 1, "|")) {
-          return std.fmt.allocPrint(allocator, "({s})?", .{sub}) catch "";
-        } else {
-          return std.fmt.allocPrint(allocator, "{s}?", .{sub}) catch "";
-        }
-      },
       .Union => |*uni| {
         var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
         var values = uni.variants.values();
@@ -918,7 +886,7 @@ pub const Type = struct {
   }
 
   /// combine types in typeset as much as possible
-  pub fn compressTypes(typeset: *TypeHashSet, debug: Token) *Type {
+  pub fn compressTypes(typeset: *TypeHashSet, debug: Token, uni: ?*Type) *Type {
     if (typeset.count() > 1) {
       var final = TypeList.init(typeset.allocator);
       var last_ty: ?*Type = null;
@@ -941,6 +909,11 @@ pub const Type = struct {
       // convert types to a single union type
       return blk: {
         var tmp: *Type = undefined;
+        if (final.items.len == typeset.count()) {
+          if (uni) |ty| {
+            return ty;
+          }
+        }
         if (final.items.len > 1) {
           tmp = Type.newUnion(typeset.allocator, debug).box(typeset.allocator);
           tmp.union_().addAll(&final);
@@ -948,7 +921,7 @@ pub const Type = struct {
           tmp = final.items[0];
         }
         if (has_nil) {
-          tmp = Type.newNullable(tmp, debug).box(typeset.allocator);
+          tmp = Type.newNullable(tmp, debug, typeset.allocator);
         }
         break :blk tmp;
       };
@@ -967,36 +940,32 @@ pub const Type = struct {
     }
     if (t1.isNilTy()) {
       if (t2.isNullable()) return t2;
-      return t2.newNullable(t2.debug).box(allocator);
+      return t2.newNullable(t2.debug, allocator);
     } else if (t2.isNilTy()) {
       if (t1.isNullable()) return t1;
-      return t1.newNullable(t1.debug).box(allocator);
+      return t1.newNullable(t1.debug, allocator);
     } else {
       if (t1.isRelatedTo(t2, .RCAny, allocator)) {
         return t1;
       }
       if (t2.isUnion()) {
-        var tmp = Type.newUnion(allocator, t2.debug).box(allocator);
-        var uni = tmp.union_();
-        uni.variants = t2.union_().variants.clone() catch |e| {
+        var variants = t2.union_().variants.clone() catch |e| {
           std.debug.print("Error: {}", .{e});
           std.os.exit(1);
         };
-        uni.set(t1);
-        return compressTypes(&uni.variants, t2.debug);
+        util.set(u32, *Type, &variants, t1.typeid(), t1);
+        return compressTypes(&variants, t2.debug, null);
       }
       if (t2.isRelatedTo(t1, .RCAny, allocator)) {
         return t2;
       }
       if (t1.isUnion()) {
-        var tmp = Type.newUnion(allocator, t1.debug).box(allocator);
-        var uni = tmp.union_();
-        uni.variants = t1.union_().variants.clone() catch |e| {
+        var variants = t1.union_().variants.clone() catch |e| {
           std.debug.print("Error: {}", .{e});
           std.os.exit(1);
         };
-        uni.set(t2);
-        return compressTypes(&uni.variants, t1.debug);
+        util.set(u32, *Type, &variants, t2.typeid(), t2);
+        return compressTypes(&variants, t1.debug, null);
       }
       var tmp = Type.newUnion(allocator, t1.debug).box(allocator);
       tmp.union_().set(t1);
@@ -1013,14 +982,13 @@ pub const Type = struct {
     if (t1.isRelatedTo(t2, .RCAny, allocator)) {
       switch (t1.kind) {
         .Union => |*uni| {
-          var new = Type.newUnion(allocator, t1.debug);
-          var uni2 = new.union_();
+          var uni2 = TypeHashSet.init(allocator);
           for (uni.variants.values()) |typ| {
             if (typ.intersect(t2, allocator)) |ty| {
-              uni2.set(ty);
+              util.set(u32, *Type, &uni2, ty.typeid(), ty);
             }
           }
-          return compressTypes(&uni2.variants, new.debug);
+          return compressTypes(&uni2, t1.debug, null);
         },
         .Recursive => {
           var typs = t1.unfold(allocator);
@@ -1030,24 +998,18 @@ pub const Type = struct {
             }
           }
         },
-        .Nullable => |*nul| {
-          if (nul.subtype.typeidEql(t2)) {
-            return t2;
-          }
-        },
         else => return t1,
       }
     } else if (t2.isRelatedTo(t1, .RCAny, allocator)) {
       switch (t2.kind) {
         .Union => |*uni| {
-          var new = Type.newUnion(allocator, t1.debug);
-          var uni2 = new.union_();
+          var uni2 = TypeHashSet.init(allocator);
           for (uni.variants.values()) |typ| {
             if (typ.intersect(t1, allocator)) |ty| {
-              uni2.set(ty);
+              util.set(u32, *Type, &uni2, ty.typeid(), ty);
             }
           }
-          return compressTypes(&uni2.variants, new.debug);
+          return compressTypes(&uni2, t1.debug, null);
         },
         .Recursive => {
           var typs = t2.unfold(allocator);
@@ -1055,11 +1017,6 @@ pub const Type = struct {
             if (typ.intersect(t1, allocator)) |ty| {
               return ty;
             }
-          }
-        },
-        .Nullable => |*nul| {
-          if (nul.subtype.typeidEql(t1)) {
-            return t1;
           }
         },
         else => return t2,
@@ -1070,31 +1027,20 @@ pub const Type = struct {
 
   /// negate t2 from t1 -> t1\t2
   pub fn negate(t1: *Type, t2: *Type, allocator: std.mem.Allocator) error{Negation}!*Type {
-    if (t2.isNilTy() and t1.isNullable()) {
-      return t1.nullable().subtype;
-    }
     switch (t1.kind) {
       .Union => |*uni| {
-        var new = Type.newUnion(allocator, t1.debug);
-        var new_uni = new.union_();
+        var new_uni = TypeHashSet.init(allocator);
         for (uni.variants.values()) |ty| {
           if (!ty.isEitherWayRelatedTo(t2, .RCAny, allocator)) {
-            new_uni.set(ty);
+            util.set(u32, *Type, &new_uni, ty.typeid(), ty);
           }
         }
-        if (new_uni.variants.count() == 0) {
+        if (new_uni.count() == 0) {
           return error.Negation;
         }
-        return Self.compressTypes(&new_uni.variants, new.debug);
+        return Self.compressTypes(&new_uni, t1.debug, null);
       },
       .Concrete, .Generic, .Variable, => return error.Negation,
-      .Nullable => |*nul| {
-        if (t2.isNilTy()) return nul.subtype;
-        // TODO: is this SAFE?
-        var tmp = if (t2.isNullable()) t2.nullable().subtype else t2;
-        var ty = try negate(nul.subtype, tmp, allocator);
-        return ty.newNullable(ty.debug).box(allocator);
-      },
       // TODO: c'est fini?
       .Recursive => return t1,
     }
@@ -1125,7 +1071,6 @@ pub const Type = struct {
         std.debug.assert(t2_gen.tparams_len() == 0);
         return t1;
       },
-      .Nullable => if (t2.isNilTy()) return t2,
       .Union => |*uni| {
         for (uni.variants.values()) |ty| {
           if (is(ty, t2, al)) |typ| {

@@ -536,7 +536,8 @@ pub const Compiler = struct {
       }
       return lvar.reg;
     } else if (self.findGlobal(node)) |info| {
-      // sgsym/sglb rx, bx -> GS[bx] = r(x) | G[K(bx)] = r(x)
+      // sgsym rx, bx -> GS[bx] = r(x)
+      // sglb rx, bx -> G[K(bx)] = r(x)
       var rx = self.c(expr, reg);
       const inst: OpCode = if (info.isGSym) .Sgsym else .Sglb;
       self.code.write2ArgsInst(inst, rx, info.pos, node.line(), self.vm);
@@ -594,16 +595,20 @@ pub const Compiler = struct {
 
   fn cVarDecl(self: *Self, node: *ast.VarDeclNode, reg: u32) u32 {
     // let var = expr
-    // local
+    var bin: ast.BinaryNode = .{
+      .left = &.{.AstVar = node.ident.*},
+      .right = node.value,
+      .op = undefined, .typ = node.ident.typ
+    };
     if (self.scope > GLOBAL_SCOPE) {
+      // local
       var dst = self.addLocal(node.ident);
       var lvar_pos = self.locals_count - 1;
-      _ = self.c(node.value, dst);
+      _ = self.cAssign(&bin, dst);
       // initialize the local after its rhs has been compiled successfully
       self.locals[lvar_pos].initialized = true;
-    }
-    // global
-    else {
+    } else {
+      // global
       var info = self.patchGlobal(node.ident);
       // first, deinitialize the global just in case it was initialized by
       // some other code (since globals are deduplicated/shared)
@@ -613,21 +618,13 @@ pub const Compiler = struct {
         self.globals.items[info.gvar.?.index].initialized = false;
       }
       var dst = self.getReg();
-      var rx = self.c(node.value, dst);
+      _ = self.cAssign(&bin, dst);
       // now, initialize this global after its rhs has been compiled successfully
-      const inst: OpCode = blk: {
-        if (info.isGSym) {
-          self.gsyms[info.pos].initialized = true;
-          break :blk .Sgsym;
-        } else {
-          self.globals.items[info.gvar.?.index].initialized = true;
-          break :blk .Sglb;
-        }
-      };
-      // sgsym rx, bx -> GS[bx] = r(x)
-      // sglb rx, bx -> G[K(bx)] = r(x)
-      // info.pos is GSym pos or index into valuepool storing GlobalVar name
-      self.code.write2ArgsInst(inst, rx, info.pos, node.line(), self.vm);
+      if (info.isGSym) {
+        self.gsyms[info.pos].initialized = true;
+      } else {
+        self.globals.items[info.gvar.?.index].initialized = true;
+      }
       self.vreg.releaseReg(dst);
     }
     return reg;

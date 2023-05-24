@@ -284,19 +284,6 @@ pub const TypeLinker = struct {
     }
   }
 
-  inline fn assertNonNullableSubtype(self: *Self, subtype: *Type) !void {
-    // check that this subtype to be assigned to a nullable type is not itself nullable
-    switch (subtype.kind) {
-      .Nullable => return self.error_(subtype.debug, "Nullable type cannot have a nullable subtype", .{}),
-      .Concrete => |conc| {
-        if (conc.tkind == .TyNil) {
-          return self.error_(subtype.debug, "Nullable type cannot have a nil subtype", .{});
-        }
-      },
-      else => {}
-    }
-  }
-
   inline fn assertGenericAliasSubMatches(self: *Self, alias: *Type, typ: *Type) !void {
     // check that a generic instantiation of a type alias matches the defined alias type
     if (!alias.isGeneric()) {
@@ -348,12 +335,6 @@ pub const TypeLinker = struct {
         if (try self.resolveTypeAbs(param)) {
           return true;
         }
-      }
-      return false;
-    }
-    if (typ.isNullable()) {
-      if (try self.resolveTypeAbs(typ.nullable().subtype)) {
-        return true;
       }
       return false;
     }
@@ -449,12 +430,6 @@ pub const TypeLinker = struct {
         return typ;
       }
     }
-    if (typ.isNullable()) {
-      var subtype = try self.resolveType(typ.nullable().subtype);
-      try self.assertNonNullableSubtype(subtype);
-      var nul = types.Nullable.init(subtype);
-      return self.ctx.newType(.{.Nullable = nul}, subtype.debug);
-    }
     if (typ.isUnion()) {
       // TODO: need to figure out how to do this in-place
       var uni = typ.union_();
@@ -502,6 +477,9 @@ pub const TypeLinker = struct {
     }
     self.cyc_scope.pushScope();
     var sol = try self.resolveType(typ);
+    if (sol.isUnion()) {
+      sol = Type.compressTypes(&sol.union_().variants, sol.debug, sol);
+    }
     self.cyc_scope.popScope();
     return sol;
   }

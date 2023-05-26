@@ -614,7 +614,9 @@ pub const TypeLinker = struct {
     for (node.decls.items) |item| {
       try self.link(item);
     }
-    self.ctx.leaveScope();
+    // only pop off varScope, since typScope needs to be 
+    // reused by the type checker
+    self.ctx.varScope.popScope();
   }
 
   fn link(self: *Self, node: *Node) TypeLinkError!void {

@@ -305,7 +305,6 @@ test "recursive types" {
   \\ type V = num | str | map{K, V}
   \\ type V2 = num | str | bool | map{V2, V2}
   \\ let p = [1, [2], 3, [1, 2, [3]]]
-  // \\ let x: V = {'abc' as K: 123 as V, true: 0xff, 'obs': 'fin', 0.123: {'abc' as K: 123 as V, true: 0xff, 'obs': 'fin'}}
   \\ let x = {'abc' as V2: 123 as V2, true: 0xff, 'obs': 'fin', 0.123: {'abc' as V2: 123 as V2, true: 0xff, 'obs': 'fin'}}
   \\ x
   \\ # recursive nullable
@@ -314,7 +313,6 @@ test "recursive types" {
   \\ let x: R = 'fox'
   \\ x = [[[['foo']], 3, [[[4, 5], 'bar']], 'ok'], [[[]]], []]
   \\ x
-  // \\ let x: S = [[[[[[[[[] as S?, [[[[[]]]]]]]]]]]], [[]], []]
   \\ # recursive generics
   \\ type R{K} = str | K | list{R{K}}
   \\ type S{K} = K | str | list{S{K}}
@@ -322,77 +320,6 @@ test "recursive types" {
   \\ let y: S{num} = [1]
   \\ x = y as R{num}
   \\ x
-  // \\ # mutually recursive 1
-  // \\ type R = str | num | list{S}
-  // \\ type S = num | str | list{R}
-  // \\ let x: R = [5, 'fox', [[[[33]]]]]
-  // \\ let y: S = [1]
-  // \\ y = x
-  // \\ x
-  // \\ # mutually recursive 2
-  // \\ type R = str | num | list{S | R}
-  // \\ type S = num | str | list{R | S}
-  // \\ let x: R = [5, 'fox', [[[[33]]]]]
-  // \\ let y: S = [1]
-  // \\ y = x
-  // \\ x = y
-  // \\ # mutually recursive 3
-  // \\ type R = str | num | list{S | R?}
-  // \\ type S = num | str | list{R | S?}
-  // \\ let x: R = [5, 'fox', [[[[33]]]]]
-  // \\ let y: S = [1]
-  // \\ x = y
-  // \\ y = x
-  // \\ # mutually recursive 4
-  // \\ type R = str | num | list{S? | R?}
-  // \\ type S = num | str | list{R? | S?}
-  // \\ let x: R = [5, 'fox', [[[[33]]]]]
-  // \\ let y: S = [1]
-  // \\ y = x
-  // \\ x = y
-  // \\ # mutually recursive 5
-  // \\ type R = str | num | list{R? | S?}
-  // \\ type S = num | str | list{R? | S?}
-  // \\ let x: R = [5, 'fox', [[[[33]]]]]
-  // \\ let y: S = [1]
-  // \\ x = y
-  // \\ y = x
-  // \\ # mutually recursive 6
-  // \\ type R = str | num | list{R? | S?}
-  // \\ type S = num | str | list{S? | R?}
-  // \\ let x: R = [5, 'fox', [[[[33]]]]]
-  // \\ let y: S = [1]
-  // \\ y = x
-  // \\ x = y
-  // \\ # mutually recursive generics 1
-  // \\ type R{K} = str | K | list{S{K}}
-  // \\ type S{K} = num | K | list{R{K} | S{K}}
-  // \\ let x: R{num} = [5, [[[[33]]]]]
-  // \\ let y: S{str} = ['fox', [[[[[5]]]]]]
-  // \\ y = x
-  // \\ x = y
-  // \\ # mutually recursive generics 2
-  // \\ type R{K} = str | K | list{S{K} | R{K}}
-  // \\ type S{K} = num | K | list{R{K} | S{K}}
-  // \\ let x: R{num} = [5, [[[[33]]]]]
-  // \\ let y: S{str} = ['fox', [[[[[5]]]]]]
-  // \\ y = x
-  // \\ x = y
-  // \\ # mutually recursive generics 3
-  // \\ type R{K, V} = V | K | list{R{K, V} | S{K, V}}
-  // \\ type S{K, V} = K | V | list{S{K, V} | R{K, V}}
-  // \\ let x: R{num, str} = [5, [[[[33]]]]]
-  // \\ let y: S{str, num} = ['fox', [[[[[5]]]]]]
-  // \\ x = y
-  // \\ y = x as S{str, num}
-  // \\ y = x
-  // \\ # mutually recursive generics 4
-  // \\ type R{K, V} = V | K | list{R{K, V}? | S{K, V}?}
-  // \\ type S{K, V} = K | V | list{S{K, V}? | R{K, V}?}
-  // \\ let x: R{num, str} = [5, [[[[33]]], nil]] as R{num, str}
-  // \\ let y: S{str, num} = ['fox', [[([[[5]], nil]) as S{str, num}]]]
-  // \\ y = x
-  // \\ x = y
   \\ # no conflicts
   \\ type A{T} = T
   \\ let x: A{A{num}} = 5
@@ -482,7 +409,6 @@ test "type summation" {
   \\ let q: list{num?} = [nil as num?]
   \\ let r: list{num?} = [nil, 5, nil]
   \\ let r: list{(num | str)?} = [nil, 5, nil, 'foo']
-  // \\ let s: list{num? | str} = [nil, 5 as num? | str, nil]
   \\ let t: list{(num | str)?} = [nil, 5 as num | str, nil]
   ;
   _ = try doTest(src);
@@ -986,4 +912,44 @@ test "narrowing-20" {
   \\ end
   ;
   _ = try doTest(src3);
+}
+
+test "constant types" {
+  var src =
+  \\ type Animal = "cat" | "dog" | "fox"
+  \\ type Cat = 'cat'
+  \\ type Even = 2 | 4 | 6 | 8.6
+  \\ type boolean = true | false
+  \\ let p: Animal = 'fox'
+  \\ let x: Even = 6
+  \\ let y: boolean = true
+  \\ let t: bool = y
+  \\ x = 8.6
+  \\ p = 'dog'
+  \\ y = false
+  \\ [x, p, y, t]
+  \\ do
+  \\    let p = 'Cat'
+  \\    let j: 'Cat' | 'Dog' = p as ('Cat' | 'Dog')
+  \\    let x = 0xff
+  \\    let q: 0xff = x
+  \\ end
+  \\ # true | false unions are auto-converted to 'bool'
+  \\ let x: bool = false
+  \\ let q: true | false = x
+  \\ '' as (true | false) == '' as bool
+  \\ list{num?} as true | false == list{num?} as bool
+  \\ let p: 6 | 5? = 5
+  \\ let k: num? = nil
+  \\ if p is not nil
+  \\    k = p as num + 25
+  \\ end
+  \\ k == 30
+  \\ type A = 5
+  \\ let x: list{A} = [5, 5, 5]
+  \\ let y: list{'foo'} = ['foo', 'foo', 'foo']
+  \\ let z: map{'name', str} = {'name': 'ziord'}
+  \\ z['name']
+  ;
+  _ = try doTest(src);
 }

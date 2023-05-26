@@ -45,6 +45,7 @@ pub const Concrete = struct {
   name: ?[]const u8 = null,
   /// Variable from which and for which this Concrete type was created
   variable: ?Variable = null,
+  val: ?*[]const u8 = null,
 
   pub fn init(tkind: TypeKind) @This() {
     return @This() {.tkind = tkind};
@@ -69,6 +70,50 @@ pub const Concrete = struct {
           }
         }
       },
+      .Constant => |*cons| return cons.kind == this.tkind,
+      .Union => |*uni| {
+        if (this.tkind == .TyBool or this.tkind == .TyString or this.tkind == .TyNumber) {
+          for (uni.variants.values()) |ty| {
+            if (!(ty.isConstant() and ty.constant().kind == this.tkind)) {
+              return false;
+            }
+          }
+          return true;
+        }
+      },
+      .Generic, .Variable, .Recursive => return false,
+    }
+    return false;
+  }
+};
+
+pub const Constant = struct {
+  kind: TypeKind,
+  val: []const u8,
+
+  pub fn init(kind: TypeKind, val: []const u8) @This() {
+    return @This() {.kind = kind, .val = val};
+  }
+
+  pub fn toType(self: Constant, debug: Token) Type {
+    return Type.init(.{.Constant = self}, debug);
+  }
+
+  pub fn isRelatedTo(this: *Constant, other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
+    _ = A;
+    _ = ctx;
+    switch (other.kind) {
+      // Constant & Concrete 
+      .Constant => |*cons| {
+        return this.kind == cons.kind and std.mem.eql(u8, this.val, cons.val);
+      },
+      .Concrete => |conc| {
+        if (conc.tkind != this.kind) return false;
+        if (conc.val) |val| {
+          return std.mem.eql(u8, this.val, val.*);
+        }
+        return false;
+      },
       .Union, .Generic, .Variable, .Recursive => return false,
     }
     return false;
@@ -87,7 +132,7 @@ pub const Union = struct {
   }
 
   pub fn toType(self: Union, debug: Token) Type {
-    return Type.init(.{.Union = self}, debug);
+    return Type.compressTypes(@constCast(&self.variants), debug, null).*;
   }
 
   pub fn set(self: *@This(), typ: *Type) void {
@@ -128,7 +173,7 @@ pub const Union = struct {
         }
         return true;
       },
-      .Concrete, .Generic, .Variable, .Recursive => {
+      .Constant, .Concrete, .Generic, .Variable, .Recursive => {
         if (ctx == .RCTypeParams) return false;
         // related if there exists a variant of T1 that is related to T2
         for (this.variants.values()) |variant| {
@@ -181,7 +226,7 @@ pub const Generic = struct {
         }
         return true;
       },
-      .Concrete, .Union, .Variable, .Recursive => return false,
+      .Constant, .Concrete, .Union, .Variable, .Recursive => return false,
     }
     return false;
   }
@@ -213,7 +258,7 @@ pub const Variable = struct {
     _ = ctx;
     return switch (other.kind) {
       .Variable => |*vr| this.eql(vr),
-      .Concrete, .Union, .Recursive, .Generic => false,
+      .Constant, .Concrete, .Union, .Recursive, .Generic => false,
     };
   }
 };
@@ -253,6 +298,7 @@ pub const AliasInfo = struct {
 
 pub const TypeInfo = union(enum) {
   Concrete: Concrete,
+  Constant: Constant,
   Variable: Variable,
   Union: Union,
   Generic: Generic,
@@ -295,7 +341,7 @@ pub const Type = struct {
 
   pub fn clone(self: *Self, A: std.mem.Allocator) *Self {
     switch (self.kind) {
-      .Concrete, .Variable, .Recursive => return self,
+      .Constant, .Concrete, .Variable, .Recursive => return self,
       .Generic => |*gen| {
         var new = Generic.init(A, gen.base.clone(A));
         new.tparams.ensureTotalCapacity(gen.tparams.capacity) catch {};
@@ -324,6 +370,10 @@ pub const Type = struct {
     var conc = Concrete.init(kind);
     conc.name = name;
     return Self.init(.{.Concrete = conc}, debug);
+  }
+
+  pub fn newConstant(kind: TypeKind, val: []const u8, debug: Token) Self {
+    return Self.init(.{.Constant = Constant.init(kind, val)}, debug);
   }
 
   pub fn newNullable(ty: *Self, debug: Token, al: std.mem.Allocator) *Self {
@@ -408,6 +458,14 @@ pub const Type = struct {
     };
   }
 
+  /// a compile-time constant type
+  pub inline fn isConstant(self: *Self) bool {
+    return switch (self.kind) {
+      .Constant => true,
+      else => false,
+    };
+  }
+
   /// a nullable type
   pub inline fn isNullable(self: *Self) bool {
     return switch (self.kind) {
@@ -441,16 +499,26 @@ pub const Type = struct {
   }
 
   /// a type that may be generic (from annotation usage)
-  pub inline fn isLikeGeneric(self: *Self) bool {
-    if (self.isGeneric()) return true;
+  pub inline fn isLikeXTy(self: *Self, comptime check: fn(s: *Self) callconv(.Inline) bool) bool {
+    if (check(self)) return true;
     if (self.isUnion()) {
       for (self.union_().variants.values()) |vr| {
-        if (vr.isGeneric()) {
+        if (check(vr)) {
           return true;
         }
       }
     }
     return false;
+  }
+
+  /// a type that may be generic (from annotation usage)
+  pub inline fn isLikeGeneric(self: *Self) bool {
+    return self.isLikeXTy(isGeneric);
+  }
+
+  /// a type that may be constant
+  pub inline fn isLikeConstant(self: *Self) bool {
+    return self.isLikeXTy(isConstant);
   }
 
   inline fn isConcreteTypeEq(self: *Self, kind: TypeKind) bool {
@@ -512,6 +580,10 @@ pub const Type = struct {
     return self.kind.Concrete;
   }
 
+  pub inline fn constant(self: *Self) *Constant {
+    return &self.kind.Constant;
+  }
+
   pub inline fn generic(self: *Self) *Generic {
     return &self.kind.Generic;
   }
@@ -568,6 +640,13 @@ pub const Type = struct {
           self.tid <<= 1; // mix
         }
       },
+      .Constant => |*cons| {
+        self.tid = 7 << ID_HASH;
+        // TODO: more efficient approach
+        for (cons.val) |ch| {
+          self.tid += @as(u8, ch);
+        }
+      },
       .Variable => |vr| {
         for (vr.tokens.items) |tok| {
           self.tid += @as(u32, @enumToInt(tok.ty)) << ID_HASH;
@@ -585,6 +664,14 @@ pub const Type = struct {
     return self.tid;
   }
 
+  inline fn getConstantTrueHash() u32 {
+    return 1835456;
+  }
+
+  inline fn getConstantFalseHash() u32 {
+    return 1835531;
+  }
+
   pub inline fn typeidEql(self: *Self, other: *Self) bool {
     return self.typeid() == other.typeid();
   }
@@ -594,8 +681,7 @@ pub const Type = struct {
       return;
     }
     switch (typ.kind) {
-      .Concrete => util.append(*Type, list, typ),
-      .Variable => util.append(*Type, list, typ),
+      .Concrete, .Variable, .Constant => util.append(*Type, list, typ),
       .Generic => |*gen| {
         gen.base._unfoldRecursive(step + 1, list, visited);
         for (gen.tparams.items) |param| {
@@ -616,8 +702,7 @@ pub const Type = struct {
 
   fn _unfold(self: *Self, list: *TypeList) void {
     switch (self.kind) {
-      .Concrete => util.append(*Type, list, self),
-      .Variable => util.append(*Type, list, self),
+      .Concrete, .Constant,.Variable => util.append(*Type, list, self),
       .Generic => |*gen| {
         gen.base._unfold(list);
         for (gen.tparams.items) |param| {
@@ -667,6 +752,9 @@ pub const Type = struct {
     switch (this.kind) {
       .Concrete => |*conc| {
         return conc.isRelatedTo(other, ctx, A);
+      },
+      .Constant => |*cons| {
+        return cons.isRelatedTo(other, ctx, A);
       },
       .Union => |*uni| {
         return uni.isRelatedTo(other, ctx, A);
@@ -746,7 +834,24 @@ pub const Type = struct {
     switch (target.kind) {
       .Union => |*uni| {
         if (target.isRelatedTo(source, .RCAny, A)) {
-          uni.active = if (source.isUnion()) source.union_().active else source;
+          var active = if (source.isUnion()) source.union_().active else source;
+          // if this is a Constant type assignment, we want to use the constant
+          // type as the active type (if the active type is not itself a constant type)
+          // instead of the general inferred type
+          if (active != null and !active.?.isConstant() and target.isLikeConstant()) {
+            var active_ = active.?;
+            for (uni.variants.values()) |ty| {
+              if (ty.isConstant() and ty.constant().kind == active_.concrete().tkind) {
+                if (active_.concrete().val) |v| {
+                  if (std.mem.eql(u8, v.*, ty.constant().val)) {
+                    uni.active = ty;
+                    return target;
+                  }
+                }
+              }
+            }
+          }
+          uni.active = active;
           return target;
         }
       },
@@ -845,6 +950,14 @@ pub const Type = struct {
         .TyType => "Type",
         .TyClass => conc.name.?,
       },
+      .Constant => |*cons| {
+        if (cons.kind != .TyString) return cons.val;
+        var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
+        _ = try writer.write("\"");
+        _ = try writer.write(cons.val);
+        _ = try writer.write("\"");
+        return writer.context.items;
+      },
       .Generic => |*gen| {
         const name = try gen.base._typename(allocator, depth);
         if (gen.tparams_len() == 0) {
@@ -887,19 +1000,28 @@ pub const Type = struct {
 
   /// combine types in typeset as much as possible
   pub fn compressTypes(typeset: *TypeHashSet, debug: Token, uni: ?*Type) *Type {
+    var allocator = typeset.allocator;
     if (typeset.count() > 1) {
-      var final = TypeList.init(typeset.allocator);
+      var final = TypeList.init(allocator);
       var last_ty: ?*Type = null;
       var has_nil = false;
+      var true_ty: ?*Type = null;
+      var false_ty: ?*Type = null;
       for (typeset.values()) |typ| {
         // skip related types & nil types
         if (typ.isNilTy()) {
           has_nil = true;
           continue;
+        } else if (typ.typeid() == Type.getConstantTrueHash()) {
+          true_ty = typ;
+          continue;
+        } else if (typ.typeid() == Type.getConstantFalseHash()) {
+          false_ty = typ;
+          continue;
         }
         if (last_ty) |ty| {
           // TODO: would this be good for classes?
-          if (ty.isRelatedTo(typ, .RCAny, typeset.allocator)) {
+          if (ty.isRelatedTo(typ, .RCAny, allocator)) {
             continue;
           }
         }
@@ -907,24 +1029,32 @@ pub const Type = struct {
         final.append(typ) catch break;
       }
       // convert types to a single union type
-      return blk: {
-        var tmp: *Type = undefined;
-        if (final.items.len == typeset.count()) {
-          if (uni) |ty| {
-            return ty;
-          }
+      var typ: *Type = undefined;
+      if (final.items.len == typeset.count()) {
+        if (uni) |ty| {
+          return ty;
         }
-        if (final.items.len > 1) {
-          tmp = Type.newUnion(typeset.allocator, debug).box(typeset.allocator);
-          tmp.union_().addAll(&final);
+      }
+      // add constant true & false types if available
+      if (true_ty) |tru| {
+        if (false_ty) |_| {
+          final.append(Type.newConcrete(.TyBool, null, tru.debug).box(allocator)) catch {};
         } else {
-          tmp = final.items[0];
+          final.append(tru) catch {};
         }
-        if (has_nil) {
-          tmp = Type.newNullable(tmp, debug, typeset.allocator);
-        }
-        break :blk tmp;
-      };
+      } else if (false_ty) |fal| {
+        final.append(fal) catch {};
+      }
+      if (final.items.len > 1) {
+        typ = Type.newUnion(allocator, debug).box(allocator);
+        typ.union_().addAll(&final);
+      } else {
+        typ = final.items[0];
+      }
+      if (has_nil) {
+        typ = Type.newNullable(typ, debug, allocator);
+      }
+      return typ;
     }
     return typeset.values()[0];
   }
@@ -1040,7 +1170,7 @@ pub const Type = struct {
         }
         return Self.compressTypes(&new_uni, t1.debug, null);
       },
-      .Concrete, .Generic, .Variable, => return error.Negation,
+      .Constant, .Concrete, .Generic, .Variable, => return error.Negation,
       // TODO: c'est fini?
       .Recursive => return t1,
     }
@@ -1062,6 +1192,11 @@ pub const Type = struct {
           if (std.mem.eql(u8, conc.name.?, t2.concrete().name.?)) {
             return t1;
           }
+        }
+      },
+      .Constant => {
+        if (t2.isConstant() and t1.typeidEql(t2)) {
+          return t1;
         }
       },
       .Generic => |*t1_gen| {

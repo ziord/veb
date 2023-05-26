@@ -27,6 +27,7 @@ pub const Parser = struct {
   filename: []const u8,
   allow_nl: usize = 0,
   using_is: u32 = 0,
+  in_cast: u32 = 0,
 
   const Self = @This();
 
@@ -196,7 +197,7 @@ pub const Parser = struct {
   }
 
   inline fn parsingIs(self: *Self) bool {
-    return self.using_is > 0;
+    return self.using_is > 0 and self.in_cast == 0;
   }
 
   inline fn consumeNlOrEof(self: *Self) void {
@@ -326,10 +327,12 @@ pub const Parser = struct {
   fn casting(self: *Self, lhs: *Node, assignable: bool) *Node {
     _ = assignable;
     self.consume(.TkAs);
+    self.in_cast += 1;
     const token = self.previous_tok;
     const rhs = self.typing(false);
     const node = self.newNode();
     node.* = .{.AstCast = ast.CastNode.init(lhs, &rhs.AstNType, token)};
+    self.in_cast -= 1;
     return node;
   }
 
@@ -521,6 +524,46 @@ pub const Parser = struct {
     return typ;
   }
 
+  fn abstractType(self: *Self) Type {
+    // AbstractType := TypeName
+    // TypeName    := Ident TypeParams?
+    // TypeParams  := "{" Ident ( "," Ident )* "}"
+    self.consume(.TkIdent);
+    var typ = Type.newVariable(self.allocator, self.previous_tok);
+    typ.variable().append(self.previous_tok);
+    if (self.match(.TkLCurly)) {
+      var gen = Generic.init(self.allocator, typ.box(self.allocator));
+      while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
+        if (gen.tparams.items.len > 0) self.consume(.TkComma);
+        self.assertMaxTParams(&gen);
+        var param = self.aliasParam();
+        self.assertUniqueTParams(&gen, &param);
+        gen.append(param.box(self.allocator));
+      }
+      self.assertNonEmptyTParams(&gen);
+      self.consume(.TkRCurly);
+      return gen.toType(self.previous_tok);
+    }
+    return typ;
+  }
+
+  fn constantType(self: *Self) Type {
+    // Constant  := StringLiteral | BooleanLiteral | NumberLiteral
+    var kind: TypeKind = switch (self.current_tok.ty) {
+      .TkTrue, .TkFalse => .TyBool, 
+      .TkNumber => .TyNumber,
+      .TkString => .TyString,
+      else => {
+        self.current_tok.msg = "Invalid type-start";
+        self.err(self.current_tok);
+      }
+    };
+    // direct 'unit' types such as listed above do not need names
+    var typ = Type.newConstant(kind, self.current_tok.value, self.current_tok);
+    self.advance();
+    return typ;
+  }
+
   fn builtinType(self: *Self) Type {
     // handle builtin list/map type
     var debug = self.current_tok;
@@ -555,10 +598,7 @@ pub const Parser = struct {
       .TkNum => .TyNumber,
       .TkStr => .TyString,
       // TODO: func, method, class, instance
-      else => {
-        self.current_tok.msg = "Invalid type-start";
-        self.err(self.current_tok);
-      }
+      else => return self.constantType(),
     };
 
     // direct 'unit' types such as listed above do not need names
@@ -567,31 +607,8 @@ pub const Parser = struct {
     return typ;
   }
 
-  fn abstractType(self: *Self) Type {
-    // AbstractType := TypeName
-    // TypeName    := Ident TypeParams?
-    // TypeParams  := "{" Ident ( "," Ident )* "}"
-    self.consume(.TkIdent);
-    var typ = Type.newVariable(self.allocator, self.previous_tok);
-    typ.variable().append(self.previous_tok);
-    if (self.match(.TkLCurly)) {
-      var gen = Generic.init(self.allocator, typ.box(self.allocator));
-      while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
-        if (gen.tparams.items.len > 0) self.consume(.TkComma);
-        self.assertMaxTParams(&gen);
-        var param = self.aliasParam();
-        self.assertUniqueTParams(&gen, &param);
-        gen.append(param.box(self.allocator));
-      }
-      self.assertNonEmptyTParams(&gen);
-      self.consume(.TkRCurly);
-      return gen.toType(self.previous_tok);
-    }
-    return typ;
-  }
-
   fn tPrimary(self: *Self) Type {
-    // Primary  :=  Builtin | Reference | “(“ Expression “)” | Primary “?”
+    // Primary  :=  Builtin | Reference | Constant | “(“ Expression “)”
     var typ: Type = undefined;
     if (self.match(.TkLBracket)) {
       typ = self.tExpr();

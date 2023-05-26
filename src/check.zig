@@ -241,7 +241,7 @@ pub const TypeChecker = struct {
         else => self.ctx.copyType(ty),
       };
     }
-    return null;
+    return self.findType(name);
   }
 
   fn lookupName(self: *Self, ident: *ast.VarNode, emit: bool) !*Type {
@@ -720,6 +720,7 @@ pub const TypeChecker = struct {
       return typ;
     } else {
       node.typ = kind.toType(node.token).box(self.allocator);
+      node.typ.?.kind.Concrete.val = &node.token.value;
       return node.typ.?;
     }
   }
@@ -841,23 +842,28 @@ pub const TypeChecker = struct {
     // lhs must not be type Type, and rhs must be type Type
     if (lhsTy.isTypeTy()) {
       return self.error_(
-        true, node.left.getType().?.debug,
-        "Expected type instance in lhs of `is` operator but found {s}",
+        true, node.op.token,
+        "Expected type instance in lhs of `is` operator but found '{s}'",
         .{self.getTypename(lhsTy)}
       );
     } else if (!rhsTy.isTypeTy()) {
+      var help = (
+        if (rhsTy.isLikeConstant())
+          "\nHelp: For constant types, consider using '==' or '!=' operator instead."
+        else ""
+      );
       return self.error_(
-        true, node.right.getType().?.debug,
-        "Expected 'Type' in rhs of `is` operator but found {s}",
-        .{self.getTypename(rhsTy)}
+        true, node.op.token,
+        "Expected type 'Type' in rhs of `is` operator but found type '{s}'{s}",
+        .{self.getTypename(rhsTy), help}
       );
     }
     // at this point, rhs is a TypeNode
     var ty = &node.right.AstNType.typ;
     if (!ty.isConcrete() and ty.isGeneric() and ty.generic().tparams_len() != 0) {
       return self.error_(
-        true, ty.debug,
-        "Expected a concrete/class type in rhs of `is` operator but found {s}",
+        true, node.op.token,
+        "Expected a concrete/class type in rhs of `is` operator but found '{s}'",
         .{self.getTypename(ty)}
       );
     }
@@ -1004,7 +1010,7 @@ pub const TypeChecker = struct {
         var active = if (node_ty.isUnion()) self.getTypename(node_ty.union_().active.?) else "different";
         return self.error_(
           emit, debug,
-          "Cannot cast from type '{s}' to type '{s}' because the active type is {s}",
+          "Cannot cast from type '{s}' to type '{s}' because the active type is '{s}'",
           .{self.getTypename(node_ty), self.getTypename(cast_ty), active}
         );
       }
@@ -1183,6 +1189,7 @@ pub const TypeChecker = struct {
     linker.linkTypes(node) catch {
       return error.TypeCheckError;
     };
+    self.ctx.typScope = linker.ctx.typScope;
     var builder = CFGBuilder.init(node, self.allocator);
     self.cfg = builder.build();
     self.flowInferEntry() catch |e| {

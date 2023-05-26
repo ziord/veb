@@ -168,14 +168,19 @@ pub const CFGBuilder = struct {
     self.connectVerticesWithEdgeInfo(prev, flow, edge);
     return flow.toList(self.allocator);
   }
+
+  fn linkNodeList(self: *Self, nodes: *ast.AstNodeList, prev: FlowList, edge: FlowEdge) FlowList {
+    var _prev = prev;
+    for (nodes.items) |item| {
+      if (item.isTypeAlias()) continue;
+      _prev = self.link(item, _prev, edge);
+    }
+    return _prev;
+  }
   
   fn linkBlock(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
     var block = &node.AstBlock;
-    var prv = prev;
-    for (block.nodes.items) |item| {
-      prv = self.link(item, prv, edge);
-    }
-    return prv;
+    return self.linkNodeList(&block.nodes, prev, edge);
   }
 
   fn linkVarDecl(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
@@ -209,11 +214,7 @@ pub const CFGBuilder = struct {
 
   fn linkProgram(self: *Self, ast_node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
     var node = &ast_node.AstProgram;
-    var _prev = prev;
-    for (node.decls.items) |item| {
-      if (item.isTypeAlias()) continue;
-      _prev = self.link(item, _prev, edge);
-    }
+    var _prev = self.linkNodeList(&node.decls, prev, edge);
     self.connectVertices(_prev, self.exit);
     return undefined;
   }

@@ -86,6 +86,18 @@ pub const OpCode = enum (u8) {
   // [6]  [8]   [9]      [9]
   Glst,
 
+  // ntup rx, size
+  // [6] [8] [18]
+  Ntup,
+
+  // stup rx, rk(idx), rk(val)
+  // [6]  [8]   [9]      [9]
+  Stup,
+
+  // gtup rx, rk(idx), rk(val)
+  // [6]  [8]   [9]      [9]
+  Gtup,
+
   // nmap rx, size
   // [6] [8] [18]
   Nmap,

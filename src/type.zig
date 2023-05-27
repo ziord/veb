@@ -571,6 +571,10 @@ pub const Type = struct {
     return self.isXClassTy("map");
   }
 
+  pub fn isTupleTy(self: *Self) bool {
+    return self.isXClassTy("tuple");
+  }
+
   /// extract the appropriate typeinfo of this type
   pub inline fn nullable(self: *Self) *Union {
     return &self.kind.Union;

@@ -169,6 +169,7 @@ pub const ObjId = enum(u8) {
   ObjStr,
   ObjLst,
   ObjValMap,
+  ObjTup,
   // ObjStrMap,
 };
 
@@ -188,6 +189,12 @@ pub const ObjList = extern struct {
   obj: Obj,
   len: usize,
   capacity: usize,
+  items: [*]Value,
+};
+
+pub const ObjTuple = extern struct {
+  obj: Obj,
+  len: usize,
   items: [*]Value,
 };
 
@@ -287,6 +294,10 @@ pub inline fn isList(val: Value) bool {
   return isObjType(val, .ObjLst);
 }
 
+pub inline fn isTuple(val: Value) bool {
+  return isObjType(val, .ObjTup);
+}
+
 pub fn isListNoInline(val: Value) bool {
   return isList(val);
 }
@@ -297,6 +308,10 @@ pub inline fn isMap(val: Value) bool {
 
 pub fn isMapNoInline(val: Value) bool {
   return isMap(val);
+}
+
+pub fn isTupleNoInline(val: Value) bool {
+  return isTuple(val);
 }
 
 pub inline fn asString(val: Value) *ObjString {
@@ -311,6 +326,10 @@ pub inline fn asMap(val: Value) *ObjMap {
   return @ptrCast(*ObjMap, asObj(val));
 }
 
+pub inline fn asTuple(val: Value) *ObjTuple {
+  return @ptrCast(*ObjTuple, asObj(val));
+}
+
 pub inline fn valueEqual(a: Value, b: Value) bool {
   if (isNumber(a) and isNumber(b)) return asNumber(a) == asNumber(b);
   return a == b;
@@ -322,7 +341,8 @@ pub inline fn valueFalsy(val: Value) bool {
     (isNumber(val) and asNumber(val) == 0) or 
     (isString(val) and asString(val).len == 0) or
     (isList(val) and asList(val).len == 0) or
-    (isMap(val) and asMap(val).meta.len == 0)
+    (isMap(val) and asMap(val).meta.len == 0) or
+    (isTuple(val) and asTuple(val).len == 0)
   );
 }
 
@@ -367,6 +387,23 @@ pub fn printObject(val: Value) void {
       }
       util.print("]", .{});
     },
+    .ObjTup => {
+      var tuple = asTuple(val);
+      var add_comma = tuple.len > 1;
+      var comma_end = if (add_comma) tuple.len - 1 else 0;
+      util.print("(", .{});
+      for (tuple.items[0..tuple.len], 0..) |item, i| {
+        @call(.always_inline, display, .{item});
+        if (add_comma and i < comma_end) {
+          util.print(", ", .{});
+        }
+      }
+      if (tuple.len == 1) {
+        util.print(",)", .{});
+      } else {
+        util.print(")", .{});
+      }
+    },
     .ObjValMap => {
       asMap(val).meta.display();
     }
@@ -374,6 +411,7 @@ pub fn printObject(val: Value) void {
 }
 
 pub fn objectToString(val: Value, vm: *VM) Value {
+  // TODO: handle size overflow
   switch (asObj(val).id) {
     .ObjStr => return val,
     .ObjValMap => {
@@ -382,10 +420,15 @@ pub fn objectToString(val: Value, vm: *VM) Value {
       return createStringV(vm, &vm.strings, fmt, false);
     },
     .ObjLst => {
-      var buff: [15]u8 = undefined;
+      var buff: [20]u8 = undefined;
       var fmt = std.fmt.bufPrint(&buff, "@list[{}]", .{asList(val).len}) catch "";
       return createStringV(vm, &vm.strings, fmt, false);
-    }
+    },
+    .ObjTup => {
+      var buff: [20]u8 = undefined;
+      var fmt = std.fmt.bufPrint(&buff, "@tuple[{}]", .{asTuple(val).len}) catch "";
+      return createStringV(vm, &vm.strings, fmt, false);
+    },
   }
   unreachable;
 }
@@ -497,6 +540,13 @@ pub fn createMap(vm: *VM, len: usize) *ObjMap {
   map.meta = ValueHashMap.init();
   map.meta.ensureCapacity(vm, len);
   return map;
+}
+
+pub fn createTuple(vm: *VM, len: usize) *ObjTuple {
+  var tuple = @call(.always_inline, createObject, .{vm, .ObjTup, ObjTuple});
+  tuple.items = @ptrCast([*]Value, vm.mem.allocBuf(Value, len, vm));
+  tuple.len = len;
+  return tuple;
 }
 
 pub inline fn createStringV(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: bool) Value {

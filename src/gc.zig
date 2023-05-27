@@ -57,6 +57,12 @@ pub fn freeObject(self: *Self, obj: *Obj, vm: *VM) void {
       vm.mem.freeBuf(value.Value, vm, list.items[0..list.capacity]);
       vm.mem.free(T, vm, list);
     },
+    .ObjTup => {
+      const T = value.ObjTuple;
+      var tuple = @ptrCast(*T, obj);
+      vm.mem.freeBuf(value.Value, vm, tuple.items[0..tuple.len]);
+      vm.mem.free(T, vm, tuple);
+    },
     .ObjValMap => {
       const T = value.ObjMap;
       var map = @ptrCast(*T, obj);

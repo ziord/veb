@@ -137,7 +137,8 @@ test "lists" {
     "[1]",
     "[]",
     "[1, 'fox', 3, 'cat', [1, 'fox', 3, 'cat']]",
-    "[1, 2, {'a': 'set'}]"
+    "[1, 2, {'a': 'set'}]",
+    "[1, 2, {'a': 'set'},]"
   };
   for (srcs) |src| {
     _ = try doTest(src);
@@ -150,6 +151,21 @@ test "maps" {
     "{'abc' as bool | str: 123, true: 0xff, 'obs': 0b101}",
     "{}",
     "{24: [1, 2, 3]}",
+    "{24: [1, 2, 3],}",
+  };
+  for (srcs) |src| {
+    _ = try doTest(src);
+  }
+}
+
+test "tuples" {
+  const srcs = [_][]const u8{
+    "(1,)",
+    "({'abc' as bool | str: 123}, {true: 0xff}, {'obs': 0b101})",
+    "()",
+    "([1, 2, 3], [5, 5, 5])",
+    "('abc',) as tuple{'abc'}",
+    "('x', 'y',)"
   };
   for (srcs) |src| {
     _ = try doTest(src);
@@ -238,6 +254,13 @@ test "types" {
   \\ q == z # okay because types are still related (i.e. not disjoint).
   \\ let x: num | num = 5
   \\ x += x
+  \\ let j: tuple{true | false} = (true,)
+  \\ let q = (1, 2, 'abc', 0xff, 1, 'foo', 'bar')
+  \\ let s = [1, 2, 'ooo']
+  \\ s[0] = q[0]
+  \\ s[1] = q[1]
+  \\ s[2] = q[2]
+  \\ (s, q)
   ;
   _ = try doTest(src);
 }
@@ -910,6 +933,18 @@ test "narrowing-20" {
   \\   end
   \\   x
   \\ end
+  \\ ()
+  \\ let t: num = 0
+  \\ let v: map{num, num} | tuple{num | str} = (15 as str | num,)
+  \\ if v is tuple 
+  \\    let p = v[0]
+  \\    if p is not str
+  \\      t += p + 1
+  \\    elif p is str
+  \\      p
+  \\    end
+  \\ end
+  \\ t == 16
   ;
   _ = try doTest(src3);
 }

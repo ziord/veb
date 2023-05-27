@@ -26,6 +26,7 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"bool", .TkBool},
   .{"list", .TkList},
   .{"type", .TkType},
+  .{"tuple", .TkTuple},
 });
 
 pub const TokenType = enum (u8) {
@@ -81,6 +82,7 @@ pub const TokenType = enum (u8) {
   TkElif,           // elif
   TkTrue,           // true
   TkFalse,          // false
+  TkTuple,          // tuple
   TkWhile,          // while
   TkReturn,         // return
   TkNumber,         // <number>
@@ -189,6 +191,7 @@ pub const TokenType = enum (u8) {
       .TkElif => "elif",
       .TkTrue => "true",
       .TkFalse => "false",
+      .TkTuple => "tuple",
       .TkWhile => "while",
       .TkReturn => "return",
       .TkNumber => "<number>",

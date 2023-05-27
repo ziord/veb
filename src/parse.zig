@@ -109,6 +109,7 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkElif
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkTrue
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkFalse
+    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkTuple
     .{.bp = .None, .prefix = null, .infix = null},                      // TkWhile
     .{.bp = .None, .prefix = null, .infix = null},                      // TkReturn
     .{.bp = .None, .prefix = Self.number, .infix = null},               // TkNumber
@@ -208,6 +209,13 @@ pub const Parser = struct {
         // error, since we originally expected Newline
         self.consume(.TkNewline);
       }
+    }
+  }
+
+  inline fn assertMaxElements(self: *Self, len: usize, msg: []const u8) void {
+    if (len > MAX_LISTING_ELEMS) {
+      self.current_tok.msg = msg;
+      self.err(self.current_tok);
     }
   }
 
@@ -337,10 +345,38 @@ pub const Parser = struct {
   }
 
   fn grouping(self: *Self, assignable: bool) *Node {
-    _ = assignable;
     self.incNl();
     self.consume(.TkLBracket);
+    if (self.check(.TkRBracket)) {
+      return self.tupling(assignable, null);
+    }
     const node = self.parseExpr();
+    if (self.match(.TkComma)) {
+      return self.tupling(assignable, node);
+    }
+    self.decNl();
+    self.consume(.TkRBracket);
+    return node;
+  }
+
+  fn tupling(self: *Self, assignable: bool, first: ?*Node) *Node {
+    _ = assignable;
+    var node = self.newNode();
+    node.* = .{.AstTuple = ast.ListNode.init(self.allocator, self.current_tok)};
+    var tuple = &node.*.AstTuple.elems;
+    if (first) |elem| {
+      util.append(*Node, tuple, elem);
+    }
+    while (!self.check(.TkEof) and !self.check(.TkRBracket)) {
+      util.append(*Node, tuple, self.parseExpr());
+      if (!self.check(.TkRBracket)) {
+        self.consume(.TkComma);
+      }
+      self.assertMaxElements(
+        tuple.items.len,
+        "Maximum number of tuple elements exceeded"
+      );
+    }
     self.decNl();
     self.consume(.TkRBracket);
     return node;
@@ -356,11 +392,14 @@ pub const Parser = struct {
     while (!self.check(.TkEof) and !self.check(.TkRSqrBracket)) {
       if (list.items.len > 0) {
         self.consume(.TkComma);
+        if (self.check(.TkRSqrBracket)) {
+          break;
+        }
       }
-      if (list.items.len > MAX_LISTING_ELEMS) {
-        self.current_tok.msg = "Maximum number of list elements exceeded";
-        self.err(self.current_tok);
-      }
+      self.assertMaxElements(
+        list.items.len,
+        "Maximum number of list elements exceeded"
+      );
       util.append(*Node, list, self.parseExpr());
     }
     self.decNl();
@@ -379,7 +418,14 @@ pub const Parser = struct {
     while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
       if (pairs.items.len > 0) {
         self.consume(.TkComma);
+        if (self.check(.TkRCurly)) {
+          break;
+        }
       }
+      self.assertMaxElements(
+        pairs.items.len,
+        "Maximum number of map elements exceeded"
+      );
       if (pairs.items.len > max_items) {
         self.current_tok.msg = "Maximum number of map items exceeded";
         self.err(self.current_tok);
@@ -484,7 +530,12 @@ pub const Parser = struct {
       if (conc.tkind == .TyClass) {
         var tok = conc.variable.?.tokens.getLast();
         // list or map
-        var exp: usize = if (tok.ty == .TkList) 1 else if (tok.ty == .TkMap) 2 else return;
+        var exp: usize = (
+          if (tok.ty == .TkList) 1 
+          else if (tok.ty == .TkMap) 2  
+          else if (tok.ty == .TkTuple) 1 
+          else return
+        );
         if (typ.tparams.items.len != exp) {
           tok.msg = "Generic type instantiated with wrong number of paramters";
           self.err(tok);
@@ -565,7 +616,7 @@ pub const Parser = struct {
   }
 
   fn builtinType(self: *Self) Type {
-    // handle builtin list/map type
+    // handle builtin list/map/tuple type
     var debug = self.current_tok;
     self.advance();
     var tvar = Variable.init(self.allocator);
@@ -590,7 +641,7 @@ pub const Parser = struct {
   fn builtinOrRefType(self: *Self) Type {
     if (self.check(.TkIdent)) {
       return self.refType();
-    } else if (self.check(.TkList) or self.check(.TkMap)) {
+    } else if (self.check(.TkList) or self.check(.TkMap) or self.check(.TkTuple)) {
       return self.builtinType();
     }
     var tkind: TypeKind = switch (self.current_tok.ty) {

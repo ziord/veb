@@ -449,7 +449,11 @@ pub const Compiler = struct {
       var typ = node.right.getType().?;
       var tag = tb: {
         if (typ.isGeneric()) {
-          break :tb if (typ.isListTy()) @enumToInt(TypeKind.TyClass) else  @enumToInt(TypeKind.TyClass) + 1;
+          break :tb (
+            if (typ.isListTy()) @enumToInt(TypeKind.TyClass)
+            else if (typ.isMapTy()) @enumToInt(TypeKind.TyClass) + 1
+            else  @enumToInt(TypeKind.TyClass) + 2
+          );
         } else {
           break :tb @enumToInt(typ.concrete().tkind);
         }
@@ -466,9 +470,9 @@ pub const Compiler = struct {
     return dst;
   }
 
-  fn cList(self: *Self, node: *ast.ListNode, dst: u32) u32 {
+  inline fn cCollection(self: *Self, node: *ast.ListNode, dst: u32, new: OpCode, set: OpCode) u32 {
     const size = @intCast(u32, node.elems.items.len);
-    self.code.write2ArgsInst(.Nlst, dst, size, node.line(), self.vm);
+    self.code.write2ArgsInst(new, dst, size, node.line(), self.vm);
     var idx: u32 = undefined;
     for (node.elems.items, 0..) |elem, i| {
       var reg = self.getReg();
@@ -481,10 +485,18 @@ pub const Compiler = struct {
         _ = self.cConst(idx, val, node.line());
         self.vreg.releaseReg(idx);
       }
-      self.code.write3ArgsInst(.Slst, dst, idx, rk_val, node.line(), self.vm);
+      self.code.write3ArgsInst(set, dst, idx, rk_val, node.line(), self.vm);
       self.vreg.releaseReg(reg);
     }
     return dst;
+  }
+
+  fn cList(self: *Self, node: *ast.ListNode, dst: u32) u32 {
+    return self.cCollection(node, dst, .Nlst, .Slst);
+  }
+
+  fn cTuple(self: *Self, node: *ast.ListNode, dst: u32) u32 {
+    return self.cCollection(node, dst, .Ntup, .Stup);
   }
 
   fn cMap(self: *Self, node: *ast.MapNode, dst: u32) u32 {
@@ -633,12 +645,13 @@ pub const Compiler = struct {
   fn cSubscript(self: *Self, node: *ast.SubscriptNode, dst: u32) u32 {
     if (node.expr.getType()) |typ| {
       self.optimizeConstRK();
-      if (typ.isListTy()) {
+      if (typ.isListTy() or typ.isTupleTy()) {
         // list index
         var rk_val = self.c(node.expr, dst);
         var reg = self.getReg();
         var rk_idx = self.c(node.index, reg);
-        self.code.write3ArgsInst(.Glst, dst, rk_idx, rk_val, node.line(), self.vm);
+        var op: OpCode = if (typ.isListTy()) .Glst else .Gtup;
+        self.code.write3ArgsInst(op, dst, rk_idx, rk_val, node.line(), self.vm);
         self.vreg.releaseReg(reg);
       } else {
         // map access
@@ -772,6 +785,7 @@ pub const Compiler = struct {
       .AstUnary => |*nd| self.cUnary(nd, reg),
       .AstBinary => |*nd| self.cBinary(nd, reg),
       .AstList => |*nd| self.cList(nd, reg),
+      .AstTuple => |*nd| self.cTuple(nd, reg),
       .AstMap => |*nd| self.cMap(nd, reg),
       .AstExprStmt => |*nd| self.cExprStmt(nd, reg),
       .AstVar => |*nd| self.cVar(nd, reg),

@@ -741,9 +741,9 @@ pub const TypeChecker = struct {
     return try self.inferLiteral(node, UnitTypes.bol);
   }
 
-  fn inferList(self: *Self, node: *ast.ListNode) !*Type {
+  inline fn inferCollection(self: *Self, node: *ast.ListNode, name: []const u8) !*Type {
     // create a new type
-    var base = Type.newConcrete(.TyClass, "list", node.token).box(self.allocator);
+    var base = Type.newConcrete(.TyClass, name, node.token).box(self.allocator);
     node.typ = Type.newGeneric(self.allocator, base, node.token).box(self.allocator);
     if (node.elems.items.len == 0) {
       return node.typ.?;
@@ -758,6 +758,14 @@ pub const TypeChecker = struct {
     var gen = node.typ.?.generic();
     gen.append(Type.compressTypes(&typeset, node.token, null));
     return node.typ.?;
+  }
+
+  fn inferList(self: *Self, node: *ast.ListNode) !*Type {
+    return self.inferCollection(node, "list");
+  }
+
+  fn inferTuple(self: *Self, node: *ast.ListNode) !*Type {
+    return self.inferCollection(node, "tuple");
   }
 
   fn inferMap(self: *Self, node: *ast.MapNode) !*Type {
@@ -898,6 +906,16 @@ pub const TypeChecker = struct {
     switch (node.left.*) {
       // need to always update, because lookup copies.
       .AstVar => |ident| self.insertType(ident.token.value, typ),
+      .AstSubscript => |*sub| {
+        if (sub.expr.getType()) |ty| {
+          if (ty.isTupleTy()) {
+            return self.error_(true, node.op.token,
+              "Cannot modify immutable type '{s}'",
+              .{self.getTypename(ty)}
+            );
+          }
+        }
+      },
       else => {}
     }
     return typ;
@@ -1099,7 +1117,7 @@ pub const TypeChecker = struct {
   }
 
   fn checkSubscript(self: *Self, node: *ast.SubscriptNode, expr_ty: *Type, index_ty: *Type) !void {
-    if (!expr_ty.isListTy() and !expr_ty.isMapTy()) {
+    if (!expr_ty.isListTy() and !expr_ty.isMapTy() and !expr_ty.isTupleTy()) {
       return self.error_(
         true, node.token,
         "Type '{s}' is not indexable", .{self.getTypename(expr_ty)}
@@ -1111,7 +1129,7 @@ pub const TypeChecker = struct {
         "Cannot index empty or non-specialized '{s}' type", .{self.getTypename(expr_ty)}
       );
     }
-    if (expr_ty.isListTy()) {
+    if (expr_ty.isListTy() or expr_ty.isTupleTy()) {
       if (!index_ty.isNumTy()) {
         return self.error_(
           true, node.token,
@@ -1166,6 +1184,7 @@ pub const TypeChecker = struct {
       .AstUnary => |*nd| try self.inferUnary(nd),
       .AstBinary => |*nd| try self.inferBinary(nd),
       .AstList => |*nd| try self.inferList(nd),
+      .AstTuple => |*nd| try self.inferTuple(nd),
       .AstMap => |*nd| try self.inferMap(nd),
       .AstExprStmt => |*nd| try self.inferExprStmt(nd),
       .AstVar => |*nd| try self.inferVar(nd, true),

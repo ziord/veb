@@ -29,6 +29,7 @@ pub const VM = struct {
   const TypeTag2CheckFunc = [_]*const fn(Value) bool {
     vl.isBoolNoInline, vl.isNumberNoInline, vl.isStringNoInline,
     vl.isNilNoInline, vl.isListNoInline, vl.isMapNoInline,
+    vl.isTupleNoInline,
   };
 
   pub fn init(allocator: *NovaAllocator, code: *Code) Self {
@@ -433,6 +434,41 @@ pub const VM = struct {
             return self.runtimeError("IndexError: list index out of range: {}", .{idx});
           }
           self.stack[rx] = list.items[@intCast(usize, idx)];
+          continue;
+        },
+        .Ntup => {
+          // ntup rx, count
+          var rx: u32 = undefined;
+          var count: u32 = undefined;
+          self.read2Args(inst, &rx, &count);
+          self.stack[rx] = vl.objVal(vl.createTuple(self, @as(usize, count)));
+          continue;
+        },
+        .Stup => {
+          // stup rx, rk(idx), rk(val)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          var tuple = vl.asTuple(self.stack[rx]);
+          var idx = vl.asIntNumber(i64, self.RK(rk1));
+          // assumed safe
+          tuple.items[@intCast(usize, idx)] = self.RK(rk2);
+          continue;
+        },
+        .Gtup => {
+          // gtup rx, rk(idx), rk(list)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          var tuple = vl.asTuple(self.RK(rk2));
+          var idx = vl.asIntNumber(i64, self.RK(rk1));
+          if (idx < 0) idx += @intCast(i64, tuple.len);
+          if (idx >= tuple.len) {
+            return self.runtimeError("IndexError: tuple index out of range: {}", .{idx});
+          }
+          self.stack[rx] = tuple.items[@intCast(usize, idx)];
           continue;
         },
         .Nmap => {

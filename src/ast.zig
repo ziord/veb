@@ -34,6 +34,8 @@ pub const AstType = enum {
   AstCondition,
   AstElif,
   AstSimpleIf,
+  AstWhile,
+  AstControl,
   AstProgram,
 };
 
@@ -189,6 +191,11 @@ pub const BlockNode = struct {
     block.* = .{.AstBlock = BlockNode.init(alloc, line)};
     return block;
   }
+
+  pub fn getLast(self: *BlockNode) ?*AstNode {
+    if (self.nodes.items.len > 0) return self.nodes.getLast();
+    return null;
+  }
 };
 
 pub const TypeNode = struct {
@@ -303,6 +310,34 @@ pub const SimpleIfNode = struct {
   }
 };
 
+pub const WhileNode = struct {
+  cond: *AstNode,
+  then: *AstNode,
+  token: Token,
+
+  pub fn init(cond: *AstNode, then: *AstNode, token: Token) @This() {
+    return @This() {.cond = cond, .then = then, .token = token};
+  }
+};
+
+pub const ControlNode = struct {
+  token: Token,
+  /// the slot in which this node is compiled to an instruction
+  patch_index: usize = 0,
+
+  pub fn init(token: Token) @This() {
+    return @This() {.token = token};
+  }
+
+  pub fn isBreak(self: ControlNode) bool {
+    return self.token.ty == .TkBreak;
+  }
+
+  pub fn isContinue(self: ControlNode) bool {
+    return self.token.ty == .TkContinue;
+  }
+};
+
 // TODO: refactor to BlockNode if no other useful info needs to be added.
 pub const ProgramNode = struct {
   decls: AstNodeList,
@@ -338,6 +373,8 @@ pub const AstNode = union(AstType) {
   AstElif: ElifNode,
   AstSimpleIf: SimpleIfNode,
   AstCondition: ConditionNode,
+  AstWhile: WhileNode,
+  AstControl: ControlNode,
   AstProgram: ProgramNode,
 
   pub inline fn isComptimeConst(self: *@This()) bool {
@@ -410,6 +447,20 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn isWhile(self: *@This()) bool {
+    return switch (self.*) {
+      .AstWhile => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isControl(self: *@This()) bool {
+    return switch (self.*) {
+      .AstControl => true,
+      else => false,
+    };
+  }
+
   pub fn getNarrowed(self: *@This()) ?VarNode {
     return switch (self.*) {
       .AstVar => |vr| vr,
@@ -436,7 +487,8 @@ pub const AstNode = union(AstType) {
       .AstSubscript => |sub| if (sub.narrowed) |nrw| nrw.typ else sub.typ,
       .AstDeref => |der| if (der.narrowed) |nrw| nrw.typ else der.typ,
       .AstCondition => |cnd| cnd.cond.getType(),
-      .AstBlock, .AstIf, .AstElif => null,
+      .AstBlock, .AstIf, .AstElif,
+      .AstWhile, .AstControl => null,
       else => unreachable,
     };
   }

@@ -302,7 +302,7 @@ pub const TypeChecker = struct {
   /// check if this flow node is unresolved
   inline fn isFlowNodeUnresolved(self: *Self, node: *FlowNode) bool {
     _ = self;
-    return !node.resolved and !node.node.isCondition();
+    return node.res.isUnresolved();
   }
 
   //***********************************************************//
@@ -616,7 +616,7 @@ pub const TypeChecker = struct {
     std.debug.assert(node.tag == .CfgEntry);
     self.ctx.enterScope();
     // automatically resolved on entry
-    node.resolved = true;
+    node.res = .Resolved;
     // `entry` node, so we don't care about the `node` & `prev` properties
     for (node.next.items) |item| {
       try self.flowInfer(item, true);
@@ -631,7 +631,7 @@ pub const TypeChecker = struct {
         return;
       }
     }
-    node.resolved = true;
+    node.res = .Resolved;
     self.ctx.leaveScope();
     std.debug.assert(node.next.items.len == 0);
   }
@@ -646,7 +646,7 @@ pub const TypeChecker = struct {
       }
     }
     _ = try self.infer(node.node);
-    node.resolved = true;
+    node.res = .Resolved;
     if (!inferNext) return;
     for (node.next.items) |item| {
       try self.flowInfer(item, inferNext);
@@ -659,6 +659,7 @@ pub const TypeChecker = struct {
         return;
       }
     }
+    node.res = .Processing;
     // TODO: is there a need to explicitly merge types from incoming edges?
     self.ctx.varScope.pushScope();
     // This is a branch point and a meet point. 
@@ -669,7 +670,7 @@ pub const TypeChecker = struct {
     env.global.pushScope();
     self.narrow(node.node.AstCondition.cond, &env, true) catch return error.TypeCheckError;
     // TODO: rework token extraction for better error reporting
-    try self.checkIfCond(node.node.getType().?, node.node.AstCondition.token);
+    try self.checkCondition(node.node.getType().?, node.node.AstCondition.token);
     // get all nodes on the true edges & flowInfer with env
     var out_nodes = node.getOutgoingNodes(.ETrue, self.allocator);
     self.copyEnv(&env);
@@ -692,7 +693,7 @@ pub const TypeChecker = struct {
     for (out_nodes.items) |nd| {
       try self.flowInfer(nd, false);
     }
-    node.resolved = true;
+    node.res = .Resolved;
     self.ctx.varScope.popScope();
     if (!inferNext) return;
     // infer next nodes
@@ -702,12 +703,13 @@ pub const TypeChecker = struct {
   }
 
   fn flowInfer(self: *Self, node: *FlowNode, inferNext: bool) TypeCheckError!void {
-    if (node.resolved) return;
+    if (node.res.isResolved()) return;
     switch (node.node.*) {
       .AstExprStmt => try self.flowInferNode(node, inferNext),
       .AstVarDecl => try self.flowInferNode(node, inferNext),
       .AstCondition => try self.flowInferCondition(node, inferNext),
       .AstEmpty => try self.flowInferExit(node, inferNext),
+      .AstControl => {},
       else => unreachable,
     }
   }
@@ -1012,6 +1014,12 @@ pub const TypeChecker = struct {
     return undefined;
   }
 
+  fn inferWhile(self: *Self, node: *ast.WhileNode) !*Type {
+    var ty = try self.infer(node.cond);
+    try self.checkCondition(ty, node.token);
+    return try self.infer(node.then);
+  }
+
   fn inferProgram(self: *Self, node: *ast.ProgramNode) !*Type {
     self.ctx.enterScope();
     for (node.decls.items) |item| {
@@ -1166,7 +1174,7 @@ pub const TypeChecker = struct {
     node.typ = expr_ty.subtype(self.allocator);
   }
 
-  fn checkIfCond(self: *Self, cond_ty: *Type, debug: Token) !void {
+  fn checkCondition(self: *Self, cond_ty: *Type, debug: Token) !void {
     if (!cond_ty.isBoolTy()) {
       return self.error_(
         true, debug,
@@ -1197,9 +1205,10 @@ pub const TypeChecker = struct {
       .AstCast => |*nd| try self.inferCast(nd),
       .AstSubscript => |*nd| try self.inferSubscript(nd),
       .AstDeref => |*nd| try self.inferDeref(nd),
+      .AstWhile => |*nd| try self.inferWhile(nd),
       .AstProgram => |*nd| try self.inferProgram(nd),
       .AstIf, .AstElif, .AstSimpleIf,
-      .AstCondition, .AstEmpty => return undefined,
+      .AstCondition, .AstEmpty, .AstControl => return undefined,
     };
   }
 

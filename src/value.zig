@@ -140,6 +140,10 @@ pub const Code = struct {
     self.words.items[index] = @intCast(u32, new);
   }
 
+  pub inline fn getInstLen(self: *Self) usize {
+    return self.words.size();
+  }
+
   pub fn storeConst(self: *Self, value: Value, vm: *VM) u32 {
     const idx = self.writeValue(value, vm);
     return idx + MAX_REGISTERS;

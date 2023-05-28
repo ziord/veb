@@ -378,8 +378,9 @@ pub const VM = struct {
           var direction: u32 = undefined;
           var bx: u32 = undefined;
           self.read2Args(inst, &direction, &bx);
-          // 0 -> jmp fwd, 1 -> jmp bck
-          self.ip = if (direction == 0) self.ip + bx else self.ip - bx;
+          // 2 -> jmp fwd, 0 -> jmp bck
+          @setRuntimeSafety(false);
+          self.ip = @intCast(usize, (@intCast(i64, self.ip) + (@intCast(i64, direction) - 1) * @intCast(i64, bx)));
           continue;
         },
         .Not => {

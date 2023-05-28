@@ -95,9 +95,9 @@ pub const Disassembler = struct {
       .Jmp => {
         // jmp is a 1-arg inst using a 2-arg format.
         var rx = Code.readRX(word);
-        std.debug.assert(rx == 0 or rx == 1);
+        std.debug.assert(rx == 0 or rx == 2);
         const n = Code.readBX(word);
-        std.debug.print("jmp {}\n", .{n});
+        std.debug.print("jmp {s}{}\n", .{if (rx == 0) "-" else "", n});
       },
       .Load => {
         __2ArgsInst("load", word);

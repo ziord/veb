@@ -28,6 +28,7 @@ pub const Parser = struct {
   allow_nl: usize = 0,
   using_is: u32 = 0,
   in_cast: u32 = 0,
+  loops: u32 = 0,
 
   const Self = @This();
 
@@ -90,7 +91,7 @@ pub const Parser = struct {
     .{.bp = .Shift, .prefix = null, .infix = Self.binary},              // Tk2Rthan
     .{.bp = .Access, .prefix = null, .infix = Self.casting},            // TkAs
     .{.bp = .None, .prefix = null, .infix = null},                      // TkDo
-    .{.bp = .Equality, .prefix = null, .infix = Self.binIs},           // TkIs
+    .{.bp = .Equality, .prefix = null, .infix = Self.binIs},            // TkIs
     .{.bp = .None, .prefix = null, .infix = null},                      // TkIf
     .{.bp = .Or, .prefix = null, .infix = Self.binary},                 // TkOr
     .{.bp = .None, .prefix = null, .infix = null},                      // TkFor
@@ -104,14 +105,17 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = Self.nullable, .infix = null},             // TkNil
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkBool
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkList
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkThen
     .{.bp = .None, .prefix = null, .infix = null},                      // TkType
     .{.bp = .None, .prefix = null, .infix = null},                      // TkElse
     .{.bp = .None, .prefix = null, .infix = null},                      // TkElif
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkTrue
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkBreak
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkFalse
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkTuple
     .{.bp = .None, .prefix = null, .infix = null},                      // TkWhile
     .{.bp = .None, .prefix = null, .infix = null},                      // TkReturn
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkContinue
     .{.bp = .None, .prefix = Self.number, .infix = null},               // TkNumber
     .{.bp = .None, .prefix = Self.string, .infix = null},               // TkString
     .{.bp = .None, .prefix = Self.variable, .infix = null},             // TkIdent
@@ -195,6 +199,18 @@ pub const Parser = struct {
 
   inline fn decIs(self: *Self) void {
     self.using_is -= 1;
+  }
+
+  inline fn incLoop(self: *Self) void {
+    self.loops += 1;
+  }
+
+  inline fn decLoop(self: *Self) void {
+    self.loops -= 1;
+  }
+
+  inline fn inLoop(self: *Self) bool {
+    return self.loops > 0;
   }
 
   inline fn parsingIs(self: *Self) bool {
@@ -801,8 +817,7 @@ pub const Parser = struct {
 
   fn typeAlias(self: *Self) *Node {
     // TypeAlias   := "type" AbstractType "=" ConcreteType
-    var type_tok = self.current_tok;
-    self.consume(.TkType);
+    var type_tok = self.previous_tok;
     var alias_typ = self.abstractType();
     var alias = self.newNode();
     alias.* = .{.AstNType = ast.TypeNode.init(alias_typ, self.current_tok)};
@@ -831,9 +846,9 @@ pub const Parser = struct {
     return self._parse(.Assignment);
   }
 
-  fn blockStmt(self: *Self) *Node {
+  fn blockStmt(self: *Self, skip_do: bool) *Node {
     const line = self.current_tok.line;
-    self.consume(.TkDo);
+    if (!skip_do) self.consume(.TkDo);
     self.consume(.TkNewline);
     var node = self.newNode();
     node.* = .{.AstBlock = ast.BlockNode.init(self.allocator, line)};
@@ -848,7 +863,6 @@ pub const Parser = struct {
 
   fn varDecl(self: *Self) *Node {
     // let var (: type)? = expr
-    self.consume(.TkLet);
     self.consume(.TkIdent);
     var name = self.previous_tok;
     var ident = self.newNode();
@@ -863,9 +877,10 @@ pub const Parser = struct {
   }
 
   fn ifStmt(self: *Self) *Node {
-    // if expr nl body (elif expr nl body)* else nl body end
+    // if expr then? nl body (elif expr then? nl body)* else nl body end
     var token = self.current_tok;
     const cond = self.parseExpr();
+    _ = self.match(.TkThen);
     self.consume(.TkNewline);
     var then = ast.BlockNode.init(self.allocator, self.previous_tok.line);
     while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
@@ -875,6 +890,7 @@ pub const Parser = struct {
     while (self.match(.TkElif)) {
       var elif_token = self.previous_tok;
       var elif_cond = self.parseExpr();
+      _ = self.match(.TkThen);
       self.consume(.TkNewline);
       var elif_then = ast.BlockNode.init(self.allocator, self.previous_tok.line);
       while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
@@ -904,6 +920,32 @@ pub const Parser = struct {
     return node;
   }
 
+  fn controlStmt(self: *Self) *Node {
+    if (!self.inLoop()) {
+      self.current_tok.msg = "control statement used outside loop";
+      self.err(self.current_tok);
+    }
+    if (!self.match(.TkBreak)) {
+      self.consume(.TkContinue);
+    }
+    var node = self.newNode();
+    node.* = .{.AstControl = ast.ControlNode.init(self.previous_tok)};
+    self.consumeNlOrEof();
+    return node;
+  }
+
+  fn whileStmt(self: *Self) *Node {
+    // while cond do? ... end
+    self.incLoop();
+    var token = self.current_tok;
+    var cond = self.parseExpr();
+    var then = self.blockStmt(!self.check(.TkDo));
+    self.decLoop();
+    var node = self.newNode();
+    node.* = .{.AstWhile = ast.WhileNode.init(cond, then, token)};
+    return node;
+  }
+
   fn exprStmt(self: *Self) *Node {
     const line = self.current_tok.line;
     const expr = self.parseExpr();
@@ -918,16 +960,20 @@ pub const Parser = struct {
   }
 
   fn statement(self: *Self) *Node {
-    if (self.check(.TkLet)) {
+    if (self.match(.TkLet)) {
       return self.varDecl();
-    } else if (self.check(.TkType)) {
+    } else if (self.match(.TkType)) {
       return self.typeAlias();
     } else if (self.check(.TkDo)) {
-      return self.blockStmt();
+      return self.blockStmt(false);
     } else if (self.match(.TkNewline)) {
       return self.emptyStmt();
     } else if (self.match(.TkIf)) {
       return self.ifStmt();
+    } else if (self.match(.TkWhile)) {
+      return self.whileStmt();
+    } else if (self.check(.TkBreak) or self.check(.TkContinue)) {
+      return self.controlStmt();
     }
     return self.exprStmt();
   }

@@ -100,6 +100,7 @@ pub const Compiler = struct {
   gsyms_count: u32 = 0,
   vm: *VM,
   rk_bx: RkBxPair = RkBxPair{},
+  loop_ctrls: std.ArrayList(*ast.ControlNode),
   
   const Self = @This();
 
@@ -112,18 +113,19 @@ pub const Compiler = struct {
   };
 
   pub fn init(node: *Node, filename: []const u8, vm: *VM, code: *Code, allocator: *CnAllocator) Self {
-    var self = Self {
+    var al = allocator.getArenaAllocator();
+    return Self {
       .code = code,
       .node = node, 
       .filename = filename,
       .allocator = allocator,
       .gsyms = undefined,
       .locals = undefined,
-      .globals = std.ArrayList(GlobalVar).init(allocator.getArenaAllocator()),
+      .globals = std.ArrayList(GlobalVar).init(al),
       .vreg = VRegister.init(),
       .vm = vm,
+      .loop_ctrls = std.ArrayList(*ast.ControlNode).init(al),
     };
-    return self;
   }
 
   fn compileError(self: *Self, comptime fmt: []const u8, msg: anytype) noreturn {
@@ -718,7 +720,7 @@ pub const Compiler = struct {
         should_patch_if_then_to_end = false;
         break :blk @as(usize, 0);
       }
-      break :blk self.code.write2ArgsJmp(.Jmp, 0, self.lastLine(), self.vm);
+      break :blk self.code.write2ArgsJmp(.Jmp, 2, self.lastLine(), self.vm);
     };
     var elifs_then_to_end: std.ArrayList(usize) = undefined;
     // elifs-
@@ -759,6 +761,53 @@ pub const Compiler = struct {
     return dst;
   }
 
+  fn patchLoopJmps(self: *Self, loop_cond: usize) void {
+    for (self.loop_ctrls.items) |ctrl| {
+      if (ctrl.isBreak()) {
+        // this is a forward jmp, so patch the jmp offset
+        self.code.patch2ArgsJmp(ctrl.patch_index);
+      } else {
+        // obtain offset to jmp forward to, then rewrite the jmp instruction
+        var offset = @intCast(u32, ctrl.patch_index - loop_cond + 1);
+        _ = self.code.write2ArgsInst(.Jmp, 0, offset, ctrl.token.line, self.vm);
+        self.code.words.items[ctrl.patch_index] = self.code.words.pop();
+      }
+    }
+    // clear for reuse
+    self.loop_ctrls.clearRetainingCapacity();
+  }
+
+  fn cWhile(self: *Self, node: *ast.WhileNode, dst: u32) u32 {
+    var reg = self.getReg();
+    // cond-
+    var to_cond = self.code.getInstLen();
+    var rx = self.c(node.cond, reg);
+    // jmp to exit
+    var cond_to_exit = self.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
+    _ = self.cBlock(&node.then.AstBlock, reg);
+    // loop to cond
+    // +1 to include the jmp inst itself, which we already processed
+    var offset = @intCast(u32, self.code.getInstLen() - to_cond + 1);
+    _ = self.code.write2ArgsInst(.Jmp, 0, offset, self.lastLine(), self.vm);
+    self.code.patch2ArgsJmp(cond_to_exit);
+    self.vreg.releaseReg(reg);
+    // patch all loop controls
+    self.patchLoopJmps(to_cond);
+    return dst;
+  }
+
+  fn cControl(self: *Self, node: *ast.ControlNode, dst: u32) u32 {
+    if (node.isBreak()) {
+      // jmp fwd
+      node.patch_index = self.code.write2ArgsJmp(.Jmp, 2, node.token.line, self.vm);
+    } else {
+      // jmp bck
+      node.patch_index = self.code.write2ArgsJmp(.Jmp, 0, node.token.line, self.vm);
+    }
+    util.append(*ast.ControlNode, &self.loop_ctrls, node);
+    return dst;
+  }
+
   /// returns jmp_to_next for patching the jmp to the next elif/else/,
   /// and jmp_to_end for patching the jmp to the end of the entire if-stmt
   fn cElif(self: *Self, node: *ast.ElifNode, reg: u32) JmpPatch {
@@ -766,7 +815,7 @@ pub const Compiler = struct {
     // jmp to else, if any
     var cond_jmp = self.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
     _ = self.cBlock(&node.then.AstBlock, reg);
-    var then_jmp = self.code.write2ArgsJmp(.Jmp, 0, self.lastLine(), self.vm);
+    var then_jmp = self.code.write2ArgsJmp(.Jmp, 2, self.lastLine(), self.vm);
     return .{.jmp_to_next = cond_jmp, .jmp_to_end = then_jmp};
   }
 
@@ -799,6 +848,8 @@ pub const Compiler = struct {
       .AstSubscript => |*nd| self.cSubscript(nd, reg),
       .AstDeref => |*nd| self.cDeref(nd, reg),
       .AstIf => |*nd| self.cIf(nd, reg),
+      .AstWhile => |*nd| self.cWhile(nd, reg),
+      .AstControl => |*nd| self.cControl(nd, reg),
       .AstProgram => |*nd| self.cProgram(nd, reg),
       .AstSimpleIf, .AstElif, .AstCondition, .AstEmpty => unreachable,
     };

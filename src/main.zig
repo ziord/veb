@@ -481,6 +481,22 @@ test "if statement" {
   \\   p -= -1111
   \\ end
   \\ p == 0x2d
+  \\ # if with optional then
+  \\ if 2 > 1 then
+  \\  'hooray!'
+  \\ elif 4 > 5 then
+  \\  'oh no!'
+  \\ end
+  \\ if 2 > 1
+  \\  'hooray!'
+  \\ elif 4 > 5 then
+  \\  'oh no!'
+  \\ end
+  \\ if 2 > 1 then
+  \\  'hooray!'
+  \\ elif 4 > 5
+  \\  'oh no!'
+  \\ end
   ;
   _ = try doTest(src2);
 
@@ -987,4 +1003,75 @@ test "constant types" {
   \\ z['name']
   ;
   _ = try doTest(src);
+}
+
+test "while loop" {
+  var src =
+  \\ do
+  \\    let x: num | str = 5
+  \\    while x is num and x < 25 do
+  \\     let j = 0
+  \\     while j < x
+  \\       j += 1
+  \\     end
+  \\     x += j
+  \\     continue
+  \\     x += 5
+  \\    end
+  \\    x
+  \\ end
+  \\ let x: num | str = 5
+  \\ while x is num and x < 25 do
+  \\  let j = 0
+  \\  while j < x
+  \\    j += 1
+  \\    continue
+  \\  end
+  \\  x += j
+  \\  break
+  \\  x += 5
+  \\ end
+  \\ x
+  ;
+  _ = try doTest(src);
+  var src2 =
+  \\ let x: num | str = 5
+  \\ while x is num and x < 25 do
+  \\  let j = 0
+  \\  while j < x
+  \\    j += 1
+  \\    continue
+  \\  end
+  \\  x += j
+  \\  break
+  \\  x += 5
+  \\ end
+  \\ x == 10
+  ;
+  _ = try doTest(src2);
+  var src3 =
+  \\ let x: num | str = 5
+  \\ while x is num and x < 25 do
+  \\  if x % 5 == 0 then
+  \\    break
+  \\  end
+  \\  x += 5
+  \\ end
+  \\ x
+  \\ let x: num | str = 5
+  \\ while x as num < 25 do
+  \\  let p = x as num
+  \\  if p % 5 != 0 then
+  \\    break
+  \\  end
+  \\  x = p + 5
+  \\ end
+  \\ x
+  \\ let i = 0
+  \\ while i < 0xffff
+  \\  i += 1
+  \\ end
+  \\ i == 0o177777
+  ;
+  _ = try doTest(src3);
 }

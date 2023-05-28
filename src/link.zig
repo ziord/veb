@@ -609,6 +609,11 @@ pub const TypeLinker = struct {
     try self.linkBlock(&node.then.AstBlock);
   }
 
+  fn linkWhile(self: *Self, node: *ast.WhileNode) !void {
+    try self.link(node.cond);
+    try self.linkBlock(&node.then.AstBlock);
+  }
+
   fn linkProgram(self: *Self, node: *ast.ProgramNode) !void {
     self.ctx.enterScope();
     for (node.decls.items) |item| {
@@ -641,6 +646,8 @@ pub const TypeLinker = struct {
       .AstDeref => |*nd| try self.linkDeref(nd),
       .AstIf => |*nd| try self.linkIf(nd),
       .AstElif => |*nd| try self.linkElif(nd),
+      .AstWhile => |*nd| try self.linkWhile(nd),
+      .AstControl => {},
       .AstProgram => |*nd| try self.linkProgram(nd),
       .AstSimpleIf, .AstCondition, .AstEmpty => unreachable,
     }

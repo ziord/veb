@@ -2,11 +2,12 @@ const std = @import("std");
 const lex = @import("lex.zig");
 const types = @import("type.zig");
 const util = @import("util.zig");
+const ds = @import("ds.zig");
 const Type = types.Type;
 
 const OpType = lex.OpType;
 pub const Token = lex.Token;
-pub const AstNodeList = std.ArrayList(*AstNode);
+pub const AstNodeList = ds.ArrayList(*AstNode);
 
 // ast node types
 pub const AstType = enum {
@@ -125,7 +126,7 @@ pub const ListNode = struct {
 };
 
 pub const MapNode = struct {
-  pairs: std.ArrayList(Pair),
+  pairs: ds.ArrayList(Pair),
   token: Token,
   typ: ?*Type = null,
 
@@ -133,7 +134,7 @@ pub const MapNode = struct {
 
   pub fn init(allocator: std.mem.Allocator, token: Token) @This() {
     return @This() {
-      .pairs = std.ArrayList(Pair).init(allocator),
+      .pairs = ds.ArrayList(Pair).init(allocator),
       .token = token
     };
   }
@@ -193,7 +194,7 @@ pub const BlockNode = struct {
   }
 
   pub fn getLast(self: *BlockNode) ?*AstNode {
-    if (self.nodes.items.len > 0) return self.nodes.getLast();
+    if (self.nodes.len() > 0) return self.nodes.getLast();
     return null;
   }
 };

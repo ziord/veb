@@ -3,6 +3,7 @@ const value = @import("value.zig");
 const ast = @import("ast.zig");
 const parse = @import("parse.zig");
 const util = @import("util.zig");
+const ds = @import("ds.zig");
 const CnAllocator = @import("allocator.zig");
 const OpCode = @import("opcode.zig").OpCode;
 const VM = @import("vm.zig").VM;
@@ -92,7 +93,7 @@ pub const Compiler = struct {
   filename: []const u8,
   gsyms: [VM.MAX_GSYM_ITEMS]GSymVar,
   locals: [VM.MAX_LOCAL_ITEMS]LocalVar,
-  globals: std.ArrayList(GlobalVar),
+  globals: ds.ArrayList(GlobalVar),
   vreg: VRegister,
   allocator: *CnAllocator,
   scope: i32 = GLOBAL_SCOPE, // defaults to global scope
@@ -100,7 +101,7 @@ pub const Compiler = struct {
   gsyms_count: u32 = 0,
   vm: *VM,
   rk_bx: RkBxPair = RkBxPair{},
-  loop_ctrls: std.ArrayList(*ast.ControlNode),
+  loop_ctrls: ds.ArrayList(*ast.ControlNode),
   
   const Self = @This();
 
@@ -121,10 +122,10 @@ pub const Compiler = struct {
       .allocator = allocator,
       .gsyms = undefined,
       .locals = undefined,
-      .globals = std.ArrayList(GlobalVar).init(al),
+      .globals = ds.ArrayList(GlobalVar).init(al),
+      .loop_ctrls = ds.ArrayList(*ast.ControlNode).init(al),
       .vreg = VRegister.init(),
       .vm = vm,
-      .loop_ctrls = std.ArrayList(*ast.ControlNode).init(al),
     };
   }
 
@@ -221,9 +222,9 @@ pub const Compiler = struct {
     var gvar = GlobalVar {
       .name = node.token.value, 
       .mempos = self.storeVar(node),
-      .index = @intCast(u32, self.globals.items.len),
+      .index = @intCast(u32, self.globals.len()),
     };
-    util.append(GlobalVar, &self.globals, gvar);
+    self.globals.append(gvar);
     return gvar.mempos;
   }
 
@@ -256,11 +257,11 @@ pub const Compiler = struct {
   }
 
   fn findGlobalVar(self: *Self, node: *ast.VarNode) ?GlobalVar {
-    if (self.globals.items.len == 0) return null;
+    if (self.globals.len() == 0) return null;
     var gvar: GlobalVar = undefined;
-    var i: usize = self.globals.items.len;
+    var i: usize = self.globals.len();
     while (i > 0): (i -= 1) {
-      gvar = self.globals.items[i - 1];
+      gvar = self.globals.items()[i - 1];
       if (std.mem.eql(u8, gvar.name, node.token.value)) {
         return gvar;
       }
@@ -294,7 +295,7 @@ pub const Compiler = struct {
   fn preallocateGlobals(self: *Self, toplevels: *ast.AstNodeList) void {
     // TODO: update
     if (self.scope > GLOBAL_SCOPE) return;
-    for (toplevels.items) |decl| {
+    for (toplevels.items()) |decl| {
       switch (decl.*) {
         .AstVarDecl => |vd| {
           _ = self.addGSymVar(vd.ident);
@@ -312,7 +313,7 @@ pub const Compiler = struct {
         // so we can reach this GSym directly
         self.gsyms[info.pos].patched = true;
       } else {
-        self.globals.items[info.gvar.?.index].patched = true;
+        self.globals.items()[info.gvar.?.index].patched = true;
       }
       return info;
     } else {
@@ -328,7 +329,7 @@ pub const Compiler = struct {
         self.compileError(fmt, .{gsym.name});
       }
     }
-    for (self.globals.items) |glob| {
+    for (self.globals.items()) |glob| {
       if (!glob.patched) {
         self.compileError(fmt, .{glob.name});
       }
@@ -473,10 +474,10 @@ pub const Compiler = struct {
   }
 
   inline fn cCollection(self: *Self, node: *ast.ListNode, dst: u32, new: OpCode, set: OpCode) u32 {
-    const size = @intCast(u32, node.elems.items.len);
+    const size = @intCast(u32, node.elems.len());
     self.code.write2ArgsInst(new, dst, size, node.line(), self.vm);
     var idx: u32 = undefined;
-    for (node.elems.items, 0..) |elem, i| {
+    for (node.elems.items(), 0..) |elem, i| {
       var reg = self.getReg();
       var rk_val = self.c(elem, reg);
       var val = value.numberVal(@intToFloat(f64, i));
@@ -502,10 +503,10 @@ pub const Compiler = struct {
   }
 
   fn cMap(self: *Self, node: *ast.MapNode, dst: u32) u32 {
-    const size = @intCast(u32, node.pairs.items.len);
+    const size = @intCast(u32, node.pairs.len());
     // TODO: specialize map with k-v types
     self.code.write2ArgsInst(.Nmap, dst, size, node.line(), self.vm);
-    for (node.pairs.items) |pair| {
+    for (node.pairs.items()) |pair| {
       var reg1 = self.getReg();
       var reg2 = self.getReg();
       var rk_key = self.c(pair.key, reg1);
@@ -629,7 +630,7 @@ pub const Compiler = struct {
       if (info.isGSym) {
         self.gsyms[info.pos].initialized = false;
       } else {
-        self.globals.items[info.gvar.?.index].initialized = false;
+        self.globals.items()[info.gvar.?.index].initialized = false;
       }
       var dst = self.getReg();
       _ = self.cAssign(&bin, dst);
@@ -637,7 +638,7 @@ pub const Compiler = struct {
       if (info.isGSym) {
         self.gsyms[info.pos].initialized = true;
       } else {
-        self.globals.items[info.gvar.?.index].initialized = true;
+        self.globals.items()[info.gvar.?.index].initialized = true;
       }
       self.vreg.releaseReg(dst);
     }
@@ -678,7 +679,7 @@ pub const Compiler = struct {
 
   fn cBlock(self: *Self, node: *ast.BlockNode, reg: u32) u32 {
     self.scope += 1;
-    for (node.nodes.items) |nd| {
+    for (node.nodes.items()) |nd| {
       _ = self.c(nd, reg);
     }
     self.scope -= 1;
@@ -716,27 +717,27 @@ pub const Compiler = struct {
       // as a simple optimization, if we only have an if-end statement, i.e. no elif & else,
       // we don't need to jump after the last statement in the if-then block, control
       // would naturally fallthrough to outside the if-end statement.
-      if (node.elifs.items.len == 0 and node.els.AstBlock.nodes.items.len == 0) {
+      if (node.elifs.len() == 0 and node.els.AstBlock.nodes.len() == 0) {
         should_patch_if_then_to_end = false;
         break :blk @as(usize, 0);
       }
       break :blk self.code.write2ArgsJmp(.Jmp, 2, self.lastLine(), self.vm);
     };
-    var elifs_then_to_end: std.ArrayList(usize) = undefined;
+    var elifs_then_to_end: ds.ArrayList(usize) = undefined;
     // elifs-
-    if (node.elifs.items.len > 0) {
+    if (node.elifs.len() > 0) {
       // first, patch cond_to_elif_or_else here
       self.code.patch2ArgsJmp(cond_to_elif_or_else);
-      elifs_then_to_end = std.ArrayList(usize).init(self.allocator.getArenaAllocator());
+      elifs_then_to_end = ds.ArrayList(usize).init(self.allocator.getArenaAllocator());
       var last_patch: ?JmpPatch = null;
-      for (node.elifs.items) |elif| {
+      for (node.elifs.items()) |elif| {
         if (last_patch) |pch| {
           // we want the last compiled elif's failing cond to jump here; 
           // - just before the next elif code
           self.code.patch2ArgsJmp(pch.jmp_to_next);
         }
         var patch: JmpPatch = self.cElif(&elif.AstElif, reg);
-        util.append(usize, &elifs_then_to_end, patch.jmp_to_end);
+        elifs_then_to_end.append(patch.jmp_to_end);
         last_patch = patch;
       }
       // the last elif in `elifs` would not be patched considering we're 
@@ -747,9 +748,9 @@ pub const Compiler = struct {
     }
     // else-
     _ = self.cBlock(&node.els.AstBlock, reg);
-    if (node.elifs.items.len > 0) {
+    if (node.elifs.len() > 0) {
       // patch up elif_then_to_end 
-      for (elifs_then_to_end.items) |idx| {
+      for (elifs_then_to_end.items()) |idx| {
         self.code.patch2ArgsJmp(idx);
       }
     }
@@ -762,7 +763,7 @@ pub const Compiler = struct {
   }
 
   fn patchLoopJmps(self: *Self, loop_cond: usize) void {
-    for (self.loop_ctrls.items) |ctrl| {
+    for (self.loop_ctrls.items()) |ctrl| {
       if (ctrl.isBreak()) {
         // this is a forward jmp, so patch the jmp offset
         self.code.patch2ArgsJmp(ctrl.patch_index);
@@ -804,7 +805,7 @@ pub const Compiler = struct {
       // jmp bck
       node.patch_index = self.code.write2ArgsJmp(.Jmp, 0, node.token.line, self.vm);
     }
-    util.append(*ast.ControlNode, &self.loop_ctrls, node);
+    self.loop_ctrls.append(node);
     return dst;
   }
 
@@ -820,7 +821,7 @@ pub const Compiler = struct {
   }
 
   fn cProgram(self: *Self, node: *ast.ProgramNode, reg: u32) u32 {
-    for (node.decls.items) |nd| {
+    for (node.decls.items()) |nd| {
       _ = self.c(nd, reg);
     }
     return reg;

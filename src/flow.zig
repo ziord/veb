@@ -2,10 +2,11 @@ const std = @import("std");
 const types = @import("type.zig");
 const ast = @import("ast.zig");
 const util = @import("util.zig");
+const ds = @import("ds.zig");
 
 const Node = ast.AstNode;
 const Type = types.Type;
-pub const FlowList = std.ArrayList(*FlowNode);
+pub const FlowList = ds.ArrayList(*FlowNode);
 
 pub const FlowTag = enum {
   CfgEntry,
@@ -75,15 +76,15 @@ pub const FlowNode = struct {
 
   pub fn toList(self: *@This(), allocator: std.mem.Allocator) FlowList {
     var list = FlowList.init(allocator);
-    util.append(*FlowNode, &list, self);
+    list.append(self);
     return list;
   }
 
   fn outgoingNodes(node: *@This(), visited: *std.AutoHashMap(*FlowNode, u32), edge: FlowEdge, list: *FlowList) void {
     if (visited.get(node)) |_| return;
-    for (node.next.items) |nd| {
+    for (node.next.items()) |nd| {
       if (nd.edge == edge) {
-        util.append(*FlowNode, list, nd);
+        list.append(nd);
         visited.put(nd, 0) catch {};
         outgoingNodes(nd, visited, edge, list);
       }
@@ -148,9 +149,9 @@ pub const CFGBuilder = struct {
 
   fn connectVertices(self: *Self, prev: FlowList, next: *FlowNode) void {
     _ = self;
-    for (prev.items) |p_node| {
-      util.append(*FlowNode, &p_node.next, next);
-      util.append(*FlowNode, &next.prev, p_node);
+    for (prev.list.items) |p_node| {
+      p_node.next.append(next);
+      next.prev.append(p_node);
     }
   }
 
@@ -168,8 +169,8 @@ pub const CFGBuilder = struct {
       node.token
     );
     var els: ?*Node = null;
-    if (node.elifs.items.len > 0) {
-      for (node.elifs.items, 0..) |elif, i| {
+    if (node.elifs.len() > 0) {
+      for (node.elifs.items(), 0..) |elif, i| {
         var if_ = elif.AstElif.toIf(self.allocator);
         var nd = util.alloc(Node, self.allocator);
         nd.* = .{.AstSimpleIf = self.simplifyIfNode(&if_)};
@@ -193,15 +194,15 @@ pub const CFGBuilder = struct {
 
   fn linkNodeList(self: *Self, nodes: *ast.AstNodeList, prev: FlowList, edge: FlowEdge) FlowList {
     var _prev = prev;
-    for (nodes.items, 0..) |item, i| {
+    for (nodes.items(), 0..) |item, i| {
       if (item.isTypeAlias()) {
         continue;
       } else if (item.isControl()) {
-        _prev = self.linkControl(item, _prev, edge, i + 1 == nodes.items.len);
+        _prev = self.linkControl(item, _prev, edge, i + 1 == nodes.len());
         continue;
       } else if (item.isWhile()) {
-        if (i + 1 < nodes.items.len) {
-          self.after_while = nodes.items[i + 1];
+        if (i + 1 < nodes.len()) {
+          self.after_while = nodes.items()[i + 1];
         }
       }
       _prev = self.link(item, _prev, edge);
@@ -229,10 +230,10 @@ pub const CFGBuilder = struct {
     var ret = FlowList.init(self.allocator);
     // cond->then.body, and to if-exit 
     var if_then = self.linkBlock(node.then, flow_list, .ETrue);
-    util.extend(*FlowNode, &ret, &if_then);
+    ret.extend(&if_then);
     // cond->else, and to if-exit
     var els = self.link(node.els, flow_list, .EFalse);
-    util.extend(*FlowNode, &ret, &els);
+    ret.extend(&els);
     return ret;
   }
 
@@ -262,7 +263,7 @@ pub const CFGBuilder = struct {
     var then = self.linkBlock(node.then, flow_list, .ETrue);
     // last.then.body -> cond
     if (node.then.AstBlock.getLast()) |last| {
-      for (then.items) |item| {
+      for (then.items()) |item| {
         if (item.node == last) {
           self.connectVerticesWithEdgeInfo(item.toList(self.allocator), flow, .ESequential);
           item.res = .Processing;
@@ -270,7 +271,7 @@ pub const CFGBuilder = struct {
       }
     }
     // naturally handles cond -> while-exit
-    util.extend(*FlowNode, &flow_list, &then);
+    flow_list.extend(&then);
     self.curr_while_cond = curr_while_cond;
     return flow_list;
   }

@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const util = @import("util.zig");
+const ds = @import("ds.zig");
 pub const types = @import("type.zig");
 pub const Token = @import("lex.zig").Token;
 
@@ -41,27 +42,27 @@ fn CreateMap(comptime K: type, comptime V: type) type {
 
 pub fn GenScope(comptime K: type, comptime V: type) type {
   return struct {
-    decls: std.ArrayList(ScopeMap),
+    decls: ds.ArrayList(ScopeMap),
     allocator: std.mem.Allocator,
     const ScopeMap = CreateMap(K, V);
 
     pub fn init(allocator: std.mem.Allocator) @This(){
-      return @This() {.decls = std.ArrayList(ScopeMap).init(allocator), .allocator = allocator};
+      return @This() {.decls = ds.ArrayList(ScopeMap).init(allocator), .allocator = allocator};
     }
 
     pub fn pushScope(self: *@This()) void {
-      util.append(ScopeMap, &self.decls, ScopeMap.init(self.allocator));
+      self.decls.append(ScopeMap.init(self.allocator));
     }
 
     pub fn popScope(self: *@This()) void {
-      if (self.decls.items.len == 0) {
+      if (self.decls.len() == 0) {
         util.error_("pop from empty scope-list", .{});
       }
       _ = self.decls.pop();
     }
 
     pub fn popScopes(self: *@This(), count: usize) void {
-      if (self.decls.items.len == 0) {
+      if (self.decls.len() == 0) {
         util.error_("pop from empty scope-list", .{});
       }
       for (0..count) |_| {
@@ -76,14 +77,14 @@ pub fn GenScope(comptime K: type, comptime V: type) type {
     }
 
     pub inline fn len(self: *@This()) usize {
-      return self.decls.items.len;
+      return self.decls.len();
     }
 
     pub fn lookup(self: *@This(), name: K) ?V {
       if (self.len() == 0) return null;
       var i: usize = self.len();
       while (i > 0): (i -= 1) {
-        var map = self.decls.items[i - 1];
+        var map = self.decls.items()[i - 1];
         if (map.get(name)) |ty| {
           return ty;
         }
@@ -95,7 +96,7 @@ pub fn GenScope(comptime K: type, comptime V: type) type {
       if (self.len() == 0) return;
       var i: usize = self.len();
       while (i > 0): (i -= 1) {
-        var map = self.decls.items[i - 1];
+        var map = self.decls.items()[i - 1];
         if (map.del(name)) {
           return;
         }
@@ -106,11 +107,11 @@ pub fn GenScope(comptime K: type, comptime V: type) type {
       if (self.len() == 0) {
         util.error_("insert into empty scope-list", .{});
       }
-      self.decls.items[self.len() - 1].put(name, ty);
+      self.decls.items()[self.len() - 1].put(name, ty);
     }
 
     pub fn clear(self: *@This()) void {
-      while (self.decls.items.len > 0) {
+      while (self.decls.len() > 0) {
         _ = self.decls.pop();
       }
     }
@@ -192,15 +193,15 @@ pub const TypeLinker = struct {
 
   fn insertTVar(self: *Self, typ: *Type, data: MultiPair) void {
     var tvar = typ.variable();
-    if (tvar.tokens.items.len > 1) return;
-    var name = tvar.tokens.items[0].value;
+    if (tvar.tokens.len() > 1) return;
+    var name = tvar.tokens.items()[0].value;
     self.cyc_scope.insert(name, data);
   }
 
   fn checkTVar(self: *Self, typ: *Type, found: *Type) ?*Type {
     var tvar = typ.variable();
-    if (tvar.tokens.items.len > 1) return null;
-    var name = tvar.tokens.items[0].value;
+    if (tvar.tokens.len() > 1) return null;
+    var name = tvar.tokens.items()[0].value;
     if (self.cyc_scope.lookup(name)) |pair| {
       // extra p.o.c;
       if (pair.key == found) {
@@ -212,8 +213,8 @@ pub const TypeLinker = struct {
 
   fn delTVar(self: *Self, typ: *Type) void {
     var tvar = typ.variable();
-    if (tvar.tokens.items.len > 1) return;
-    var name = tvar.tokens.items[0].value;
+    if (tvar.tokens.len() > 1) return;
+    var name = tvar.tokens.items()[0].value;
     if (self.cyc_scope.lookup(name)) |pair| {
       // only delete this pair if `typ` is its exact setter
       if (pair.setter == typ) {
@@ -223,7 +224,7 @@ pub const TypeLinker = struct {
   }
 
   inline fn lookupVarType(self: *Self, typ: *Type) ?*Type {
-    var tokens = typ.variable().tokens.items;
+    var tokens = typ.variable().tokens.items();
     return if (tokens.len > 1) {
       // TODO: context type
       util.todo("multiple names impl with context type");
@@ -387,7 +388,7 @@ pub const TypeLinker = struct {
             try self.assertGenericAliasSubMatches(alias_info.lhs, typ);
             // A generic recursive type's tparams will never be resolved and substituted for, so
             // just ensure that the tparam is actually valid.
-            for (gen.tparams.items) |tparam| {
+            for (gen.tparams.items()) |tparam| {
               _ = try self.resolveType(tparam);
             }
             return eqn;
@@ -404,17 +405,17 @@ pub const TypeLinker = struct {
         self.using_tvar += 1;
         var alias_gen = alias.generic();
         for (alias_gen.getSlice(), 0..) |tvar, i| {
-          var tsub = gen.tparams.items[i];
+          var tsub = gen.tparams.items()[i];
           // var r_tsub = try self.resolveType(tsub);
-          std.debug.assert(tvar.variable().tokens.items.len == 1);
-          self.ctx.typScope.insert(tvar.variable().tokens.items[0].value, tsub); // r_tsub
+          std.debug.assert(tvar.variable().tokens.len() == 1);
+          self.ctx.typScope.insert(tvar.variable().tokens.items()[0].value, tsub); // r_tsub
         }
         // `eqn` is the type alias' aliasee, and may not be generic, so we add an extra guard.
         // for ex: type Foo{T} = T  # <-- aliasee/eqn 'T' is not generic here.
         if (eqn.isGeneric()) {
           var eqn_gen = eqn.generic();
           for (eqn_gen.getSlice(), 0..) |param, i| {
-            eqn_gen.tparams.items[i] = try self.resolveType(param);
+            eqn_gen.tparams.items()[i] = try self.resolveType(param);
           }
         }
         // resolving eqn resolves typ
@@ -425,7 +426,7 @@ pub const TypeLinker = struct {
         return sol;
       } else {
         for (gen.getSlice(), 0..) |param, i| {
-          gen.tparams.items[i] = try self.resolveType(param);
+          gen.tparams.items()[i] = try self.resolveType(param);
         }
         return typ;
       }
@@ -519,13 +520,13 @@ pub const TypeLinker = struct {
   }
 
   fn linkList(self: *Self, node: *ast.ListNode) !void {
-    for (node.elems.items) |elem| {
+    for (node.elems.items()) |elem| {
       try self.link(elem);
     }
   }
 
   fn linkMap(self: *Self, node: *ast.MapNode) !void {
-    for (node.pairs.items) |pair| {
+    for (node.pairs.items()) |pair| {
       try self.link(pair.key);
       try self.link(pair.value);
     }
@@ -553,7 +554,7 @@ pub const TypeLinker = struct {
   
   fn linkBlock(self: *Self, node: *ast.BlockNode) !void {
     self.ctx.enterScope();
-    for (node.nodes.items) |item| {
+    for (node.nodes.items()) |item| {
       try self.link(item);
     }
     self.ctx.leaveScope();
@@ -583,7 +584,7 @@ pub const TypeLinker = struct {
   fn linkAlias(self: *Self, node: *ast.AliasNode) !void {
     var typ = node.alias.typ;
     var tokens = if (typ.isGeneric()) typ.generic().base.variable().tokens else typ.variable().tokens;
-    self.ctx.typScope.insert(tokens.items[0].value, &node.aliasee.typ);
+    self.ctx.typScope.insert(tokens.items()[0].value, &node.aliasee.typ);
   }
 
   fn linkSubscript(self: *Self, node: *ast.SubscriptNode) !void {
@@ -598,7 +599,7 @@ pub const TypeLinker = struct {
   fn linkIf(self: *Self, node: *ast.IfNode) !void {
     try self.link(node.cond);
     try self.linkBlock(&node.then.AstBlock);
-    for (node.elifs.items) |elif| {
+    for (node.elifs.items()) |elif| {
       try self.linkElif(&elif.AstElif);
     }
     try self.linkBlock(&node.els.AstBlock);
@@ -616,7 +617,7 @@ pub const TypeLinker = struct {
 
   fn linkProgram(self: *Self, node: *ast.ProgramNode) !void {
     self.ctx.enterScope();
-    for (node.decls.items) |item| {
+    for (node.decls.items()) |item| {
       try self.link(item);
     }
     // only pop off varScope, since typScope needs to be 

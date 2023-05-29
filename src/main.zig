@@ -8,7 +8,6 @@ const link = @import("link.zig");
 const check = @import("check.zig");
 const flow = @import("flow.zig");
 const CnAllocator = @import("allocator.zig");
-const Vec = @import("vec.zig").Vec;
 
 pub fn main() !void {
   std.debug.print("hello nova!\n", .{});

@@ -618,7 +618,7 @@ pub const TypeChecker = struct {
     // automatically resolved on entry
     node.res = .Resolved;
     // `entry` node, so we don't care about the `node` & `prev` properties
-    for (node.next.items) |item| {
+    for (node.next.items()) |item| {
       try self.flowInfer(item, true);
     }
   }
@@ -626,18 +626,18 @@ pub const TypeChecker = struct {
   fn flowInferExit(self: *Self, node: *FlowNode, inferNext: bool) !void {
     _ = inferNext;
     std.debug.assert(node.tag == .CfgExit);
-    for (node.prev.items) |item| {
+    for (node.prev.items()) |item| {
       if (self.isFlowNodeUnresolved(item)) {
         return;
       }
     }
     node.res = .Resolved;
     self.ctx.leaveScope();
-    std.debug.assert(node.next.items.len == 0);
+    std.debug.assert(node.next.len() == 0);
   }
 
   fn flowInferNode(self: *Self, node: *FlowNode, inferNext: bool) !void {
-    for (node.prev.items) |item| {
+    for (node.prev.items()) |item| {
       // we can only proceed to resolve this node when all 
       // incoming edges have been resolved or when we're resolving 
       // all nodes on the true edges of a Condition.
@@ -648,13 +648,13 @@ pub const TypeChecker = struct {
     _ = try self.infer(node.node);
     node.res = .Resolved;
     if (!inferNext) return;
-    for (node.next.items) |item| {
+    for (node.next.items()) |item| {
       try self.flowInfer(item, inferNext);
     }
   }
 
   fn flowInferCondition(self: *Self, node: *FlowNode, inferNext: bool) !void {
-    for (node.prev.items) |item| {
+    for (node.prev.items()) |item| {
       if (self.isFlowNodeUnresolved(item)) {
         return;
       }
@@ -674,7 +674,7 @@ pub const TypeChecker = struct {
     // get all nodes on the true edges & flowInfer with env
     var out_nodes = node.getOutgoingNodes(.ETrue, self.allocator);
     self.copyEnv(&env);
-    for (out_nodes.items) |nd| {
+    for (out_nodes.items()) |nd| {
       try self.flowInfer(nd, false);
     }
     self.ctx.varScope.popScope();
@@ -690,14 +690,14 @@ pub const TypeChecker = struct {
       env.narrowed.clearRetainingCapacity();
     };
     self.copyEnv(&env);
-    for (out_nodes.items) |nd| {
+    for (out_nodes.items()) |nd| {
       try self.flowInfer(nd, false);
     }
     node.res = .Resolved;
     self.ctx.varScope.popScope();
     if (!inferNext) return;
     // infer next nodes
-    for (node.next.items) |item| {
+    for (node.next.items()) |item| {
       try self.flowInfer(item, inferNext);
     }
   }
@@ -747,15 +747,15 @@ pub const TypeChecker = struct {
     // create a new type
     var base = Type.newConcrete(.TyClass, name, node.token).box(self.allocator);
     node.typ = Type.newGeneric(self.allocator, base, node.token).box(self.allocator);
-    if (node.elems.items.len == 0) {
+    if (node.elems.len() == 0) {
       return node.typ.?;
     }
     // infer type of elements stored in the list
     var typeset = TypeHashSet.init(self.allocator);
-    typeset.ensureTotalCapacity(node.elems.items.len) catch {};
-    for (node.elems.items) |elem| {
+    typeset.ensureTotalCapacity(node.elems.len());
+    for (node.elems.items()) |elem| {
       var typ = try self.infer(elem);
-      typeset.put(typ.typeid(), typ) catch break;
+      typeset.set(typ.typeid(), typ);
     }
     var gen = node.typ.?.generic();
     gen.append(Type.compressTypes(&typeset, node.token, null));
@@ -774,16 +774,16 @@ pub const TypeChecker = struct {
     // create a new type
     var base = Type.newConcrete(.TyClass, "map", node.token).box(self.allocator);
     node.typ = Type.newGeneric(self.allocator, base, node.token).box(self.allocator);
-    if (node.pairs.items.len == 0) {
+    if (node.pairs.len() == 0) {
       return node.typ.?;
     }
     // infer type of items stored in the map
-    var first_pair = node.pairs.items[0];
+    var first_pair = node.pairs.items()[0];
     var key_typ = try self.infer(first_pair.key);
     var val_typ = try self.infer(first_pair.value);
 
-    if (node.pairs.items.len > 1) {
-      for (node.pairs.items[1..], 1..) |pair, i| {
+    if (node.pairs.len() > 1) {
+      for (node.pairs.items()[1..], 1..) |pair, i| {
         _ = i;
         var typ = try self.infer(pair.key);
         _ = self.checkAssign(key_typ, typ, typ.debug, false) catch {
@@ -1006,7 +1006,7 @@ pub const TypeChecker = struct {
 
   fn inferBlock(self: *Self, node: *ast.BlockNode) !*Type {
     self.ctx.enterScope();
-    for (node.nodes.items) |item| {
+    for (node.nodes.items()) |item| {
       _ = try self.infer(item);
     }
     self.ctx.leaveScope();
@@ -1022,7 +1022,7 @@ pub const TypeChecker = struct {
 
   fn inferProgram(self: *Self, node: *ast.ProgramNode) !*Type {
     self.ctx.enterScope();
-    for (node.decls.items) |item| {
+    for (node.decls.items()) |item| {
       _ = try self.infer(item);
     }
     self.ctx.leaveScope();
@@ -1145,13 +1145,13 @@ pub const TypeChecker = struct {
           .{self.getTypename(expr_ty), self.getTypename(index_ty)}
         );
       }
-      node.typ = expr_ty.generic().tparams.items[0];
+      node.typ = expr_ty.generic().tparams.items()[0];
     } else if (expr_ty.isMapTy()) {
       // k-v. index with k, get v.
       var gen = expr_ty.generic();
       std.debug.assert(gen.tparams_len() == 2);
-      var key_typ = gen.tparams.items[0];
-      var val_typ = gen.tparams.items[1];
+      var key_typ = gen.tparams.items()[0];
+      var val_typ = gen.tparams.items()[1];
       _ = self.checkAssign(key_typ, index_ty, index_ty.debug, false) catch {
         return self.error_(
           true, node.token,

@@ -1,4 +1,5 @@
 const std = @import("std");
+const ds = @import("ds.zig");
 const util = @import("util.zig");
 const VarNode = @import("ast.zig").VarNode;
 const Token = @import("lex.zig").Token;
@@ -7,8 +8,8 @@ const ID_HASH = 0x12;
 pub const MAX_STEPS = MAX_RECURSIVE_DEPTH / 2;
 pub const MAX_TPARAMS = 0xA;
 pub const MAX_RECURSIVE_DEPTH = 0x3e8;
-pub const TypeHashSet = std.AutoArrayHashMap(u32, *Type);
-pub const TypeList = std.ArrayList(*Type);
+pub const TypeHashSet = ds.ArrayHashMap(u32, *Type);
+pub const TypeList = ds.ArrayList(*Type);
 
 pub const TypeKind = enum (u8) {
   /// 'type' type:
@@ -137,11 +138,11 @@ pub const Union = struct {
 
   pub fn set(self: *@This(), typ: *Type) void {
     if (!typ.isUnion()) {
-      util.set(u32, *Type, &self.variants, typ.typeid(), typ);
+      self.variants.set(typ.typeid(), typ);
     } else {
       var uni = typ.union_();
       for (uni.variants.values()) |vr| {
-        util.set(u32, *Type, &self.variants, vr.typeid(), vr);
+        self.variants.set(vr.typeid(), vr);
       }
     }
     if (typ.isNullable() or typ.isNilTy()) {
@@ -150,7 +151,7 @@ pub const Union = struct {
   }
 
   pub fn addAll(self: *@This(), types: *TypeList) void {
-    for (types.items) |ty| {
+    for (types.items()) |ty| {
       self.set(ty);
     }
   }
@@ -200,15 +201,15 @@ pub const Generic = struct {
   }
 
   pub fn getSlice(self: *@This()) []*Type {
-    return self.tparams.items[0..self.tparams.items.len];
+    return self.tparams.items()[0..self.tparams.len()];
   }
 
   pub fn append(self: *@This(), typ: *Type) void {
-    util.append(*Type, &self.tparams, typ);
+    self.tparams.append(typ);
   }
 
   pub inline fn tparams_len(self: *@This()) usize {
-    return self.tparams.items.len;
+    return self.tparams.len();
   }
 
   pub fn isRelatedTo(this: *Generic, other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
@@ -218,8 +219,8 @@ pub const Generic = struct {
         // less specific to specific, for ex: lex x = []; x = [1, 2, 3]
         if (gen.tparams_len() == 0) return true;
         if (this.tparams_len() != gen.tparams_len()) return false;
-        for (this.tparams.items, 0..) |tparam, i| {
-          var param = gen.tparams.items[i];
+        for (this.tparams.items(), 0..) |tparam, i| {
+          var param = gen.tparams.items()[i];
           if (!tparam.isRelatedTo(param, .RCTypeParams, A)) {
             return false;
           }
@@ -233,19 +234,19 @@ pub const Generic = struct {
 };
 
 pub const Variable = struct {
-  tokens: std.ArrayList(Token),
+  tokens: ds.ArrayList(Token),
 
   pub fn init(allocator: std.mem.Allocator) @This() {
-    return Variable {.tokens = std.ArrayList(Token).init(allocator)};
+    return Variable {.tokens = ds.ArrayList(Token).init(allocator)};
   }
 
   pub fn append(self: *@This(), name: Token) void {
-    util.append(Token, &self.tokens, name);
+    self.tokens.append(name);
   }
 
   pub fn eql(self: *@This(), other: *@This()) bool {
-    if (other.tokens.items.len != self.tokens.items.len) return false;
-    for (other.tokens.items, self.tokens.items) |a, b| {
+    if (other.tokens.len() != self.tokens.len()) return false;
+    for (other.tokens.items(), self.tokens.items()) |a, b| {
       if (!std.mem.eql(u8, a.value, b.value)) {
         return false;
       }
@@ -275,8 +276,8 @@ pub const Recursive = struct {
     var flat_this = this.base.unfold(A);
     var flat_other = other.unfold(A);
     start:
-    for (flat_other.items) |ty| {
-      for (flat_this.items) |rty| {
+    for (flat_other.items()) |ty| {
+      for (flat_this.items()) |rty| {
         if (rty.isRelatedTo(ty, ctx, A)) {
           continue :start;
         }
@@ -344,8 +345,8 @@ pub const Type = struct {
       .Constant, .Concrete, .Variable, .Recursive => return self,
       .Generic => |*gen| {
         var new = Generic.init(A, gen.base.clone(A));
-        new.tparams.ensureTotalCapacity(gen.tparams.capacity) catch {};
-        for (gen.tparams.items) |ty| {
+        new.tparams.ensureTotalCapacity(gen.tparams.capacity());
+        for (gen.tparams.items()) |ty| {
           new.append(ty.clone(A));
         }
         var ret = Type.init(.{.Generic = new}, self.debug).box(A);
@@ -355,7 +356,7 @@ pub const Type = struct {
       .Union => |*uni| {
         var new = Union.init(A);
         new.active = uni.active;
-        new.variants.ensureTotalCapacity(uni.variants.capacity()) catch {};
+        new.variants.ensureTotalCapacity(uni.variants.capacity());
         for (uni.variants.values()) |ty| {
           new.set(ty.clone(A));
         }
@@ -426,7 +427,7 @@ pub const Type = struct {
     var sub = TypeHashSet.init(al);
     for (self.nullable().variants.values()) |ty| {
       if (!ty.isNilTy()) {
-        util.set(u32, *Type, &sub, ty.typeid(), ty);
+        sub.set(ty.typeid(), ty);
       }
     }
     return compressTypes(&sub, self.debug, null);
@@ -613,7 +614,7 @@ pub const Type = struct {
 
   pub fn getName(self: *Self) []const u8 {
     return switch (self.kind) {
-      .Variable => |name| name.tokens.getLast().value,
+      .Variable => |*name| name.tokens.getLast().value,
       else => "",
     };
   }
@@ -651,8 +652,8 @@ pub const Type = struct {
           self.tid += @as(u8, ch);
         }
       },
-      .Variable => |vr| {
-        for (vr.tokens.items) |tok| {
+      .Variable => |*vr| {
+        for (vr.tokens.items()) |tok| {
           self.tid += @as(u32, @enumToInt(tok.ty)) << ID_HASH;
           // TODO: more efficient approach
           for (tok.value) |ch| {
@@ -685,20 +686,20 @@ pub const Type = struct {
       return;
     }
     switch (typ.kind) {
-      .Concrete, .Variable, .Constant => util.append(*Type, list, typ),
+      .Concrete, .Variable, .Constant => list.append(typ),
       .Generic => |*gen| {
         gen.base._unfoldRecursive(step + 1, list, visited);
-        for (gen.tparams.items) |param| {
+        for (gen.tparams.items()) |param| {
           param._unfoldRecursive(step + 1, list, visited);
         }
       },
-      .Union => |uni| {
+      .Union => |*uni| {
         for (uni.variants.values()) |ty| {
           ty._unfoldRecursive(step + 1, list, visited);
         }
       },
-      .Recursive => |rec| {
-        util.set(u32, *Type, visited, typ.typeid(), typ);
+      .Recursive => |*rec| {
+        visited.set(typ.typeid(), typ);
         rec.base._unfoldRecursive(step + 1, list, visited);
       }
     }
@@ -706,21 +707,21 @@ pub const Type = struct {
 
   fn _unfold(self: *Self, list: *TypeList) void {
     switch (self.kind) {
-      .Concrete, .Constant,.Variable => util.append(*Type, list, self),
+      .Concrete, .Constant, .Variable => list.append(self),
       .Generic => |*gen| {
         gen.base._unfold(list);
-        for (gen.tparams.items) |param| {
+        for (gen.tparams.items()) |param| {
           param._unfold(list);
         }
       },
-      .Union => |uni| {
+      .Union => |*uni| {
         for (uni.variants.values()) |ty| {
           ty._unfold(list);
         }
       }, 
-      .Recursive => |rec| {
-        var visited = TypeHashSet.init(list.allocator);
-        util.set(u32, *Type, &visited, self.typeid(), self);
+      .Recursive => |*rec| {
+        var visited = TypeHashSet.init(list.allocator());
+        visited.set(self.typeid(), self);
         rec.base._unfoldRecursive(0, list, &visited);
         visited.clearAndFree();
       }
@@ -736,8 +737,8 @@ pub const Type = struct {
 
   fn recContainsType(rec_list: *TypeList, o_list: *TypeList) bool {
     start: 
-    for (o_list.items) |ty| {
-      for (rec_list.items) |rty| {
+    for (o_list.items()) |ty| {
+      for (rec_list.items()) |rty| {
         if (ty.typeidEql(rty)) {
           continue :start;
         }
@@ -930,11 +931,11 @@ pub const Type = struct {
     return false;
   }
 
-  fn writeName(allocator: std.mem.Allocator, tokens: *std.ArrayList(Token)) ![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
-    for (tokens.items, 0..) |tok, i| {
+  fn writeName(allocator: std.mem.Allocator, tokens: *ds.ArrayList(Token)) ![]const u8 {
+    var writer = @constCast(&ds.ArrayList(u8).init(allocator)).writer();
+    for (tokens.items(), 0..) |tok, i| {
       _ = try writer.write(tok.value);
-      if (i != tokens.items.len - 1) {
+      if (i != tokens.len() - 1) {
         // compound names are separated via '.'
         _ = try writer.write(".");
       }
@@ -972,7 +973,7 @@ pub const Type = struct {
           _ = try writer.write("{");
           for (gen.getSlice(), 0..) |param, i| {
             _ = try writer.write(try param._typename(allocator, depth));
-            if (i != gen.tparams.items.len - 1) {
+            if (i != gen.tparams.len() - 1) {
               _ = try writer.write(", ");
             }
           }
@@ -1004,7 +1005,7 @@ pub const Type = struct {
 
   /// combine types in typeset as much as possible
   pub fn compressTypes(typeset: *TypeHashSet, debug: Token, uni: ?*Type) *Type {
-    var allocator = typeset.allocator;
+    var allocator = typeset.allocator();
     if (typeset.count() > 1) {
       var final = TypeList.init(allocator);
       var last_ty: ?*Type = null;
@@ -1030,11 +1031,11 @@ pub const Type = struct {
           }
         }
         last_ty = typ;
-        final.append(typ) catch break;
+        final.append(typ);
       }
       // convert types to a single union type
       var typ: *Type = undefined;
-      if (final.items.len == typeset.count()) {
+      if (final.len() == typeset.count()) {
         if (uni) |ty| {
           return ty;
         }
@@ -1042,18 +1043,18 @@ pub const Type = struct {
       // add constant true & false types if available
       if (true_ty) |tru| {
         if (false_ty) |_| {
-          final.append(Type.newConcrete(.TyBool, null, tru.debug).box(allocator)) catch {};
+          final.append(Type.newConcrete(.TyBool, null, tru.debug).box(allocator));
         } else {
-          final.append(tru) catch {};
+          final.append(tru);
         }
       } else if (false_ty) |fal| {
-        final.append(fal) catch {};
+        final.append(fal);
       }
-      if (final.items.len > 1) {
+      if (final.len() > 1) {
         typ = Type.newUnion(allocator, debug).box(allocator);
         typ.union_().addAll(&final);
       } else {
-        typ = final.items[0];
+        typ = final.items()[0];
       }
       if (has_nil) {
         typ = Type.newNullable(typ, debug, allocator);
@@ -1083,22 +1084,16 @@ pub const Type = struct {
         return t1;
       }
       if (t2.isUnion()) {
-        var variants = t2.union_().variants.clone() catch |e| {
-          std.debug.print("Error: {}", .{e});
-          std.os.exit(1);
-        };
-        util.set(u32, *Type, &variants, t1.typeid(), t1);
+        var variants = t2.union_().variants.clone();
+        variants.set(t1.typeid(), t1);
         return compressTypes(&variants, t2.debug, null);
       }
       if (t2.isRelatedTo(t1, .RCAny, allocator)) {
         return t2;
       }
       if (t1.isUnion()) {
-        var variants = t1.union_().variants.clone() catch |e| {
-          std.debug.print("Error: {}", .{e});
-          std.os.exit(1);
-        };
-        util.set(u32, *Type, &variants, t2.typeid(), t2);
+        var variants = t1.union_().variants.clone();
+        variants.set(t2.typeid(), t2);
         return compressTypes(&variants, t1.debug, null);
       }
       var tmp = Type.newUnion(allocator, t1.debug).box(allocator);
@@ -1119,14 +1114,14 @@ pub const Type = struct {
           var uni2 = TypeHashSet.init(allocator);
           for (uni.variants.values()) |typ| {
             if (typ.intersect(t2, allocator)) |ty| {
-              util.set(u32, *Type, &uni2, ty.typeid(), ty);
+              uni2.set(ty.typeid(), ty);
             }
           }
           return compressTypes(&uni2, t1.debug, null);
         },
         .Recursive => {
           var typs = t1.unfold(allocator);
-          for (typs.items) |typ| {
+          for (typs.items()) |typ| {
             if (typ.intersect(t2, allocator)) |ty| {
               return ty;
             }
@@ -1140,14 +1135,14 @@ pub const Type = struct {
           var uni2 = TypeHashSet.init(allocator);
           for (uni.variants.values()) |typ| {
             if (typ.intersect(t1, allocator)) |ty| {
-              util.set(u32, *Type, &uni2, ty.typeid(), ty);
+              uni2.set(ty.typeid(), ty);
             }
           }
           return compressTypes(&uni2, t1.debug, null);
         },
         .Recursive => {
           var typs = t2.unfold(allocator);
-          for (typs.items) |typ| {
+          for (typs.items()) |typ| {
             if (typ.intersect(t1, allocator)) |ty| {
               return ty;
             }
@@ -1166,7 +1161,7 @@ pub const Type = struct {
         var new_uni = TypeHashSet.init(allocator);
         for (uni.variants.values()) |ty| {
           if (!ty.isEitherWayRelatedTo(t2, .RCAny, allocator)) {
-            util.set(u32, *Type, &new_uni, ty.typeid(), ty);
+            new_uni.set(ty.typeid(), ty);
           }
         }
         if (new_uni.count() == 0) {

@@ -381,15 +381,15 @@ pub const Parser = struct {
     node.* = .{.AstTuple = ast.ListNode.init(self.allocator, self.current_tok)};
     var tuple = &node.*.AstTuple.elems;
     if (first) |elem| {
-      util.append(*Node, tuple, elem);
+      tuple.append(elem);
     }
     while (!self.check(.TkEof) and !self.check(.TkRBracket)) {
-      util.append(*Node, tuple, self.parseExpr());
+      tuple.append(self.parseExpr());
       if (!self.check(.TkRBracket)) {
         self.consume(.TkComma);
       }
       self.assertMaxElements(
-        tuple.items.len,
+        tuple.len(),
         "Maximum number of tuple elements exceeded"
       );
     }
@@ -406,17 +406,17 @@ pub const Parser = struct {
     self.consume(.TkLSqrBracket);
     var list = &node.*.AstList.elems;
     while (!self.check(.TkEof) and !self.check(.TkRSqrBracket)) {
-      if (list.items.len > 0) {
+      if (list.len() > 0) {
         self.consume(.TkComma);
         if (self.check(.TkRSqrBracket)) {
           break;
         }
       }
       self.assertMaxElements(
-        list.items.len,
+        list.len(),
         "Maximum number of list elements exceeded"
       );
-      util.append(*Node, list, self.parseExpr());
+      list.append(self.parseExpr());
     }
     self.decNl();
     self.consume(.TkRSqrBracket);
@@ -432,24 +432,24 @@ pub const Parser = struct {
     var pairs = &node.*.AstMap.pairs;
     const max_items: usize = MAX_LISTING_ELEMS / 2;
     while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
-      if (pairs.items.len > 0) {
+      if (pairs.len() > 0) {
         self.consume(.TkComma);
         if (self.check(.TkRCurly)) {
           break;
         }
       }
       self.assertMaxElements(
-        pairs.items.len,
+        pairs.len(),
         "Maximum number of map elements exceeded"
       );
-      if (pairs.items.len > max_items) {
+      if (pairs.len() > max_items) {
         self.current_tok.msg = "Maximum number of map items exceeded";
         self.err(self.current_tok);
       }
       var key = self.parseExpr();
       self.consume(.TkColon);
       var val = self.parseExpr();
-      util.append(ast.MapNode.Pair, pairs, .{.key = key, .value = val});
+      pairs.append(.{.key = key, .value = val});
     }
     self.decNl();
     self.consume(.TkRCurly);
@@ -534,7 +534,7 @@ pub const Parser = struct {
   }
 
   inline fn assertMaxTParams(self: *Self, typ: *Generic) void {
-    if (typ.tparams.items.len >= types.MAX_TPARAMS) {
+    if (typ.tparams.len() >= types.MAX_TPARAMS) {
       self.current_tok.msg = "maximum type parameters exceeded";
       self.err(self.current_tok);
     }
@@ -552,7 +552,7 @@ pub const Parser = struct {
           else if (tok.ty == .TkTuple) 1 
           else return
         );
-        if (typ.tparams.items.len != exp) {
+        if (typ.tparams.len() != exp) {
           tok.msg = "Generic type instantiated with wrong number of paramters";
           self.err(tok);
         }
@@ -562,7 +562,7 @@ pub const Parser = struct {
   }
 
   inline fn assertNonEmptyTParams(self: *Self, typ: *Generic) void {
-    if (typ.tparams.items.len == 0) {
+    if (typ.tparams.len() == 0) {
       self.previous_tok.msg = "Empty type parameters not allowed";
       self.err(self.previous_tok);
     }
@@ -601,7 +601,7 @@ pub const Parser = struct {
     if (self.match(.TkLCurly)) {
       var gen = Generic.init(self.allocator, typ.box(self.allocator));
       while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
-        if (gen.tparams.items.len > 0) self.consume(.TkComma);
+        if (gen.tparams.len() > 0) self.consume(.TkComma);
         self.assertMaxTParams(&gen);
         var param = self.aliasParam();
         self.assertUniqueTParams(&gen, &param);
@@ -707,7 +707,7 @@ pub const Parser = struct {
       }
       gen = ret.generic();
       while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
-        if (gen.tparams.items.len > 0) self.consume(.TkComma);
+        if (gen.tparams.len() > 0) self.consume(.TkComma);
         self.assertMaxTParams(gen);
         var param = self.tExpr();
         gen.append(param.box(self.allocator));
@@ -766,7 +766,7 @@ pub const Parser = struct {
         switch (gen.base.kind) {
           .Variable => |*vr| {
             if (vr.eql(&tvar.kind.Variable)) {
-              return &vr.tokens.items[0];
+              return &vr.tokens.items()[0];
             }
           },
           else => {}
@@ -853,7 +853,7 @@ pub const Parser = struct {
     var node = self.newNode();
     node.* = .{.AstBlock = ast.BlockNode.init(self.allocator, line)};
     while (!self.check(.TkEof) and !self.check(.TkEnd)) {
-      util.append(*Node, &node.AstBlock.nodes, self.statement());
+      node.AstBlock.nodes.append(self.statement());
     }
     self.consume(.TkEnd);
     // eat newline if present
@@ -884,7 +884,7 @@ pub const Parser = struct {
     self.consume(.TkNewline);
     var then = ast.BlockNode.init(self.allocator, self.previous_tok.line);
     while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
-      util.append(*Node, &then.nodes, self.statement());
+      then.nodes.append(self.statement());
     }
     var elifs = ast.AstNodeList.init(self.allocator);
     while (self.match(.TkElif)) {
@@ -894,19 +894,19 @@ pub const Parser = struct {
       self.consume(.TkNewline);
       var elif_then = ast.BlockNode.init(self.allocator, self.previous_tok.line);
       while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
-        util.append(*Node, &elif_then.nodes, self.statement());
+        elif_then.nodes.append(self.statement());
       }
       var elif_then_node = self.newNode();
       var elif_node = self.newNode();
       elif_then_node.* = .{.AstBlock = elif_then};
       elif_node.* = .{.AstElif = ast.ElifNode.init(elif_cond, elif_then_node, elif_token)};
-      util.append(*Node, &elifs, elif_node);
+      elifs.append(elif_node);
     }
     var els = ast.BlockNode.init(self.allocator, self.previous_tok.line);
     if (self.match(.TkElse)) {
       self.consume(.TkNewline);
       while (!self.check(.TkEof) and !self.check(.TkEnd)) {
-        util.append(*Node, &els.nodes, self.statement());
+        els.nodes.append(self.statement());
       }
     }
     self.consume(.TkEnd);
@@ -983,7 +983,7 @@ pub const Parser = struct {
     var program = self.newNode();
     program.* = .{.AstProgram = ast.ProgramNode.init(self.allocator, self.current_tok.line)};
     while (!self.match(.TkEof)) {
-      util.append(*Node, &program.AstProgram.decls, self.statement());
+      program.AstProgram.decls.append(self.statement());
     }
     return program;
   }

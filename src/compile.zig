@@ -91,6 +91,7 @@ pub const Compiler = struct {
   code: *Code,
   node: *Node,
   filename: []const u8,
+  src: []const u8,
   gsyms: [VM.MAX_GSYM_ITEMS]GSymVar,
   locals: [VM.MAX_LOCAL_ITEMS]LocalVar,
   globals: ds.ArrayList(GlobalVar),
@@ -113,12 +114,13 @@ pub const Compiler = struct {
     in_jmp: u32 = 0,
   };
 
-  pub fn init(node: *Node, filename: []const u8, vm: *VM, code: *Code, allocator: *CnAllocator) Self {
+  pub fn init(node: *Node, filename: []const u8, src: []const u8, vm: *VM, code: *Code, allocator: *CnAllocator) Self {
     var al = allocator.getArenaAllocator();
     return Self {
       .code = code,
       .node = node, 
       .filename = filename,
+      .src = src,
       .allocator = allocator,
       .gsyms = undefined,
       .locals = undefined,
@@ -387,7 +389,7 @@ pub const Compiler = struct {
   fn cString(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
     return self.cConst(
       dst,
-      value.objVal(value.createString(self.vm, &self.vm.strings, node.token.value, node.token.is_alloc)),
+      value.objVal(value.createString(self.vm, &self.vm.strings, node.token.value, node.token.isAlloc())),
       node.line()
     );
   }

@@ -206,21 +206,21 @@ pub const TypeChecker = struct {
   const MAX_STRING_SYNTH_LEN = 0xc;
   pub const TypeCheckError = error{TypeCheckError};
 
-  pub fn init(allocator: std.mem.Allocator, filename: []const u8) @This() {
+  pub fn init(allocator: std.mem.Allocator, filename: []const u8, src: []const u8) @This() {
     return Self {
       .allocator = allocator, 
-      .ctx = TContext.init(allocator, filename),
-      .diag = Diagnostic.init(allocator),
+      .ctx = TContext.init(allocator, filename, src),
+      .diag = Diagnostic.init(allocator, filename, src),
     };
   }
 
   fn error_(self: *Self, emit: bool, token: Token, comptime fmt: []const u8, args: anytype) TypeCheckError {
-    if (emit) self.diag.addDiagnostics(.DiagError, token, self.ctx.filename, "TypeError: " ++ fmt, args);
+    if (emit) self.diag.addDiagnostics(.DiagError, token, "TypeError: " ++ fmt, args);
     return error.TypeCheckError;
   }
 
   inline fn warn(self: *Self, emit: bool, token: Token, comptime fmt: []const u8, args: anytype) void {
-    if (emit) self.diag.addDiagnostics(.DiagWarn, token, self.ctx.filename, "TypeWarning: " ++ fmt, args);
+    if (emit) self.diag.addDiagnostics(.DiagWarn, token, "TypeWarning: " ++ fmt, args);
   }
 
   fn findType(self: *Self, name: []const u8) ?*Type {
@@ -1213,7 +1213,7 @@ pub const TypeChecker = struct {
   }
 
   pub fn typecheck(self: *Self, node: *Node) TypeCheckError!void {
-    var linker = link.TypeLinker.init(self.allocator, self.ctx.filename);
+    var linker = link.TypeLinker.init(self.allocator, self.ctx.filename, self.ctx.src);
     linker.linkTypes(node) catch {
       return error.TypeCheckError;
     };

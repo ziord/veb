@@ -69,7 +69,7 @@ pub const BinaryNode = struct {
     };
   }
 
-  pub inline fn line(self: *@This()) usize {
+   pub inline fn line(self: *@This()) usize {
     return self.op.token.line;
   }
 };
@@ -103,7 +103,7 @@ pub const UnaryNode = struct {
     return @This() {.expr = expr, .op = lex.Optr.init(op)};
   }
 
-  pub inline fn line(self: *@This()) usize {
+   pub inline fn line(self: *@This()) usize {
     return self.op.token.line;
   }
 };

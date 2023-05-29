@@ -126,15 +126,17 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
     /// scope for other declarations, e.g. variables, functions, etc.
     varScope: VarScope,
     filename: []const u8,
+    src: []const u8,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, filename: []const u8) Self {
+    pub fn init(allocator: std.mem.Allocator, filename: []const u8, src: []const u8) Self {
       return Self {
         .allocator = allocator, 
         .typScope = TypScope.init(allocator), 
         .varScope = VarScope.init(allocator),
         .filename = filename,
+        .src = src,
       };
     }
 
@@ -182,12 +184,15 @@ pub const TypeLinker = struct {
 
   const Self = @This();
 
-  pub fn init(allocator: std.mem.Allocator, filename: []const u8) @This() {
-    return Self { .ctx = TContext.init(allocator, filename), .cyc_scope = PairScope.init(allocator) };
+  pub fn init(allocator: std.mem.Allocator, filename: []const u8, src: []const u8) @This() {
+    return Self { 
+      .ctx = TContext.init(allocator, filename, src),
+      .cyc_scope = PairScope.init(allocator)
+    };
   }
 
   fn error_(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) TypeLinkError {
-    token.showError(self.ctx.filename, "TypeError: " ++ fmt, args);
+    token.showError(self.ctx.filename, self.ctx.src, "TypeError: " ++ fmt, args);
     return error.TypeLinkError;
   }
 

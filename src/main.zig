@@ -19,12 +19,12 @@ fn doTest(src: []const u8) !value.Value {
   const filename = "test.nova";
   var parser = parse.Parser.init(src, filename, &cna);
   const node = parser.parse();
-  var tych = check.TypeChecker.init(cna.getArenaAllocator(), "test.nova");
+  var tych = check.TypeChecker.init(cna.getArenaAllocator(), "test.nova", src);
   try tych.typecheck(node);
   var code = value.Code.init();
   var cpu = vm.VM.init(&cna, &code);
   defer cpu.deinit(); // don't deinit for now.
-  var compiler = compile.Compiler.init(node, filename, &cpu, &code, &cna);
+  var compiler = compile.Compiler.init(node, filename, src, &cpu, &code, &cna);
   compiler.compile();
   debug.Disassembler.disCode(code, "test");
   try cpu.run();

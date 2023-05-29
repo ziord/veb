@@ -93,6 +93,7 @@ pub const TokenType = enum (u8) {
   TkContinue,       // continue
   TkNumber,         // <number>
   TkString,         // <string>
+  TkAllocString,    // <string>
   TkIdent,          // <identifier>
   TkErr,            // <error>
   TkEof,            // <eof>
@@ -204,7 +205,7 @@ pub const TokenType = enum (u8) {
       .TkReturn => "return",
       .TkContinue => "continue",
       .TkNumber => "<number>",
-      .TkString => "<string>",
+      .TkString, .TkAllocString => "<string>",
       .TkIdent => "<identifier>",
       .TkErr => "<error>",
       .TkEof => "<eof>",
@@ -286,12 +287,8 @@ pub const Optr = struct {
 pub const Token = struct {
   ty: TokenType,
   line: usize,
-  column: usize,
   offset: usize,
   value: []const u8,
-  src: []const u8,
-  msg: ?[]const u8,
-  is_alloc: bool = false,
 
   pub inline fn is(self: @This(), ty: TokenType) bool {
     return self.ty == ty;
@@ -315,23 +312,36 @@ pub const Token = struct {
     return try std.fmt.parseFloat(f64, self.value);
   }
 
-  pub fn getLine(self: @This()) []const u8 {
-    var offset: usize = if (self.ty == .TkNewline) self.offset - 1 else self.offset;
+  pub fn column(self: @This(), src: []const u8) usize {
+    return (
+      if (std.mem.lastIndexOf(u8, src[0..self.offset], "\n")) |col|
+        self.offset - col - 1
+      else 
+        self.offset
+    ) + self.value.len;
+  }
+
+  pub fn isAlloc(self: @This()) bool {
+    return self.ty == .TkAllocString;
+  }
+
+  pub fn getLine(self: @This(), src: []const u8) []const u8 {
+    var offset: usize = if (self.ty == .TkNewline or self.ty == .TkEof) self.offset - 1 else self.offset;
     // walk backwards
     var start_col: usize = offset;
     while (start_col > 0): (start_col -= 1) {
-      if (self.src[start_col] == '\n') {
+      if (src[start_col] == '\n') {
         start_col += 1;
         break;
       }
     }
     var end_col: usize = start_col;
     // walk forwards
-    for (self.src[start_col..]) |ch| {
+    for (src[start_col..]) |ch| {
       if (ch == '\n') break;
       end_col += 1;
     }
-    return self.src[start_col..end_col];
+    return src[start_col..end_col];
   }
 
   fn printSquig(self: @This(), i: usize) void {
@@ -347,12 +357,8 @@ pub const Token = struct {
     return Token {
       .ty = TokenType.TkEof,
       .value = "",
-      .msg = null,
       .line = 0,
-      .column = 0,
       .offset = 0,
-      .src = "",
-      .is_alloc = false,
     };
   }
 
@@ -362,17 +368,18 @@ pub const Token = struct {
     return new;
   }
 
-  pub fn showError(self: @This(), filename: []const u8, comptime fmt: []const u8, args: anytype) void {
-    var line = self.getLine();
+  pub fn showError(self: @This(), filename: []const u8, src: []const u8, comptime fmt: []const u8, args: anytype) void {
+    var loc = self.getLine(src);
+    var col = self.column(src);
     std.debug.print(fmt ++ "\n", args);
-    std.debug.print("{s}.{}:{}:\n\t{s}\n", .{filename, self.line, self.column, line});
+    std.debug.print("{s}.{}:{}:\n\t{s}\n", .{filename, self.line, col, loc});
     std.debug.print("\t", .{});
-    var i = if (self.column >= self.value.len) self.column - self.value.len else self.value.len - self.column;
+    var i = if (col >= self.value.len) col - self.value.len else self.value.len - col;
     while (i > 0) {
       std.debug.print(" ", .{});
       i -= 1;
     }
-    self.printSquig(self.value.len);
+    self.printSquig(if (self.value.len != 0) self.value.len else 1);
     std.debug.print("\n", .{});
   }
 };
@@ -434,10 +441,7 @@ pub const Lexer = struct {
     return Token {
       .ty = ty,
       .line = self.line,
-      .column = self.column - 1,
       .value = self.src[self.start..self.current],
-      .msg = null,
-      .src = self.src,
       .offset = self.start,
     };
   }
@@ -448,7 +452,7 @@ pub const Lexer = struct {
 
   fn errToken(self: *Self, cause: ?[]const u8) Token {
     var token = self.newToken(.TkErr);
-    token.msg = cause orelse "Illegal token";
+    token.value = cause orelse "Illegal token";
     return token;
   }
 
@@ -537,7 +541,7 @@ pub const Lexer = struct {
       // "0x" hex_int
       // hex_int -> [0-9a-fA-F] '_'? hex_int
       self.adv(); // skip 'x'
-      err_token.msg = "Invalid hex literal";
+      err_token.value = "Invalid hex literal";
       if (std.ascii.isHex(self.peek())) {
         while (std.ascii.isHex(self.peek())) {
           self.adv();
@@ -681,7 +685,7 @@ pub const Lexer = struct {
       i += 1;
     }
     token.value = buf;
-    token.is_alloc = true;
+    token.ty = .TkAllocString;
     return token;
   }
 

@@ -15,32 +15,36 @@ pub const DiagData = struct {
 
 pub const Diagnostic = struct {
   data: std.ArrayList(DiagData),
+  filename: []const u8,
+  src: []const u8,
 
   const Self = @This();
 
-  pub fn init(allocator: std.mem.Allocator) Self {
-    return Self {.data = std.ArrayList(DiagData).init(allocator)};
+  pub fn init(allocator: std.mem.Allocator, filename: []const u8, src: []const u8) Self {
+    return Self {.data = std.ArrayList(DiagData).init(allocator), .filename = filename, .src = src};
   }
 
-  fn pushData(self: *Self, level: DiagLevel, token: Token, filename: []const u8, comptime fmt: []const u8, args: anytype) !void {
+  fn pushData(self: *Self, level: DiagLevel, token: Token, comptime fmt: []const u8, args: anytype)
+  !void {
     var allocator = self.data.allocator;
+    var col = token.column(self.src);
     try self.data.append(.{.level = level, .msg = try std.fmt.allocPrint(allocator, fmt ++ "\n", args)});
     try self.data.append(
       .{
         .level = level,
         .msg = try std.fmt.allocPrint(
           allocator, "{s}.{}:{}:\n\t{s}\n",
-          .{filename, token.line, token.column, token.getLine()}
+          .{self.filename, token.line,col, token.getLine(self.src)}
         )
       }
     );
     try self.data.append(.{.level = level, .msg = "\t"});
-    var i = if (token.column >= token.value.len) token.column - token.value.len else token.value.len - token.column;
+    var i = if (col >= token.value.len) col - token.value.len else token.value.len - col;
     while (i > 0) {
       try self.data.append(.{.level = level, .msg = " "});
       i -= 1;
     }
-    try self.printSquig(level, token.value.len);
+    try self.printSquig(level, if (token.value.len != 0) token.value.len else 1);
     try self.data.append(.{.level = level, .msg = "\n\n"});
   }
 
@@ -75,8 +79,9 @@ pub const Diagnostic = struct {
     }
   }
 
-  pub fn addDiagnostics(self: *Self, level: DiagLevel, token: Token, filename: []const u8, comptime fmt: []const u8, args: anytype) void {
-    self.pushData(level, token, filename, fmt, args) catch |e| {
+  pub fn addDiagnostics(self: *Self, level: DiagLevel, token: Token, comptime fmt: []const u8, args: anytype)
+  void {
+    self.pushData(level, token, fmt, args) catch |e| {
       std.debug.print("Could not add diagnostic: {}", .{e});
     };
   }

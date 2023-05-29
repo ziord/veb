@@ -18,7 +18,7 @@ fn doTest(src: []const u8) !value.Value {
   defer cna.deinit();
   const filename = "test.nova";
   var parser = parse.Parser.init(src, filename, &cna);
-  const node = parser.parse();
+  const node = try parser.parse();
   var tych = check.TypeChecker.init(cna.getArenaAllocator(), "test.nova", src);
   try tych.typecheck(node);
   var code = value.Code.init();

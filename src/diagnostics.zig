@@ -69,6 +69,10 @@ pub const Diagnostic = struct {
     return self.has(.DiagError);
   }
 
+  pub fn hasAny(self: *Self) bool {
+    return self.data.items.len > 0;
+  }
+
   pub inline fn count(self: *Self) usize {
     return self.data.items.len;
   }

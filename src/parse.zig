@@ -3,6 +3,7 @@ const lex = @import("lex.zig");
 const ast = @import("ast.zig");
 const types = @import("type.zig");
 const util = @import("util.zig");
+const diagnostics = @import("diagnostics.zig");
 const CnAllocator = @import("allocator.zig");
 
 const Node = ast.AstNode;
@@ -13,6 +14,7 @@ const Generic = types.Generic;
 const Union = types.Union;
 const Variable = types.Variable;
 const Concrete = types.Concrete;
+const Diagnostic = diagnostics.Diagnostic;
 
 // maximum number of elements of a list literal 
 const MAX_LISTING_ELEMS = 0xff;
@@ -29,6 +31,7 @@ pub const Parser = struct {
   using_is: u32 = 0,
   in_cast: u32 = 0,
   loops: u32 = 0,
+  diag: Diagnostic,
 
   const Self = @This();
 
@@ -50,8 +53,9 @@ pub const Parser = struct {
     Call,        // ()
     Access,      // [], ., as
   };
-  const PrefixFn = *const fn (*Self, bool) *Node;
-  const InfixFn = *const fn (*Self, *Node, bool) *Node;
+  const ParseError = error{ParseError};
+  const PrefixFn = *const fn (*Self, bool) anyerror!*Node;
+  const InfixFn = *const fn (*Self, *Node, bool) anyerror!*Node;
   const ExprParseTable = struct {
     bp: BindingPower,
     prefix: ?PrefixFn,
@@ -125,43 +129,44 @@ pub const Parser = struct {
   };
 
   pub fn init(src: []const u8, filename: []const u8, allocator: *CnAllocator) Self {
+    var al = allocator.getArenaAllocator();
     return Self {
       .current_tok = undefined,
       .previous_tok = undefined,
       .lexer = lex.Lexer.init(src, allocator),
       .cna = allocator,
       .filename = filename,
+      .diag = Diagnostic.init(al, filename, src),
       // use the arena allocator for allocating general nodes.
-      .allocator = allocator.getArenaAllocator(),
+      .allocator = al,
     };
   }
 
-  fn err(self: *Self, token: lex.Token, msg: []const u8) noreturn {
-    token.showError(self.filename, self.lexer.src, "ParseError: {s}", .{msg});
-    self.cna.deinitArena();
-    exit(1);
+  fn err(self: *Self, token: lex.Token, msg: []const u8) ParseError {
+    self.diag.addDiagnostics(.DiagError, token, "Error: {s}", .{msg});
+    return error.ParseError;
   }
 
-  fn advance(self: *Self) void {
+  fn advance(self: *Self) !void {
     self.previous_tok = self.current_tok;
     const tok = self.lexer.getToken();
     if (!tok.isErr()) {
       self.current_tok = tok;
     } else {
-      self.err(tok, tok.value);
+      return self.err(tok, tok.value);
     }
   }
 
-  fn consume(self: *Self, tty: lex.TokenType) void {
+  fn consume(self: *Self, tty: lex.TokenType) !void {
     if (self.check(tty)) {
-      self.advance();
+      try self.advance();
     } else {
       var buff: [1024]u8 = undefined;
       var msg = std.fmt.bufPrint(
         &buff,  "expected token '{s}', but found '{s}'", 
         .{tty.str(), self.current_tok.ty.str()}
       ) catch exit(1);
-      self.err(self.current_tok, msg);
+      return self.err(self.current_tok, msg);
     }
   }
 
@@ -178,7 +183,7 @@ pub const Parser = struct {
 
   inline fn match(self: *Self, ty: lex.TokenType) bool {
     if (self.check(ty)) {
-      self.advance();
+      self.advance() catch {};
       return true;
     }
     return false;
@@ -218,79 +223,79 @@ pub const Parser = struct {
     return self.using_is > 0 and self.in_cast == 0;
   }
 
-  inline fn consumeNlOrEof(self: *Self) void {
+  inline fn consumeNlOrEof(self: *Self) !void {
     // Try to consume Newline. 
     // If not, check that the current token is Eof, else error
     if (!self.match(.TkNewline)) {
       if (!self.check(.TkEof)) {
         // error, since we originally expected Newline
-        self.consume(.TkNewline);
+        try self.consume(.TkNewline);
       }
     }
   }
 
-  inline fn assertMaxElements(self: *Self, len: usize, msg: []const u8) void {
+  inline fn assertMaxElements(self: *Self, len: usize, msg: []const u8) !void {
     if (len > MAX_LISTING_ELEMS) {
-      self.err(self.current_tok, msg);
+      return self.err(self.current_tok, msg);
     }
   }
 
-  fn _parse(self: *Self, bp: BindingPower) *Node {
+  fn _parse(self: *Self, bp: BindingPower) !*Node {
     const prefix = ptable[@enumToInt(self.current_tok.ty)].prefix;
     if (prefix == null) {
-      self.err(self.current_tok, "invalid token for prefix");
+      return self.err(self.current_tok, "token found at an invalid prefix position");
     }
     const bp_val = @enumToInt(bp);
     const assignable = bp_val <= @enumToInt(BindingPower.Assignment);
-    var node = prefix.?(self, assignable);
+    var node = try prefix.?(self, assignable);
     while (bp_val < @enumToInt(ptable[@enumToInt(self.current_tok.ty)].bp)) {
       var infix = ptable[@enumToInt(self.current_tok.ty)].infix;
       if (infix == null) {
-        self.err(self.current_tok, "invalid token for infix");
+        return self.err(self.current_tok, "token found at an invalid infix position");
       }
-      node = infix.?(self, node, assignable);
+      node = try infix.?(self, node, assignable);
     }
     return node;
   }
 
-  fn literal(self: *Self, kind: lex.TokenType) ast.LiteralNode {
-    self.consume(kind);
+  fn literal(self: *Self, kind: lex.TokenType) !ast.LiteralNode {
+    try self.consume(kind);
     return  ast.LiteralNode.init(self.previous_tok);
   }
 
-  fn number(self: *Self, assignable: bool) *Node {
+  fn number(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     const node = self.newNode();
-    node.* = .{.AstNumber = self.literal(.TkNumber)};
+    node.* = .{.AstNumber = try self.literal(.TkNumber)};
     var token = node.AstNumber.token;
     node.AstNumber.value = token.parseNum() catch {
-      self.err(token, "invalid number token");
+      return self.err(token, "invalid number token");
     };
     return node;
   }
 
-  fn string(self: *Self, assignable: bool) *Node {
+  fn string(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     const node = self.newNode();
-    node.* = .{.AstString = self.literal(if (self.check(.TkString)) .TkString else .TkAllocString)};
+    node.* = .{.AstString = try self.literal(if (self.check(.TkString)) .TkString else .TkAllocString)};
     return node;
   }
 
-  fn boolean(self: *Self, assignable: bool) *Node {
+  fn boolean(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     var ty: lex.TokenType = if (self.check(.TkTrue)) .TkTrue else .TkFalse;
     const node = self.newNode();
-    node.* = .{.AstBool = self.literal(ty)};
+    node.* = .{.AstBool = try self.literal(ty)};
     return node;
   }
 
-  fn unary(self: *Self, assignable: bool) *Node {
+  fn unary(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     const bp = ptable[@enumToInt(self.current_tok.ty)].bp;
     const op = self.current_tok;
     const line_tok = self.current_tok;
-    self.advance();
-    const expr = self._parse(bp);
+    try self.advance();
+    const expr = try self._parse(bp);
     const node = self.newNode();
     // rewrite -expr to 0 - expr
     if (op.ty.optype() == .OpSub) {
@@ -308,26 +313,26 @@ pub const Parser = struct {
     return node;
   }
 
-  fn binary(self: *Self, lhs: *Node, assignable: bool) *Node {
+  fn binary(self: *Self, lhs: *Node, assignable: bool) !*Node {
     _ = assignable;
     const bp = ptable[@enumToInt(self.current_tok.ty)].bp;
     const op = self.current_tok;
-    self.advance();
-    const rhs = self._parse(bp);
+    try self.advance();
+    const rhs = try self._parse(bp);
     const node = self.newNode();
     node.* = .{.AstBinary = ast.BinaryNode.init(lhs, rhs, op)};
     return node;
   }
 
-  fn binIs(self: *Self, lhs: *Node, assignable: bool) *Node {
+  fn binIs(self: *Self, lhs: *Node, assignable: bool) !*Node {
     _ = assignable;
     self.incIs();
     const bp = ptable[@enumToInt(self.current_tok.ty)].bp;
     const op = self.current_tok;
-    self.advance();
+    try self.advance();
     var is_not = self.match(.TkNot);
     var not_token = self.previous_tok;
-    var rhs = self._parse(bp);
+    var rhs = try self._parse(bp);
     const node = self.newNode();
     // wrap nil literal as nil TypeNode
     if (rhs.isNilLiteral()) {
@@ -345,34 +350,34 @@ pub const Parser = struct {
     return node;
   }
 
-  fn casting(self: *Self, lhs: *Node, assignable: bool) *Node {
+  fn casting(self: *Self, lhs: *Node, assignable: bool) !*Node {
     _ = assignable;
-    self.consume(.TkAs);
+    try self.consume(.TkAs);
     self.in_cast += 1;
     const token = self.previous_tok;
-    const rhs = self.typing(false);
+    const rhs = try self.typing(false);
     const node = self.newNode();
     node.* = .{.AstCast = ast.CastNode.init(lhs, &rhs.AstNType, token)};
     self.in_cast -= 1;
     return node;
   }
 
-  fn grouping(self: *Self, assignable: bool) *Node {
+  fn grouping(self: *Self, assignable: bool) !*Node {
     self.incNl();
-    self.consume(.TkLBracket);
+    try self.consume(.TkLBracket);
     if (self.check(.TkRBracket)) {
-      return self.tupling(assignable, null);
+      return try self.tupling(assignable, null);
     }
-    const node = self.parseExpr();
+    const node = try self.parseExpr();
     if (self.match(.TkComma)) {
-      return self.tupling(assignable, node);
+      return try self.tupling(assignable, node);
     }
     self.decNl();
-    self.consume(.TkRBracket);
+    try self.consume(.TkRBracket);
     return node;
   }
 
-  fn tupling(self: *Self, assignable: bool, first: ?*Node) *Node {
+  fn tupling(self: *Self, assignable: bool, first: ?*Node) !*Node {
     _ = assignable;
     var node = self.newNode();
     node.* = .{.AstTuple = ast.ListNode.init(self.allocator, self.current_tok)};
@@ -381,100 +386,100 @@ pub const Parser = struct {
       tuple.append(elem);
     }
     while (!self.check(.TkEof) and !self.check(.TkRBracket)) {
-      tuple.append(self.parseExpr());
+      tuple.append(try self.parseExpr());
       if (!self.check(.TkRBracket)) {
-        self.consume(.TkComma);
+        try self.consume(.TkComma);
       }
-      self.assertMaxElements(
+      try self.assertMaxElements(
         tuple.len(),
         "maximum number of tuple elements exceeded"
       );
     }
     self.decNl();
-    self.consume(.TkRBracket);
+    try self.consume(.TkRBracket);
     return node;
   }
 
-  fn listing(self: *Self, assignable: bool) *Node {
+  fn listing(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     var node = self.newNode();
     node.* = .{.AstList = ast.ListNode.init(self.allocator, self.current_tok)};
     self.incNl();
-    self.consume(.TkLSqrBracket);
+    try self.consume(.TkLSqrBracket);
     var list = &node.*.AstList.elems;
     while (!self.check(.TkEof) and !self.check(.TkRSqrBracket)) {
       if (list.len() > 0) {
-        self.consume(.TkComma);
+        try self.consume(.TkComma);
         if (self.check(.TkRSqrBracket)) {
           break;
         }
       }
-      self.assertMaxElements(
+      try self.assertMaxElements(
         list.len(),
         "maximum number of list elements exceeded"
       );
-      list.append(self.parseExpr());
+      list.append(try self.parseExpr());
     }
     self.decNl();
-    self.consume(.TkRSqrBracket);
+    try self.consume(.TkRSqrBracket);
     return node;
   }
 
-  fn mapping(self: *Self, assignable: bool) *Node {
+  fn mapping(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     var node = self.newNode();
     node.* = .{.AstMap = ast.MapNode.init(self.allocator, self.current_tok)};
     self.incNl();
-    self.consume(.TkLCurly);
+    try self.consume(.TkLCurly);
     var pairs = &node.*.AstMap.pairs;
     const max_items: usize = MAX_LISTING_ELEMS / 2;
     while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
       if (pairs.len() > 0) {
-        self.consume(.TkComma);
+        try self.consume(.TkComma);
         if (self.check(.TkRCurly)) {
           break;
         }
       }
-      self.assertMaxElements(
+      try self.assertMaxElements(
         pairs.len(),
         "maximum number of map elements exceeded"
       );
       if (pairs.len() > max_items) {
-        self.err(self.current_tok, "maximum number of map items exceeded");
+        return self.err(self.current_tok, "maximum number of map items exceeded");
       }
-      var key = self.parseExpr();
-      self.consume(.TkColon);
-      var val = self.parseExpr();
+      var key = try self.parseExpr();
+      try self.consume(.TkColon);
+      var val = try self.parseExpr();
       pairs.append(.{.key = key, .value = val});
     }
     self.decNl();
-    self.consume(.TkRCurly);
+    try self.consume(.TkRCurly);
     return node;
   }
 
-  fn indexing(self: *Self, left: *Node, assignable: bool) *Node {
+  fn indexing(self: *Self, left: *Node, assignable: bool) !*Node {
     self.incNl();
-    self.consume(.TkLSqrBracket);
+    try self.consume(.TkLSqrBracket);
     var token = self.current_tok;
-    var index = self.parseExpr();
+    var index = try self.parseExpr();
     self.decNl();
-    self.consume(.TkRSqrBracket);
+    try self.consume(.TkRSqrBracket);
     var node = self.newNode();
     node.* = .{.AstSubscript = ast.SubscriptNode.init(left, index, token)};
-    return self.handleAugAssign(node, assignable);
+    return try self.handleAugAssign(node, assignable);
   }
 
-  fn dotderef(self: *Self, left: *Node, assignable: bool) *Node {
+  fn dotderef(self: *Self, left: *Node, assignable: bool) !*Node {
     // expr.?
     var token = self.current_tok;
-    self.consume(.TkDot);
-    self.consume(.TkQMark);
+    try self.consume(.TkDot);
+    try self.consume(.TkQMark);
     var node = self.newNode();
     node.* = .{.AstDeref = ast.DerefNode.init(left, token)};
-    return self.handleAugAssign(node, assignable);
+    return try self.handleAugAssign(node, assignable);
   }
 
-  fn handleAugAssign(self: *Self, left: *Node, assignable: bool) *Node {
+  fn handleAugAssign(self: *Self, left: *Node, assignable: bool) !*Node {
     // assignments are not expressions, but statements
     if (!assignable) return left;
     var node = left;
@@ -482,10 +487,10 @@ pub const Parser = struct {
       // +=, -=, ...=
       // e.g. var += expr => var = var + expr;
       var op_sign = self.current_tok;
-      self.advance(); // skip assignlike op
+      try self.advance(); // skip assignlike op
       var op_eq = self.current_tok;
-      self.advance(); // skip '=' op
-      var value = self.parseExpr();
+      try self.advance(); // skip '=' op
+      var value = try self.parseExpr();
       var right = self.newNode();
       right.* = .{.AstBinary = ast.BinaryNode.init(left, value, op_sign)};
       node = self.newNode();
@@ -494,19 +499,19 @@ pub const Parser = struct {
         right, op_eq
       )};
       // only ascertain that a newline or eof is present, if not, error
-      if (!self.check(.TkNewline) and !self.check(.TkEof)) self.consumeNlOrEof();
+      if (!self.check(.TkNewline) and !self.check(.TkEof)) try self.consumeNlOrEof();
       // if present, exprStmt() would consume it for us.
       return node;
     } else if (self.match(.TkEqual)) {
       var token = self.previous_tok;
-      var value = self.parseExpr();
+      var value = try self.parseExpr();
       node = self.newNode();
       node.* = .{.AstAssign = ast.BinaryNode.init(
         if (left.isDeref()) left.AstDeref.expr else left,
         value, token
       )};
       // only ascertain that a newline or eof is present, if not, error
-      if (!self.check(.TkNewline) and !self.check(.TkEof)) self.consumeNlOrEof();
+      if (!self.check(.TkNewline) and !self.check(.TkEof)) try self.consumeNlOrEof();
       // if present, exprStmt() would consume it for us.
       return node;
     } else {
@@ -514,28 +519,28 @@ pub const Parser = struct {
     }
   }
 
-  fn variable(self: *Self, assignable: bool) *Node {
-    self.consume(.TkIdent);
+  fn variable(self: *Self, assignable: bool) !*Node {
+    try self.consume(.TkIdent);
     var ident = self.previous_tok;
     var node = self.newNode();
     node.* = .{.AstVar = ast.VarNode.init(ident)};
-    return self.handleAugAssign(node, assignable);
+    return try self.handleAugAssign(node, assignable);
   }
 
-  fn nullable(self: *Self, assignable: bool) *Node {
+  fn nullable(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     var node = self.newNode();
-    node.* = .{.AstNil = self.literal(.TkNil)};
+    node.* = .{.AstNil = try self.literal(.TkNil)};
     return node;
   }
 
-  inline fn assertMaxTParams(self: *Self, typ: *Generic) void {
+  inline fn assertMaxTParams(self: *Self, typ: *Generic) !void {
     if (typ.tparams.len() >= types.MAX_TPARAMS) {
-      self.err(self.current_tok, "maximum type parameters exceeded");
+      return self.err(self.current_tok, "maximum type parameters exceeded");
     }
   }
 
-  inline fn assertBuiltinExpTParams(self: *Self, typ: *Generic) void {
+  inline fn assertBuiltinExpTParams(self: *Self, typ: *Generic) !void {
     if (typ.base.isSimple()) {
       var conc = typ.base.kind.Concrete;
       if (conc.tkind == .TyClass) {
@@ -548,83 +553,83 @@ pub const Parser = struct {
           else return
         );
         if (typ.tparams.len() != exp) {
-          self.err(tok, "generic type instantiated with wrong number of paramters");
+          return self.err(tok, "generic type instantiated with wrong number of paramters");
         }
       }
     }
-    self.assertNonEmptyTParams(typ);
+    try self.assertNonEmptyTParams(typ);
   }
 
-  inline fn assertNonEmptyTParams(self: *Self, typ: *Generic) void {
+  inline fn assertNonEmptyTParams(self: *Self, typ: *Generic) !void {
     if (typ.tparams.len() == 0) {
-      self.err(self.previous_tok, "empty type parameters not allowed");
+      return self.err(self.previous_tok, "empty type parameters not allowed");
     }
   }
 
-  inline fn assertUniqueTParams(self: *Self, alias: *Generic, param: *Type) void {
+  inline fn assertUniqueTParams(self: *Self, alias: *Generic, param: *Type) !void {
     for (alias.getSlice()) |typ| {
       // `param` and `typ` have Variable.tokens equal to size 1.
       var token = param.variable().tokens.getLast();
       if (std.mem.eql(u8, typ.variable().tokens.getLast().value, token.value)) {
-        self.err(token, "redefinition of alias type parameter");
+        return self.err(token, "redefinition of alias type parameter");
       }
     }
   }
 
-  fn aliasParam(self: *Self) Type {
+  fn aliasParam(self: *Self) !Type {
     var debug = self.current_tok;
-    self.consume(.TkIdent);
+    try self.consume(.TkIdent);
     var typ = Type.newVariable(self.allocator, debug);
     typ.variable().append(debug);
     if (self.check(.TkDot)) {
-      self.err(self.current_tok, "expected single identifier, found multiple");
+      return self.err(self.current_tok, "expected single identifier, found multiple");
     }
     return typ;
   }
 
-  fn abstractType(self: *Self) Type {
+  fn abstractType(self: *Self) !Type {
     // AbstractType := TypeName
     // TypeName    := Ident TypeParams?
     // TypeParams  := "{" Ident ( "," Ident )* "}"
-    self.consume(.TkIdent);
+    try self.consume(.TkIdent);
     var typ = Type.newVariable(self.allocator, self.previous_tok);
     typ.variable().append(self.previous_tok);
     if (self.match(.TkLCurly)) {
       var gen = Generic.init(self.allocator, typ.box(self.allocator));
       while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
-        if (gen.tparams.len() > 0) self.consume(.TkComma);
-        self.assertMaxTParams(&gen);
-        var param = self.aliasParam();
-        self.assertUniqueTParams(&gen, &param);
+        if (gen.tparams.len() > 0) try self.consume(.TkComma);
+        try self.assertMaxTParams(&gen);
+        var param = try self.aliasParam();
+        try self.assertUniqueTParams(&gen, &param);
         gen.append(param.box(self.allocator));
       }
-      self.assertNonEmptyTParams(&gen);
-      self.consume(.TkRCurly);
+      try self.assertNonEmptyTParams(&gen);
+      try self.consume(.TkRCurly);
       return gen.toType(self.previous_tok);
     }
     return typ;
   }
 
-  fn constantType(self: *Self) Type {
+  fn constantType(self: *Self) !Type {
     // Constant  := StringLiteral | BooleanLiteral | NumberLiteral
     var kind: TypeKind = switch (self.current_tok.ty) {
       .TkTrue, .TkFalse => .TyBool, 
       .TkNumber => .TyNumber,
       .TkString, .TkAllocString => .TyString,
       else => {
-        self.err(self.current_tok, "invalid type-start");
+        return self.err(self.current_tok, "invalid type-start");
       }
     };
     // direct 'unit' types such as listed above do not need names
     var typ = Type.newConstant(kind, self.current_tok.value, self.current_tok);
-    self.advance();
+    try self.advance();
     return typ;
   }
 
-  fn builtinType(self: *Self) Type {
+  fn builtinType(self: *Self) !Type {
     // handle builtin list/map/tuple type
     var debug = self.current_tok;
-    self.advance();
+    try self.advance();
     var tvar = Variable.init(self.allocator);
     tvar.append(debug);
     var conc = Type.newConcrete(.TyClass, debug.value, debug);
@@ -633,58 +638,58 @@ pub const Parser = struct {
     return Type.newGeneric(self.allocator, conc.box(self.allocator), debug);
   }
 
-  fn refType(self: *Self) Type {
-    self.consume(.TkIdent);
+  fn refType(self: *Self) !Type {
+    try self.consume(.TkIdent);
     var typ = Type.newVariable(self.allocator, self.previous_tok);
     typ.variable().append(self.previous_tok);
     while (self.match(.TkDot)) {
-      self.consume(.TkIdent);
+      try self.consume(.TkIdent);
       typ.variable().append(self.previous_tok);
     }
     return typ;
   }
 
-  fn builtinOrRefType(self: *Self) Type {
+  fn builtinOrRefType(self: *Self) !Type {
     if (self.check(.TkIdent)) {
-      return self.refType();
+      return try self.refType();
     } else if (self.check(.TkList) or self.check(.TkMap) or self.check(.TkTuple)) {
-      return self.builtinType();
+      return try self.builtinType();
     }
     var tkind: TypeKind = switch (self.current_tok.ty) {
       .TkBool => .TyBool,
       .TkNum => .TyNumber,
       .TkStr => .TyString,
       // TODO: func, method, class, instance
-      else => return self.constantType(),
+      else => return try self.constantType(),
     };
 
     // direct 'unit' types such as listed above do not need names
     var typ = Type.newConcrete(tkind, null, self.current_tok);
-    self.advance();
+    try self.advance();
     return typ;
   }
 
-  fn tPrimary(self: *Self) Type {
+  fn tPrimary(self: *Self) ParseError!Type {
     // Primary  :=  Builtin | Reference | Constant | “(“ Expression “)”
     var typ: Type = undefined;
     if (self.match(.TkLBracket)) {
-      typ = self.tExpr();
-      self.consume(.TkRBracket);
+      typ = try self.tExpr();
+      try self.consume(.TkRBracket);
     } else {
-      typ = self.builtinOrRefType();
+      typ = try self.builtinOrRefType();
     }
     return typ;
   }
 
-  fn tGeneric(self: *Self) Type {
+  fn tGeneric(self: *Self) ParseError!Type {
     // Generic := ( Primary | Primary "{" Expression ( "," Expression )* "}" ) "?"?
-    var typ = self.tPrimary();
+    var typ = try self.tPrimary();
     if (self.parsingIs()) {
       return typ;
     }
     if (self.match(.TkLCurly)) {
       if (typ.isSimple()) {
-        self.err(self.previous_tok, "cannot instantiate simple type as generic");
+        return self.err(self.previous_tok, "cannot instantiate simple type as generic");
       }
       var gen: *Generic = undefined;
       var ret: Type = undefined;
@@ -696,18 +701,18 @@ pub const Parser = struct {
       }
       gen = ret.generic();
       while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
-        if (gen.tparams.len() > 0) self.consume(.TkComma);
-        self.assertMaxTParams(gen);
-        var param = self.tExpr();
+        if (gen.tparams.len() > 0) try self.consume(.TkComma);
+        try self.assertMaxTParams(gen);
+        var param = try self.tExpr();
         gen.append(param.box(self.allocator));
       }
-      self.assertNonEmptyTParams(gen);
+      try self.assertNonEmptyTParams(gen);
       // check that builtin generic types are properly instantiated
-      self.assertBuiltinExpTParams(gen);
-      self.consume(.TkRCurly);
+      try self.assertBuiltinExpTParams(gen);
+      try self.consume(.TkRCurly);
       typ = ret;
     } else if (typ.isGeneric()) {
-      self.assertBuiltinExpTParams(typ.generic());
+      try self.assertBuiltinExpTParams(typ.generic());
     }
     if (self.match(.TkQMark)) {
       typ = Type.newNullable(typ.box(self.allocator), self.previous_tok, self.allocator).*;
@@ -715,9 +720,9 @@ pub const Parser = struct {
     return typ;
   }
 
-  fn tUnion(self: *Self) Type {
+  fn tUnion(self: *Self) !Type {
     // Union := Generic ( “|” Generic )*
-    var typ = self.tGeneric();
+    var typ = try self.tGeneric();
     if (self.parsingIs()) {
       return typ;
     }
@@ -726,7 +731,7 @@ pub const Parser = struct {
       var uni = Union.init(self.allocator);
       uni.set(typ.box(self.allocator));
       while (self.match(.TkPipe)) {
-        typ = self.tGeneric();
+        typ = try self.tGeneric();
         uni.set(typ.box(self.allocator));
       }
       return uni.toType(token);
@@ -734,15 +739,15 @@ pub const Parser = struct {
     return typ;
   }
 
-  fn tExpr(self: *Self) Type {
+  fn tExpr(self: *Self) !Type {
     // Expression := Union
-    return self.tUnion();
+    return try self.tUnion();
   }
 
-  fn typing(self: *Self, assignable: bool) *Node {
+  fn typing(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     var token = self.current_tok;
-    var typ = self.tExpr();
+    var typ = try self.tExpr();
     var node = self.newNode();
     node.* = .{.AstNType = ast.TypeNode.init(typ, token)};
     return node;
@@ -760,6 +765,11 @@ pub const Parser = struct {
           },
           else => {}
         }
+        for (gen.tparams.items()) |item| {
+          if (self.checkGenericTParam(tvar, item)) |tok| {
+            return tok;
+          }
+        }
       },
       .Union => |*uni| {
         for (uni.variants.values()) |ty| {
@@ -768,24 +778,19 @@ pub const Parser = struct {
           }
         }
       },
-      // .Variable => |*vr| {
-      //   if (vr.eql(&tvar.kind.Variable)) {
-      //     return &vr.tokens.items[0];
-      //   }
-      // },
       else => {},
     }
     return null;
   }
 
-  fn assertNoGenericParameterTypeVariable(self: *Self, abs_ty: *Type, rhs_ty: *Type) void {
+  fn assertNoGenericParameterTypeVariable(self: *Self, abs_ty: *Type, rhs_ty: *Type) !void {
     // Check that no type variable in generic params of the type alias is used "generically" 
     // in the aliasee
     switch (abs_ty.kind) {
       .Generic => |*gen| {
         for (gen.getSlice()) |param| {
           if (self.checkGenericTParam(param, rhs_ty)) |tok| {
-            self.err(tok.*, "type variable in generic parameter cannot be generic");
+            return self.err(tok.*, "type variable in generic parameter cannot be generic");
           }
         }
       },
@@ -793,95 +798,95 @@ pub const Parser = struct {
     }
   }
 
-  fn assertNoDirectRecursiveAlias(self: *Self, abs_ty: *Type, rhs_ty: *Type) void {
+  fn assertNoDirectRecursiveAlias(self: *Self, abs_ty: *Type, rhs_ty: *Type) !void {
     // Check that type alias name is not used directly in the aliasee. This is not an in-depth
     // check, as it's possible for the alias to be meaningfully hidden in the aliasee.
     var lhs_ty = if (abs_ty.isGeneric()) abs_ty.generic().base else abs_ty;
     if (self.checkGenericTParam(lhs_ty, rhs_ty)) |tok| {
-      self.err(tok.*, "type alias cannot be used directly in the aliasee");
+      return self.err(tok.*, "type alias cannot be used directly in the aliasee");
     }
   }
 
-  fn typeAlias(self: *Self) *Node {
+  fn typeAlias(self: *Self) !*Node {
     // TypeAlias   := "type" AbstractType "=" ConcreteType
     var type_tok = self.previous_tok;
-    var alias_typ = self.abstractType();
+    var alias_typ = try self.abstractType();
     var alias = self.newNode();
     alias.* = .{.AstNType = ast.TypeNode.init(alias_typ, self.current_tok)};
-    self.consume(.TkEqual);
-    var aliasee = self.typing(false);
+    try self.consume(.TkEqual);
+    var aliasee = try self.typing(false);
     var node = self.newNode();
     // check that generic type variable parameters in `AbstractType` are not generic in `ConcreteType`
-    self.assertNoGenericParameterTypeVariable(&alias_typ, &aliasee.AstNType.typ);
+    try self.assertNoGenericParameterTypeVariable(&alias_typ, &aliasee.AstNType.typ);
     // TODO: should this be disallowed? It poses no issues at the moment.
     // self.assertNoDirectRecursiveAlias(&alias_typ, &aliasee.AstNType.typ);
     node.* = .{.AstAlias = ast.AliasNode.init(type_tok, &alias.AstNType, &aliasee.AstNType)};
-    self.consumeNlOrEof();
+    try self.consumeNlOrEof();
     return node;
   }
 
-  fn annotation(self: *Self, ident: *ast.VarNode) void {
+  fn annotation(self: *Self, ident: *ast.VarNode) !void {
     if (self.match(.TkColon)) {
-      var typ_node = &self.typing(false).AstNType;
+      var typ_node = &(try self.typing(false)).AstNType;
       typ_node.from_alias_or_annotation = true;
       typ_node.typ.ident = ident;
       ident.typ = &typ_node.typ;
     }
   }
 
-  fn parseExpr(self: *Self) *Node {
-    return self._parse(.Assignment);
+  fn parseExpr(self: *Self) !*Node {
+    return try self._parse(.Assignment);
   }
 
-  fn blockStmt(self: *Self, skip_do: bool) *Node {
+  fn blockStmt(self: *Self, skip_do: bool) !*Node {
     const line = self.current_tok.line;
-    if (!skip_do) self.consume(.TkDo);
-    self.consume(.TkNewline);
+    if (!skip_do) try self.consume(.TkDo);
+    try self.consume(.TkNewline);
     var node = self.newNode();
     node.* = .{.AstBlock = ast.BlockNode.init(self.allocator, line)};
     while (!self.check(.TkEof) and !self.check(.TkEnd)) {
-      node.AstBlock.nodes.append(self.statement());
+      node.AstBlock.nodes.append(try self.statement());
     }
-    self.consume(.TkEnd);
+    try self.consume(.TkEnd);
     // eat newline if present
     _ = self.match(.TkNewline);
     return node;
   }
 
-  fn varDecl(self: *Self) *Node {
+  fn varDecl(self: *Self) !*Node {
     // let var (: type)? = expr
-    self.consume(.TkIdent);
+    try self.consume(.TkIdent);
     var name = self.previous_tok;
     var ident = self.newNode();
     ident.* = .{.AstVar = ast.VarNode.init(name)};
-    self.annotation(&ident.*.AstVar);
-    self.consume(.TkEqual);
-    var val = self.parseExpr();
+    try self.annotation(&ident.*.AstVar);
+    try self.consume(.TkEqual);
+    var val = try self.parseExpr();
     var decl = self.newNode();
     decl.* = .{.AstVarDecl = ast.VarDeclNode.init(&ident.AstVar, val)};
-    self.consumeNlOrEof();
+    try self.consumeNlOrEof();
     return decl;
   }
 
-  fn ifStmt(self: *Self) *Node {
+  fn ifStmt(self: *Self) !*Node {
     // if expr then? nl body (elif expr then? nl body)* else nl body end
     var token = self.current_tok;
-    const cond = self.parseExpr();
+    const cond = try self.parseExpr();
     _ = self.match(.TkThen);
-    self.consume(.TkNewline);
+    try self.consume(.TkNewline);
     var then = ast.BlockNode.init(self.allocator, self.previous_tok.line);
     while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
-      then.nodes.append(self.statement());
+      then.nodes.append(try self.statement());
     }
     var elifs = ast.AstNodeList.init(self.allocator);
     while (self.match(.TkElif)) {
       var elif_token = self.previous_tok;
-      var elif_cond = self.parseExpr();
+      var elif_cond = try self.parseExpr();
       _ = self.match(.TkThen);
-      self.consume(.TkNewline);
+      try self.consume(.TkNewline);
       var elif_then = ast.BlockNode.init(self.allocator, self.previous_tok.line);
       while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
-        elif_then.nodes.append(self.statement());
+        elif_then.nodes.append(try self.statement());
       }
       var elif_then_node = self.newNode();
       var elif_node = self.newNode();
@@ -891,13 +896,13 @@ pub const Parser = struct {
     }
     var els = ast.BlockNode.init(self.allocator, self.previous_tok.line);
     if (self.match(.TkElse)) {
-      self.consume(.TkNewline);
+      try self.consume(.TkNewline);
       while (!self.check(.TkEof) and !self.check(.TkEnd)) {
-        els.nodes.append(self.statement());
+        els.nodes.append(try self.statement());
       }
     }
-    self.consume(.TkEnd);
-    self.consumeNlOrEof();
+    try self.consume(.TkEnd);
+    try self.consumeNlOrEof();
     var then_node = self.newNode();
     var els_node = self.newNode();
     var node = self.newNode();
@@ -907,37 +912,37 @@ pub const Parser = struct {
     return node;
   }
 
-  fn controlStmt(self: *Self) *Node {
+  fn controlStmt(self: *Self) !*Node {
     if (!self.inLoop()) {
-      self.err(self.current_tok, "control statement used outside loop");
+      return self.err(self.current_tok, "control statement used outside loop");
     }
     if (!self.match(.TkBreak)) {
-      self.consume(.TkContinue);
+      try self.consume(.TkContinue);
     }
     var node = self.newNode();
     node.* = .{.AstControl = ast.ControlNode.init(self.previous_tok)};
-    self.consumeNlOrEof();
+    try self.consumeNlOrEof();
     return node;
   }
 
-  fn whileStmt(self: *Self) *Node {
+  fn whileStmt(self: *Self) !*Node {
     // while cond do? ... end
     self.incLoop();
     var token = self.current_tok;
-    var cond = self.parseExpr();
-    var then = self.blockStmt(!self.check(.TkDo));
+    var cond = try self.parseExpr();
+    var then = try self.blockStmt(!self.check(.TkDo));
     self.decLoop();
     var node = self.newNode();
     node.* = .{.AstWhile = ast.WhileNode.init(cond, then, token)};
     return node;
   }
 
-  fn exprStmt(self: *Self) *Node {
+  fn exprStmt(self: *Self) !*Node {
     const line = self.current_tok.line;
-    const expr = self.parseExpr();
+    const expr = try self.parseExpr();
     const node = self.newNode();
     node.* = .{.AstExprStmt = ast.ExprStmtNode.init(expr, line)};
-    self.consumeNlOrEof();
+    try self.consumeNlOrEof();
     return node;
   }
 
@@ -945,31 +950,49 @@ pub const Parser = struct {
     return ast.BlockNode.newEmptyBlock(self.previous_tok.line, self.allocator);
   }
 
-  fn statement(self: *Self) *Node {
+  fn recover(self: *Self) void {
+    if (self.check(.TkNewline)) {
+      self.advance() catch {};
+      return;
+    }
+    while (!self.check(.TkEof) and !self.match(.TkNewline)) {
+      self.advance() catch {};
+    }
+  }
+
+  fn statement(self: *Self) !*Node {
     if (self.match(.TkLet)) {
-      return self.varDecl();
+      return try self.varDecl();
     } else if (self.match(.TkType)) {
-      return self.typeAlias();
+      return try self.typeAlias();
     } else if (self.check(.TkDo)) {
-      return self.blockStmt(false);
+      return try self.blockStmt(false);
     } else if (self.match(.TkNewline)) {
       return self.emptyStmt();
     } else if (self.match(.TkIf)) {
-      return self.ifStmt();
+      return try self.ifStmt();
     } else if (self.match(.TkWhile)) {
-      return self.whileStmt();
+      return try self.whileStmt();
     } else if (self.check(.TkBreak) or self.check(.TkContinue)) {
-      return self.controlStmt();
+      return try self.controlStmt();
     }
-    return self.exprStmt();
+    return try self.exprStmt();
   }
 
-  pub fn parse(self: *Self) *Node {
-    self.advance();
+  pub fn parse(self: *Self) !*Node {
+    self.advance() catch {};
     var program = self.newNode();
     program.* = .{.AstProgram = ast.ProgramNode.init(self.allocator, self.current_tok.line)};
     while (!self.match(.TkEof)) {
-      program.AstProgram.decls.append(self.statement());
+      var stmt = self.statement() catch blk: {
+        self.recover();
+        break :blk self.emptyStmt();
+      };
+      program.AstProgram.decls.append(stmt);
+    }
+    if (self.diag.hasAny()) {
+      self.diag.display();
+      program.AstProgram.decls.clearRetainingCapacity();
     }
     return program;
   }

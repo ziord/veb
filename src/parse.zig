@@ -25,13 +25,13 @@ pub const Parser = struct {
   previous_tok: lex.Token,
   lexer: lex.Lexer,
   allocator: std.mem.Allocator,
+  diag: Diagnostic,
   cna: *CnAllocator,
   filename: []const u8,
   allow_nl: usize = 0,
   using_is: u32 = 0,
   in_cast: u32 = 0,
   loops: u32 = 0,
-  diag: Diagnostic,
 
   const Self = @This();
 
@@ -354,10 +354,9 @@ pub const Parser = struct {
     _ = assignable;
     try self.consume(.TkAs);
     self.in_cast += 1;
-    const token = self.previous_tok;
     const rhs = try self.typing(false);
     const node = self.newNode();
-    node.* = .{.AstCast = ast.CastNode.init(lhs, &rhs.AstNType, token)};
+    node.* = .{.AstCast = ast.CastNode.init(lhs, &rhs.AstNType)};
     self.in_cast -= 1;
     return node;
   }
@@ -460,12 +459,11 @@ pub const Parser = struct {
   fn indexing(self: *Self, left: *Node, assignable: bool) !*Node {
     self.incNl();
     try self.consume(.TkLSqrBracket);
-    var token = self.current_tok;
     var index = try self.parseExpr();
     self.decNl();
     try self.consume(.TkRSqrBracket);
     var node = self.newNode();
-    node.* = .{.AstSubscript = ast.SubscriptNode.init(left, index, token)};
+    node.* = .{.AstSubscript = ast.SubscriptNode.init(left, index)};
     return try self.handleAugAssign(node, assignable);
   }
 
@@ -870,7 +868,6 @@ pub const Parser = struct {
 
   fn ifStmt(self: *Self) !*Node {
     // if expr then? nl body (elif expr then? nl body)* else nl body end
-    var token = self.current_tok;
     const cond = try self.parseExpr();
     _ = self.match(.TkThen);
     try self.consume(.TkNewline);
@@ -880,7 +877,6 @@ pub const Parser = struct {
     }
     var elifs = ast.AstNodeList.init(self.allocator);
     while (self.match(.TkElif)) {
-      var elif_token = self.previous_tok;
       var elif_cond = try self.parseExpr();
       _ = self.match(.TkThen);
       try self.consume(.TkNewline);
@@ -891,7 +887,7 @@ pub const Parser = struct {
       var elif_then_node = self.newNode();
       var elif_node = self.newNode();
       elif_then_node.* = .{.AstBlock = elif_then};
-      elif_node.* = .{.AstElif = ast.ElifNode.init(elif_cond, elif_then_node, elif_token)};
+      elif_node.* = .{.AstElif = ast.ElifNode.init(elif_cond, elif_then_node)};
       elifs.append(elif_node);
     }
     var els = ast.BlockNode.init(self.allocator, self.previous_tok.line);
@@ -908,7 +904,7 @@ pub const Parser = struct {
     var node = self.newNode();
     then_node.* = .{.AstBlock = then};
     els_node.* = .{.AstBlock = els};
-    node.* = .{.AstIf = ast.IfNode.init(cond, then_node, elifs, els_node, token)};
+    node.* = .{.AstIf = ast.IfNode.init(cond, then_node, elifs, els_node)};
     return node;
   }
 
@@ -928,12 +924,11 @@ pub const Parser = struct {
   fn whileStmt(self: *Self) !*Node {
     // while cond do? ... end
     self.incLoop();
-    var token = self.current_tok;
     var cond = try self.parseExpr();
     var then = try self.blockStmt(!self.check(.TkDo));
     self.decLoop();
     var node = self.newNode();
-    node.* = .{.AstWhile = ast.WhileNode.init(cond, then, token)};
+    node.* = .{.AstWhile = ast.WhileNode.init(cond, then)};
     return node;
   }
 

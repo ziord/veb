@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const util = @import("util.zig");
+const diagnostics = @import("diagnostics.zig");
 const ds = @import("ds.zig");
 pub const types = @import("type.zig");
 pub const Token = @import("lex.zig").Token;
@@ -13,6 +14,7 @@ pub const Generic = types.Generic;
 pub const Variable = types.Variable;
 pub const Recursive = types.Recursive;
 pub const Node = ast.AstNode;
+const Diagnostic = diagnostics.Diagnostic;
 
 fn CreateMap(comptime K: type, comptime V: type) type {
   return struct {
@@ -175,6 +177,7 @@ pub const TypeLinker = struct {
   cyc_scope: PairScope,
   /// resolving an infinite/recursive type?
   in_inf: bool = false,
+  diag: Diagnostic,
 
   const MultiPair = struct {setter: *Type, key: *Type, value: *Type};
   const PairScope = GenScope([]const u8, MultiPair);
@@ -185,14 +188,15 @@ pub const TypeLinker = struct {
   const Self = @This();
 
   pub fn init(allocator: std.mem.Allocator, filename: []const u8, src: []const u8) @This() {
-    return Self { 
+    return Self {
       .ctx = TContext.init(allocator, filename, src),
-      .cyc_scope = PairScope.init(allocator)
+      .cyc_scope = PairScope.init(allocator),
+      .diag = Diagnostic.init(allocator, filename, src),
     };
   }
 
   fn error_(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) TypeLinkError {
-    token.showError(self.ctx.filename, self.ctx.src, "TypeError: " ++ fmt, args);
+    self.diag.addDiagnostics(.DiagError, token, "Error: " ++ fmt, args);
     return error.TypeLinkError;
   }
 
@@ -267,7 +271,7 @@ pub const TypeLinker = struct {
     if (self.findType(typ, from_gen)) |found| {
       return found;
     } else {
-      return self.error_(typ.debug, "Could not resolve type with name: '{s}'", .{typ.getName()});
+      return self.error_(typ.debug, "could not resolve type with name: '{s}'", .{typ.getName()});
     }
   }
 
@@ -284,7 +288,7 @@ pub const TypeLinker = struct {
       if (!emit) return error.TypeLinkError;
       return self.error_(
         typ.debugToken(),
-        "Potentially infinite substitutions arising from probable self-referencing types", 
+        "potentially infinite substitutions arising from probable self-referencing types", 
         .{}
       );
     }
@@ -295,13 +299,13 @@ pub const TypeLinker = struct {
     if (!alias.isGeneric()) {
       return self.error_(
         typ.debug,
-        "Type alias is not generic, but instantiated with {} parameters", 
+        "type alias is not generic, but instantiated with {} parameters", 
         .{typ.generic().tparams_len()},
       );
     } else if (!typ.isGeneric()) {
       return self.error_(
         typ.debug,
-        "Type alias is generic, but used without instantiation", 
+        "type alias is generic, but used without instantiation", 
         .{},
       );
     }
@@ -310,7 +314,7 @@ pub const TypeLinker = struct {
     if (l_gen.tparams_len() != r_gen.tparams_len()) {
       return self.error_(
         typ.debug,
-        "Parameter mismatch in generic type instantiation. Expected {} generic argument(s), got {}", 
+        "parameter mismatch in generic type instantiation. Expected {} generic argument(s), got {}", 
         .{l_gen.tparams_len(), r_gen.tparams_len()},
       );
     }
@@ -387,7 +391,7 @@ pub const TypeLinker = struct {
           var rec = eqn.recursive();
           if (rec.base.alias_info) |alias_info| {
             if (!alias_info.lhs.isGeneric()) {
-              return self.error_(typ.debug, "Non-generic type instantiated as generic", .{});
+              return self.error_(typ.debug, "non-generic type instantiated as generic", .{});
             }
             // check that the tparams of this generic type matches it's type alias tparams exactly.
             try self.assertGenericAliasSubMatches(alias_info.lhs, typ);
@@ -459,7 +463,7 @@ pub const TypeLinker = struct {
           if (self.using_tvar == 0 or (eqn.isRecursive())) {
             return self.error_(
               typ.debug,
-              "Generic type '{s}' may not have been instantiated correctly",
+              "generic type '{s}' may not have been instantiated correctly",
               .{typ.typename(self.ctx.allocator)}
             );
           }
@@ -623,7 +627,7 @@ pub const TypeLinker = struct {
   fn linkProgram(self: *Self, node: *ast.ProgramNode) !void {
     self.ctx.enterScope();
     for (node.decls.items()) |item| {
-      try self.link(item);
+      self.link(item) catch {};
     }
     // only pop off varScope, since typScope needs to be 
     // reused by the type checker
@@ -660,6 +664,10 @@ pub const TypeLinker = struct {
   }
 
   pub fn linkTypes(self: *Self, node: *Node) !void {
-    try self.link(node);
+    self.link(node) catch {};
+    if (self.diag.hasAny()) {
+      self.diag.display();
+      return error.TypeLinkError;
+    }
   }
 };

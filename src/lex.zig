@@ -298,6 +298,10 @@ pub const Token = struct {
     return self.is(.TkEof);
   }
 
+  pub fn eql(self: @This(), other: @This()) bool {
+    return self.offset == other.offset and self.ty == other.ty;
+  }
+
   pub fn isErr(self: @This()) bool {
     return self.is(.TkErr);
   }

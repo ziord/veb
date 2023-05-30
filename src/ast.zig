@@ -77,20 +77,15 @@ pub const BinaryNode = struct {
 pub const SubscriptNode = struct {
   expr: *AstNode,
   index: *AstNode,
-  token: Token,
   narrowed: ?VarNode = null,
   typ: ?*Type = null,
 
-  pub fn init(expr: *AstNode, index: *AstNode, token: Token) @This() {
-    return @This() {
-      .expr = expr,
-      .index = index,
-      .token = token,
-    };
+  pub fn init(expr: *AstNode, index: *AstNode) @This() {
+    return @This() { .expr = expr, .index = index};
   }
 
   pub inline fn line(self: *@This()) usize {
-    return self.token.line;
+    return self.index.getToken().line;
   }
 };
 
@@ -240,10 +235,9 @@ pub const DerefNode = struct {
 
 pub const ConditionNode = struct {
   cond: *AstNode,
-  token: Token,
 
-  pub fn init(cond: *AstNode, token: Token) @This() {
-    return @This() {.cond = cond, .token = token};
+  pub fn init(cond: *AstNode) @This() {
+    return @This() {.cond = cond};
   }
 };
 
@@ -258,32 +252,29 @@ pub const EmptyNode = struct {
 pub const CastNode = struct {
   expr: *AstNode,
   typn: *TypeNode,
-  token: Token,
 
-  pub fn init(expr: *AstNode, typn: *TypeNode, token: Token) @This() {
-    return @This() {.expr = expr, .typn = typn, .token = token};
+  pub fn init(expr: *AstNode, typn: *TypeNode) @This() {
+    return @This() {.expr = expr, .typn = typn};
   }
 
   pub inline fn line(self: *@This()) usize {
-    return self.token.line;
+    return self.typn.token.line;
   }
 };
 
 pub const ElifNode = struct {
   cond: *AstNode,
   then: *AstNode,
-  token: Token,
 
-  pub fn init(cond: *AstNode, then: *AstNode, token: Token) @This() {
-    return @This() {.cond = cond, .then = then, .token = token};
+  pub fn init(cond: *AstNode, then: *AstNode) @This() {
+    return @This() {.cond = cond, .then = then};
   }
 
   pub fn toIf(self: *ElifNode, alloc: std.mem.Allocator) IfNode {
     var list = AstNodeList.init(alloc);
     return IfNode.init(
       self.cond, self.then, list,
-      BlockNode.newEmptyBlock(self.token.line, alloc),
-      self.token
+      BlockNode.newEmptyBlock(self.cond.getToken().line, alloc),
     );
   }
 };
@@ -293,10 +284,9 @@ pub const IfNode = struct {
   then: *AstNode,
   elifs: AstNodeList,
   els: *AstNode,
-  token: Token,
 
-  pub fn init(cond: *AstNode, then: *AstNode, elifs: AstNodeList, els: *AstNode, token: Token) @This() {
-    return @This() {.cond = cond, .then = then, .elifs = elifs, .els = els, .token = token};
+  pub fn init(cond: *AstNode, then: *AstNode, elifs: AstNodeList, els: *AstNode) @This() {
+    return @This() {.cond = cond, .then = then, .elifs = elifs, .els = els};
   }
 };
 
@@ -304,20 +294,18 @@ pub const SimpleIfNode = struct {
   cond: *AstNode,
   then: *AstNode,
   els: *AstNode,
-  token: Token,
 
-  pub fn init(cond: *AstNode, then: *AstNode, els: *AstNode, token: Token) @This() {
-    return @This() {.cond = cond, .then = then, .els = els, .token = token};
+  pub fn init(cond: *AstNode, then: *AstNode, els: *AstNode) @This() {
+    return @This() {.cond = cond, .then = then, .els = els};
   }
 };
 
 pub const WhileNode = struct {
   cond: *AstNode,
   then: *AstNode,
-  token: Token,
 
-  pub fn init(cond: *AstNode, then: *AstNode, token: Token) @This() {
-    return @This() {.cond = cond, .then = then, .token = token};
+  pub fn init(cond: *AstNode, then: *AstNode) @This() {
+    return @This() {.cond = cond, .then = then};
   }
 };
 
@@ -490,6 +478,37 @@ pub const AstNode = union(AstType) {
       .AstCondition => |cnd| cnd.cond.getType(),
       .AstBlock, .AstIf, .AstElif,
       .AstWhile, .AstControl => null,
+      else => unreachable,
+    };
+  }
+
+  pub fn getToken(self: *@This()) Token {
+    return switch (self.*) {
+      .AstNumber, .AstString, .AstBool, .AstNil => |lit| lit.token,
+      .AstBinary, .AstAssign => |bin| bin.op.token,
+      .AstUnary => |una| una.op.token,
+      .AstList, .AstTuple => |col| col.token,
+      .AstMap => |map| map.token,
+      .AstExprStmt => |stmt| stmt.expr.getToken(),
+      .AstVarDecl => |decl| decl.ident.token,
+      .AstVar => |id| id.token,
+      .AstNType => |typn| typn.token,
+      .AstAlias => |ali| ali.alias.token,
+      .AstCast => |cst| cst.typn.token,
+      .AstSubscript => |sub| sub.index.getToken(),
+      .AstDeref => |der| der.token,
+      .AstCondition => |cnd| cnd.cond.getToken(),
+      .AstControl => |ct| ct.token,
+      .AstIf => |ifn| ifn.cond.getToken(),
+      .AstElif => |elif| elif.cond.getToken(),
+      .AstWhile => |whi| whi.cond.getToken(),
+      .AstBlock => |*blk| {
+        if (blk.nodes.len() > 0) {
+          return blk.nodes.items()[0].getToken();
+        } else {
+          util.error_("Could not obtain token from node: {}", .{self});
+        }
+      },
       else => unreachable,
     };
   }

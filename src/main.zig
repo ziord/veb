@@ -465,6 +465,11 @@ test "if statement" {
   \\   p -= -1111
   \\ end
   \\ p == 1
+  \\ let x = 5
+  \\ let p = 'let'
+  \\ if (x > x) and !5 then
+  \\ end
+  \\ let z = 10
   ;
   _ = try doTest(src);
   // if-else

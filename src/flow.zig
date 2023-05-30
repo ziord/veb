@@ -132,9 +132,9 @@ pub const CFGBuilder = struct {
     return node;
   }
 
-  fn createConditionNode(self: *Self, cond: *Node, token: ast.Token) *Node {
+  fn createConditionNode(self: *Self, cond: *Node) *Node {
     var node = util.alloc(Node, self.allocator);
-    node.* = .{.AstCondition = ast.ConditionNode.init(cond, token)};
+    node.* = .{.AstCondition = ast.ConditionNode.init(cond)};
     return node;
   }
 
@@ -165,8 +165,7 @@ pub const CFGBuilder = struct {
     // if .. else (.. if .. else)
     var ifn = ast.SimpleIfNode.init(
       node.cond, node.then,
-      ast.BlockNode.newEmptyBlock(node.token.line, self.allocator),
-      node.token
+      ast.BlockNode.newEmptyBlock(node.cond.getToken().line, self.allocator)
     );
     var els: ?*Node = null;
     if (node.elifs.len() > 0) {
@@ -223,7 +222,7 @@ pub const CFGBuilder = struct {
 
   fn linkSimpleIf(self: *Self, ast_node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
     var node = &ast_node.AstSimpleIf;
-    var cond = self.createConditionNode(node.cond, node.token);
+    var cond = self.createConditionNode(node.cond);
     var flow = self.getFlowNode(cond, .CfgOther);
     self.connectVerticesWithEdgeInfo(prev, flow, edge);
     var flow_list = flow.toList(self.allocator);
@@ -253,7 +252,7 @@ pub const CFGBuilder = struct {
     // next (while-exit)
     var node = &ast_node.AstWhile;
     var curr_while_cond = self.curr_while_cond;
-    var cond = self.createConditionNode(node.cond, node.token);
+    var cond = self.createConditionNode(node.cond);
     var flow = self.getFlowNode(cond, .CfgOther);
     self.curr_while_cond = flow;
     // prev -> cond

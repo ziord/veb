@@ -583,7 +583,8 @@ pub const TypeChecker = struct {
   fn narrowUnary(self: *Self, node: *ast.UnaryNode, env: *TypeEnv, assume_true: bool) !void {
     if (node.op.optype == .OpNot) {
       try self.narrow(node.expr, env, !assume_true);
-      node.typ = node.expr.getType();
+      // at this point, node.expr typechecked successfully
+      node.typ = UnitTypes.bol.toType(node.op.token).box(self.allocator);
     } else {
       try self.narrow(node.expr, env, assume_true);
       _ = try self.inferUnary(node);
@@ -670,7 +671,7 @@ pub const TypeChecker = struct {
     env.global.pushScope();
     self.narrow(node.node.AstCondition.cond, &env, true) catch return error.TypeCheckError;
     // TODO: rework token extraction for better error reporting
-    try self.checkCondition(node.node.getType().?, node.node.AstCondition.token);
+    try self.checkCondition(node.node.getType().?, node.node.AstCondition.cond.getToken());
     // get all nodes on the true edges & flowInfer with env
     var out_nodes = node.getOutgoingNodes(.ETrue, self.allocator);
     self.copyEnv(&env);
@@ -897,7 +898,7 @@ pub const TypeChecker = struct {
     var typ = try self.infer(node.expr);
     var cast_typ = &node.typn.typ;
     // use coercion rules
-    return try self.checkCast(typ, cast_typ, node.token, true);
+    return try self.checkCast(typ, cast_typ, node.typn.token, true);
   }
 
   fn inferAssign(self: *Self, node: *ast.BinaryNode) !*Type {
@@ -975,7 +976,7 @@ pub const TypeChecker = struct {
     // fail fast
     if (!expr_ty.isGeneric()) {
       return self.error_(
-        true, node.token,
+        true, node.index.getToken(),
         "Type '{s}' is not indexable", .{self.getTypename(expr_ty)}
       );
     }
@@ -1016,14 +1017,14 @@ pub const TypeChecker = struct {
 
   fn inferWhile(self: *Self, node: *ast.WhileNode) !*Type {
     var ty = try self.infer(node.cond);
-    try self.checkCondition(ty, node.token);
+    try self.checkCondition(ty, node.cond.getToken());
     return try self.infer(node.then);
   }
 
   fn inferProgram(self: *Self, node: *ast.ProgramNode) !*Type {
     self.ctx.enterScope();
     for (node.decls.items()) |item| {
-      _ = try self.infer(item);
+      _ = self.infer(item) catch undefined;
     }
     self.ctx.leaveScope();
     // crash and burn
@@ -1125,22 +1126,23 @@ pub const TypeChecker = struct {
   }
 
   fn checkSubscript(self: *Self, node: *ast.SubscriptNode, expr_ty: *Type, index_ty: *Type) !void {
+    var token = node.index.getToken();
     if (!expr_ty.isListTy() and !expr_ty.isMapTy() and !expr_ty.isTupleTy()) {
       return self.error_(
-        true, node.token,
+        true, token,
         "Type '{s}' is not indexable", .{self.getTypename(expr_ty)}
       );
     }
     if (expr_ty.generic().tparams_len() == 0) {
       return self.error_(
-        true, node.token,
+        true, token,
         "Cannot index empty or non-specialized '{s}' type", .{self.getTypename(expr_ty)}
       );
     }
     if (expr_ty.isListTy() or expr_ty.isTupleTy()) {
       if (!index_ty.isNumTy()) {
         return self.error_(
-          true, node.token,
+          true, token,
           "Cannot index '{s}' type with type '{s}'",
           .{self.getTypename(expr_ty), self.getTypename(index_ty)}
         );
@@ -1154,7 +1156,7 @@ pub const TypeChecker = struct {
       var val_typ = gen.tparams.items()[1];
       _ = self.checkAssign(key_typ, index_ty, index_ty.debug, false) catch {
         return self.error_(
-          true, node.token,
+          true, token,
           "Cannot index type '{s}' with type '{s}'",
           .{self.getTypename(expr_ty), self.getTypename(index_ty)}
         );
@@ -1220,9 +1222,13 @@ pub const TypeChecker = struct {
     self.ctx.typScope = linker.ctx.typScope;
     var builder = CFGBuilder.init(node, self.allocator);
     self.cfg = builder.build();
-    self.flowInferEntry() catch |e| {
-      self.diag.display();
-      return e;
+    self.flowInferEntry() catch {
+      // just stack up as much errors as we can from here.
+      _ = self.infer(node) catch undefined;
     };
+    if (self.diag.hasAny()) {
+      self.diag.display();
+      return error.TypeCheckError;
+    }
   }
 };

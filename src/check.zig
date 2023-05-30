@@ -619,47 +619,30 @@ pub const TypeChecker = struct {
     // automatically resolved on entry
     node.res = .Resolved;
     // `entry` node, so we don't care about the `node` & `prev` properties
-    for (node.next.items()) |item| {
-      try self.flowInfer(item, true);
+    for (node.prev_next.items()) |item| {
+      if (item.next) {
+        try self.flowInfer(item.flo, true);
+      }
     }
   }
 
   fn flowInferExit(self: *Self, node: *FlowNode, inferNext: bool) !void {
     _ = inferNext;
     std.debug.assert(node.tag == .CfgExit);
-    for (node.prev.items()) |item| {
-      if (self.isFlowNodeUnresolved(item)) {
-        return;
-      }
-    }
     node.res = .Resolved;
     self.ctx.leaveScope();
-    std.debug.assert(node.next.len() == 0);
+    // assert no more nodes after exit
+    std.debug.assert(node.prev_next.count(FlowNode.isNext) == 0);
   }
 
   fn flowInferNode(self: *Self, node: *FlowNode, inferNext: bool) !void {
-    for (node.prev.items()) |item| {
-      // we can only proceed to resolve this node when all 
-      // incoming edges have been resolved or when we're resolving 
-      // all nodes on the true edges of a Condition.
-      if (self.isFlowNodeUnresolved(item)) {
-        return;
-      }
-    }
+    _ = inferNext;
     _ = try self.infer(node.node);
     node.res = .Resolved;
-    if (!inferNext) return;
-    for (node.next.items()) |item| {
-      try self.flowInfer(item, inferNext);
-    }
   }
 
   fn flowInferCondition(self: *Self, node: *FlowNode, inferNext: bool) !void {
-    for (node.prev.items()) |item| {
-      if (self.isFlowNodeUnresolved(item)) {
-        return;
-      }
-    }
+    _ = inferNext;
     node.res = .Processing;
     // TODO: is there a need to explicitly merge types from incoming edges?
     self.ctx.varScope.pushScope();
@@ -696,15 +679,20 @@ pub const TypeChecker = struct {
     }
     node.res = .Resolved;
     self.ctx.varScope.popScope();
-    if (!inferNext) return;
-    // infer next nodes
-    for (node.next.items()) |item| {
-      try self.flowInfer(item, inferNext);
-    }
   }
 
   fn flowInfer(self: *Self, node: *FlowNode, inferNext: bool) TypeCheckError!void {
     if (node.res.isResolved()) return;
+    for (node.prev_next.items()) |item| {
+      // we can only proceed to resolve this node when all 
+      // incoming edges have been resolved or when we're resolving 
+      // all nodes on the true edges of a Condition.
+      if (item.prev) {
+        if (self.isFlowNodeUnresolved(item.flo)) {
+          return;
+        }
+      }
+    }
     switch (node.node.*) {
       .AstExprStmt => try self.flowInferNode(node, inferNext),
       .AstVarDecl => try self.flowInferNode(node, inferNext),
@@ -712,6 +700,12 @@ pub const TypeChecker = struct {
       .AstEmpty => try self.flowInferExit(node, inferNext),
       .AstControl => {},
       else => unreachable,
+    }
+    if (!inferNext) return;
+    for (node.prev_next.items()) |item| {
+      if (item.next) {
+        try self.flowInfer(item.flo, inferNext);
+      }
     }
   }
 

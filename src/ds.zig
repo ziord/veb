@@ -22,6 +22,14 @@ pub fn ArrayList(comptime T: type) type {
       };
     }
 
+    pub fn count(self: *@This(), comptime func: fn(_: T) bool) usize {
+      var i = @as(usize, 0);
+      for (self.list.items) |itm| {
+        if (func(itm)) i += 1;
+      }
+      return i;
+    }
+
     pub inline fn len(self: *@This()) usize {
       return self.list.items.len;
     }

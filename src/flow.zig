@@ -7,6 +7,13 @@ const ds = @import("ds.zig");
 const Node = ast.AstNode;
 const Type = types.Type;
 pub const FlowList = ds.ArrayList(*FlowNode);
+const FlowDataList = ds.ArrayList(FlowData);
+
+pub const FlowData = struct {
+  prev: bool,
+  next: bool,
+  flo: *FlowNode,
+};
 
 pub const FlowTag = enum {
   CfgEntry,
@@ -42,22 +49,16 @@ pub const FlowNode = struct {
   node: *Node,
   /// the edge type along which this node was found
   edge: FlowEdge = .ESequential,
-  /// type on the graph edge
-  typ: ?*Type = null,
   /// whether this node has been type checked successfully
   res: ResolutionState = .Unresolved,
-  /// predecessors or incoming edges to this node
-  prev: FlowList,
-  /// successors or outgoing edges from this node
-  next: FlowList,
+  /// predecessors (incoming edges to this node) and successors (outgoing edges from this node)
+  prev_next: FlowDataList,
 
   pub fn init(tag: FlowTag, node: *Node, allocator: std.mem.Allocator) *@This() {
-    var prev = FlowList.init(allocator);
-    var next = FlowList.init(allocator);
     var self = util.alloc(FlowNode, allocator);
     self.* = @This() {
       .tag = tag, .node = node,
-      .prev = prev, .next = next,
+      .prev_next = FlowDataList.init(allocator),
     };
     return self;
   }
@@ -82,11 +83,11 @@ pub const FlowNode = struct {
 
   fn outgoingNodes(node: *@This(), visited: *std.AutoHashMap(*FlowNode, u32), edge: FlowEdge, list: *FlowList) void {
     if (visited.get(node)) |_| return;
-    for (node.next.items()) |nd| {
-      if (nd.edge == edge) {
-        list.append(nd);
-        visited.put(nd, 0) catch {};
-        outgoingNodes(nd, visited, edge, list);
+    for (node.prev_next.items()) |nd| {
+      if (nd.next and nd.flo.edge == edge) {
+        list.append(nd.flo);
+        visited.put(nd.flo, 0) catch {};
+        outgoingNodes(nd.flo, visited, edge, list);
       }
     }
   }
@@ -97,6 +98,14 @@ pub const FlowNode = struct {
     outgoingNodes(node, &visited, edge, &nodes);
     visited.clearAndFree();
     return nodes;
+  }
+
+  pub fn isNext(itm: FlowData) bool {
+    return itm.next;
+  }
+
+  pub fn isPrev(itm: FlowData) bool {
+    return itm.prev;
   }
 };
 
@@ -150,8 +159,8 @@ pub const CFGBuilder = struct {
   fn connectVertices(self: *Self, prev: FlowList, next: *FlowNode) void {
     _ = self;
     for (prev.list.items) |p_node| {
-      p_node.next.append(next);
-      next.prev.append(p_node);
+      p_node.prev_next.append(.{.prev = false, .next = true, .flo = next});
+      next.prev_next.append(.{.prev = true, .next = false, .flo = p_node});
     }
   }
 

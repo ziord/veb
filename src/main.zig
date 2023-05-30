@@ -1005,6 +1005,10 @@ test "constant types" {
   \\ let y: list{'foo'} = ['foo', 'foo', 'foo']
   \\ let z: map{'name', str} = {'name': 'ziord'}
   \\ z['name']
+  \\ type A{k} = k | list{k}
+  \\ let j: A{5} = [5, 5]
+  \\ j = 5
+  \\ j as 5 as num + 5
   ;
   _ = try doTest(src);
 }

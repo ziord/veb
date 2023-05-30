@@ -212,9 +212,7 @@ pub const AliasNode = struct {
   typ: *Type, // alias and aliasee is set in `typ`
 
   pub fn init(typ_token: Token, alias: *TypeNode, aliasee: *TypeNode) @This() {
-    const info = types.AliasInfo.init(&alias.typ, &aliasee.typ);
-    alias.typ.alias_info = info;
-    aliasee.typ.alias_info = info;
+    aliasee.typ.alias = &alias.typ;
     alias.from_alias_or_annotation = true;
     aliasee.from_alias_or_annotation = true;
     return @This() {.alias = alias, .aliasee = aliasee, .token = typ_token, .typ = &alias.typ};

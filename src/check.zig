@@ -146,7 +146,7 @@ const TypeEnv = struct {
       if (other.narrowed.get(ident)) |t2| {
         entry.value_ptr.* = (
           t1.intersect(t2, allocator) 
-          orelse Type.newNever(allocator, t1.debug).box(allocator)
+          orelse Type.newNever(allocator).box(allocator)
         );
       }
     }
@@ -168,7 +168,7 @@ const TypeEnv = struct {
         break :blk t1.negate(t2, allocator) catch {
           // TODO: log this
           break :blk (
-            if (t1.typeidEql(t2)) Type.newNever(allocator, t2.debug).box(allocator)
+            if (t1.typeidEql(t2)) Type.newNever(allocator).box(allocator)
             else t1
           );
         };
@@ -195,11 +195,11 @@ pub const TypeChecker = struct {
     const nil = types.Concrete.init(.TyNil);
     const tyty = types.Concrete.init(.TyType);
 
-    const tyNumber: Type = Type.init(.{.Concrete = num}, Token.getDefault());
-    const tyString: Type = Type.init(.{.Concrete = str}, Token.getDefault());
-    const tyBool: Type = Type.init(.{.Concrete = bol}, Token.getDefault());
-    const tyNil: Type = Type.init(.{.Concrete = nil}, Token.getDefault());
-    const TyTy: Type = Type.init(.{.Concrete = tyty}, Token.getDefault());
+    var tyNumber: Type = Type.init(.{.Concrete = num});
+    var tyString: Type = Type.init(.{.Concrete = str});
+    var tyBool: Type = Type.init(.{.Concrete = bol});
+    var tyNil: Type = Type.init(.{.Concrete = nil});
+    var TyTy: Type = Type.init(.{.Concrete = tyty});
   };
   const Self = @This();
   const MAX_STRING_SYNTH_LEN = 0xc;
@@ -549,7 +549,7 @@ pub const TypeChecker = struct {
     } else if (self.canNarrow(node.left) and node.right.isNilLiteral()) {
       var token = node.right.AstNil.token;
       var tmp = self.newAstNode();
-      tmp.* = .{.AstNType = ast.TypeNode.init(Type.newConcrete(.TyNil, null, token), token)};
+      tmp.* = .{.AstNType = ast.TypeNode.init(Type.newConcrete(.TyNil, null), token)};
       var bin = b: {
         if (node.op.optype == .OpEqq or node.op.optype == .OpNeq) {
           var bin = node.*;
@@ -582,7 +582,7 @@ pub const TypeChecker = struct {
     if (node.op.optype == .OpNot) {
       try self.narrow(node.expr, env, !assume_true);
       // at this point, node.expr typechecked successfully
-      node.typ = UnitTypes.bol.toType(node.op.token).box(self.ctx.allocator());
+      node.typ = UnitTypes.bol.toType().box(self.ctx.allocator());
     } else {
       try self.narrow(node.expr, env, assume_true);
       _ = try self.inferUnary(node);
@@ -714,7 +714,7 @@ pub const TypeChecker = struct {
     if (node.typ) |typ| {
       return typ;
     } else {
-      node.typ = kind.toType(node.token).box(self.ctx.allocator());
+      node.typ = kind.toType().box(self.ctx.allocator());
       node.typ.?.kind.Concrete.val = &node.token.value;
       return node.typ.?;
     }
@@ -739,8 +739,8 @@ pub const TypeChecker = struct {
   inline fn inferCollection(self: *Self, node: *ast.ListNode, name: []const u8) !*Type {
     // create a new type
     var al = self.ctx.allocator();
-    var base = Type.newConcrete(.TyClass, name, node.token).box(al);
-    node.typ = Type.newGeneric(al, base, node.token).box(al);
+    var base = Type.newConcrete(.TyClass, name).box(al);
+    node.typ = Type.newGeneric(al, base).box(al);
     if (node.elems.len() == 0) {
       return node.typ.?;
     }
@@ -752,7 +752,7 @@ pub const TypeChecker = struct {
       typeset.set(typ.typeid(), typ);
     }
     var gen = node.typ.?.generic();
-    gen.append(Type.compressTypes(&typeset, node.token, null));
+    gen.append(Type.compressTypes(&typeset, null));
     return node.typ.?;
   }
 
@@ -767,8 +767,8 @@ pub const TypeChecker = struct {
   fn inferMap(self: *Self, node: *ast.MapNode) !*Type {
     // create a new type
     var al = self.ctx.allocator();
-    var base = Type.newConcrete(.TyClass, "map", node.token).box(al);
-    node.typ = Type.newGeneric(al, base, node.token).box(al);
+    var base = Type.newConcrete(.TyClass, "map").box(al);
+    node.typ = Type.newGeneric(al, base).box(al);
     if (node.pairs.len() == 0) {
       return node.typ.?;
     }
@@ -781,17 +781,19 @@ pub const TypeChecker = struct {
       for (node.pairs.items()[1..], 1..) |pair, i| {
         _ = i;
         var typ = try self.infer(pair.key);
-        _ = self.checkAssign(key_typ, typ, typ.debug, false) catch {
+        var debug = pair.key.getToken();
+        _ = self.checkAssign(key_typ, typ, debug, false) catch {
           return self.error_(
-            true, typ.debug,
+            true, debug,
             "expected key type '{s}', but found '{s}'",
             .{self.getTypename(key_typ), self.getTypename(typ)}
           );
         };
         typ = try self.infer(pair.value);
-        _ = self.checkAssign(val_typ, typ, typ.debug, false) catch {
+        debug = pair.value.getToken();
+        _ = self.checkAssign(val_typ, typ, debug, false) catch {
           return self.error_(
-            true, typ.debug,
+            true, debug,
             "expected value type '{s}', but found '{s}'",
             .{self.getTypename(val_typ), self.getTypename(typ)}
           );
@@ -817,12 +819,12 @@ pub const TypeChecker = struct {
     node.typ = try self.infer(node.expr);
     // unary op: ~, !, -, +
     if (node.op.optype == .OpBitInvert or node.op.optype == .OpAdd or node.op.optype == .OpSub) {
-      try self.checkUnary(node, @constCast(&UnitTypes.tyNumber));
+      try self.checkUnary(node, &UnitTypes.tyNumber);
     } else {
       std.debug.assert(node.op.optype == .OpNot);
       // `!` accepts any type and returns a boolean. 
       // It applies an implicit bool cast to such a type.
-      node.typ = UnitTypes.bol.toType(node.typ.?.debug).box(self.ctx.allocator());
+      node.typ = UnitTypes.bol.toType().box(self.ctx.allocator());
     }
     return node.typ.?;
   }
@@ -836,7 +838,7 @@ pub const TypeChecker = struct {
     node.typ = lhsTy;
     try self.checkBinary(node, rhsTy, false);
     if (node.op.optype.isCmpOp()) {
-      node.typ = UnitTypes.bol.toType(lhsTy.debug).box(self.ctx.allocator());
+      node.typ = UnitTypes.bol.toType().box(self.ctx.allocator());
     }
     return node.typ.?;
   }
@@ -877,7 +879,7 @@ pub const TypeChecker = struct {
     // use the actual type on rhs for checks
     try self.checkBinary(node, ty, true);
     // `is` returns type bool, so reassign
-    node.typ = UnitTypes.bol.toType(lhsTy.debug).box(self.ctx.allocator());
+    node.typ = UnitTypes.bol.toType().box(self.ctx.allocator());
     return node.typ.?;
   }
 
@@ -923,7 +925,7 @@ pub const TypeChecker = struct {
     // if this type node was found in an expression 
     // (i.e. not in an alias or annotation context), then return TyType
     if (!node.from_alias_or_annotation) {
-      return @constCast(&UnitTypes.TyTy);
+      return &UnitTypes.TyTy;
     }
     return &node.typ;
   }
@@ -1051,11 +1053,11 @@ pub const TypeChecker = struct {
     return ty;
   }
 
-  fn checkAssign(self: *Self, target: *Type, source: *Type, debug: ?Token, emit: bool) !*Type {
+  fn checkAssign(self: *Self, target: *Type, source: *Type, debug: Token, emit: bool) !*Type {
     var typ = target.canBeAssigned(source, self.ctx.allocator());
     if (typ == null) {
       return self.error_(
-        emit, if (debug) |deb| deb else source.debug,
+        emit, debug,
         "Cannot assign type '{s}' to type '{s}'",
         .{self.getTypename(source), self.getTypename(target)}
       );
@@ -1100,13 +1102,13 @@ pub const TypeChecker = struct {
       return;
     }
     var errTy: ?*Type = null;
-    if (node.typ.?.typeid() != @constCast(&UnitTypes.tyNumber).typeid()) {
+    if (!node.typ.?.typeidEql(&UnitTypes.tyNumber)) {
       errTy = node.typ;
-    } else if (source.typeid() != @constCast(&UnitTypes.tyNumber).typeid()) {
+    } else if (!source.typeidEql(&UnitTypes.tyNumber)) {
       errTy = source;
     }
     if (errTy != null) {
-      const name = self.getTypename(@constCast(&UnitTypes.tyNumber));
+      const name = self.getTypename(&UnitTypes.tyNumber);
       const op = node.op.token.value;
       return self.error_(
         true, node.op.token,
@@ -1148,7 +1150,7 @@ pub const TypeChecker = struct {
       std.debug.assert(gen.tparams_len() == 2);
       var key_typ = gen.tparams.items()[0];
       var val_typ = gen.tparams.items()[1];
-      _ = self.checkAssign(key_typ, index_ty, index_ty.debug, false) catch {
+      _ = self.checkAssign(key_typ, index_ty, node.index.getToken(), false) catch {
         return self.error_(
           true, token,
           "Cannot index type '{s}' with type '{s}'",

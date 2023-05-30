@@ -334,7 +334,7 @@ pub const Parser = struct {
     const node = self.newNode();
     // wrap nil literal as nil TypeNode
     if (rhs.isNilLiteral()) {
-      var nil = Type.newConcrete(.TyNil, null, self.previous_tok);
+      var nil = Type.newConcrete(.TyNil, null);
       rhs.* = .{.AstNType = ast.TypeNode.init(nil, self.previous_tok)};
     }
     node.* = .{.AstBinary = ast.BinaryNode.init(lhs, rhs, op)};    
@@ -536,24 +536,20 @@ pub const Parser = struct {
     }
   }
 
-  inline fn assertBuiltinExpTParams(self: *Self, typ: *Generic) !void {
-    if (typ.base.isSimple()) {
-      var conc = typ.base.kind.Concrete;
-      if (conc.tkind == .TyClass) {
-        var tok = conc.variable.?.tokens.getLast();
-        // list or map
-        var exp: usize = (
-          if (tok.ty == .TkList) 1 
-          else if (tok.ty == .TkMap) 2  
-          else if (tok.ty == .TkTuple) 1 
-          else return
-        );
-        if (typ.tparams.len() != exp) {
-          return self.err(tok, "generic type instantiated with wrong number of paramters");
-        }
+  inline fn assertBuiltinExpTParams(self: *Self, gen: *Generic, typ: *Type, tok: lex.Token) !void {
+    if (gen.base.isClassTy()) {
+      // list or map
+      var exp: usize = (
+        if (typ.isListTy()) 1
+        else if (typ.isMapTy()) 2
+        else if (typ.isTupleTy()) 1
+        else return
+      );
+      if (gen.tparams_len() != exp) {
+        return self.err(tok, "generic type instantiated with wrong number of paramters");
       }
     }
-    try self.assertNonEmptyTParams(typ);
+    try self.assertNonEmptyTParams(gen);
   }
 
   inline fn assertNonEmptyTParams(self: *Self, typ: *Generic) !void {
@@ -575,7 +571,7 @@ pub const Parser = struct {
   fn aliasParam(self: *Self) !Type {
     var debug = self.current_tok;
     try self.consume(.TkIdent);
-    var typ = Type.newVariable(self.allocator, debug);
+    var typ = Type.newVariable(self.allocator);
     typ.variable().append(debug);
     if (self.check(.TkDot)) {
       return self.err(self.current_tok, "expected single identifier, found multiple");
@@ -588,7 +584,7 @@ pub const Parser = struct {
     // TypeName    := Ident TypeParams?
     // TypeParams  := "{" Ident ( "," Ident )* "}"
     try self.consume(.TkIdent);
-    var typ = Type.newVariable(self.allocator, self.previous_tok);
+    var typ = Type.newVariable(self.allocator);
     typ.variable().append(self.previous_tok);
     if (self.match(.TkLCurly)) {
       var gen = Generic.init(self.allocator, typ.box(self.allocator));
@@ -601,7 +597,7 @@ pub const Parser = struct {
       }
       try self.assertNonEmptyTParams(&gen);
       try self.consume(.TkRCurly);
-      return gen.toType(self.previous_tok);
+      return gen.toType();
     }
     return typ;
   }
@@ -617,7 +613,7 @@ pub const Parser = struct {
       }
     };
     // direct 'unit' types such as listed above do not need names
-    var typ = Type.newConstant(kind, self.current_tok.value, self.current_tok);
+    var typ = Type.newConstant(kind, self.current_tok.value);
     try self.advance();
     return typ;
   }
@@ -626,17 +622,13 @@ pub const Parser = struct {
     // handle builtin list/map/tuple type
     var debug = self.current_tok;
     try self.advance();
-    var tvar = Variable.init(self.allocator);
-    tvar.append(debug);
-    var conc = Type.newConcrete(.TyClass, debug.value, debug);
-    conc.kind.Concrete.name = debug.value;
-    conc.kind.Concrete.variable = tvar;
-    return Type.newGeneric(self.allocator, conc.box(self.allocator), debug);
+    var conc = Type.newConcrete(.TyClass, debug.value);
+    return Type.newGeneric(self.allocator, conc.box(self.allocator));
   }
 
   fn refType(self: *Self) !Type {
     try self.consume(.TkIdent);
-    var typ = Type.newVariable(self.allocator, self.previous_tok);
+    var typ = Type.newVariable(self.allocator);
     typ.variable().append(self.previous_tok);
     while (self.match(.TkDot)) {
       try self.consume(.TkIdent);
@@ -660,7 +652,7 @@ pub const Parser = struct {
     };
 
     // direct 'unit' types such as listed above do not need names
-    var typ = Type.newConcrete(tkind, null, self.current_tok);
+    var typ = Type.newConcrete(tkind, null);
     try self.advance();
     return typ;
   }
@@ -693,7 +685,7 @@ pub const Parser = struct {
         ret = typ;
       } else {
         var tmp = Generic.init(self.allocator, typ.box(self.allocator));
-        ret = tmp.toType(self.previous_tok);
+        ret = tmp.toType();
       }
       gen = ret.generic();
       while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
@@ -704,14 +696,14 @@ pub const Parser = struct {
       }
       try self.assertNonEmptyTParams(gen);
       // check that builtin generic types are properly instantiated
-      try self.assertBuiltinExpTParams(gen);
+      try self.assertBuiltinExpTParams(gen, &ret, self.previous_tok);
       try self.consume(.TkRCurly);
       typ = ret;
     } else if (typ.isGeneric()) {
-      try self.assertBuiltinExpTParams(typ.generic());
+      try self.assertBuiltinExpTParams(typ.generic(), &typ, self.previous_tok);
     }
     if (self.match(.TkQMark)) {
-      typ = Type.newNullable(typ.box(self.allocator), self.previous_tok, self.allocator).*;
+      typ = Type.newNullable(typ.box(self.allocator), self.allocator, null).*;
     }
     return typ;
   }
@@ -723,14 +715,13 @@ pub const Parser = struct {
       return typ;
     }
     if (self.check(.TkPipe)) {
-      var token = self.current_tok;
       var uni = Union.init(self.allocator);
       uni.set(typ.box(self.allocator));
       while (self.match(.TkPipe)) {
         typ = try self.tGeneric();
         uni.set(typ.box(self.allocator));
       }
-      return uni.toType(token);
+      return uni.toType();
     }
     return typ;
   }
@@ -825,7 +816,6 @@ pub const Parser = struct {
     if (self.match(.TkColon)) {
       var typ_node = &(try self.typing(false)).AstNType;
       typ_node.from_alias_or_annotation = true;
-      typ_node.typ.ident = ident;
       ident.typ = &typ_node.typ;
     }
   }

@@ -16,14 +16,14 @@ pub fn main() !void {
 fn doTest(src: []const u8) !value.Value {
   var cna = CnAllocator.init(std.heap.ArenaAllocator.init(std.testing.allocator));
   defer cna.deinit();
-  const filename = "test.nova";
-  var parser = parse.Parser.init(src, filename, &cna);
+  const filename = @as([]const u8, "test.nova");
+  var parser = parse.Parser.init(@constCast(&src), &filename, &cna);
   const node = try parser.parse();
-  var tych = check.TypeChecker.init(cna.getArenaAllocator(), "test.nova", src);
+  var tych = check.TypeChecker.init(cna.getArenaAllocator(), &@as([]const u8, "test.nova"), @constCast(&src));
   try tych.typecheck(node);
   var code = value.Code.init();
   var cpu = vm.VM.init(&cna, &code);
-  defer cpu.deinit(); // don't deinit for now.
+  defer cpu.deinit();
   var compiler = compile.Compiler.init(node, filename, src, &cpu, &code, &cna);
   compiler.compile();
   debug.Disassembler.disCode(code, "test");

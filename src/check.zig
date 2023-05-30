@@ -118,7 +118,7 @@ const TypeEnv = struct {
 
   /// combines the narrowed types in self with other into a union when possible
   pub fn or_(self: *@This(), other: *@This()) void {
-    var allocator = self.global.allocator;
+    var allocator = self.global.allocator();
     var itr = self.narrowed.iterator();
     while (itr.next()) |entry| {
       var ident = entry.key_ptr.*;
@@ -138,7 +138,7 @@ const TypeEnv = struct {
 
   /// computes the intersection of the narrowed types in self with other
   pub fn and_(self: *@This(), other: *@This()) void {
-    var allocator = self.global.allocator;
+    var allocator = self.global.allocator();
     var itr = self.narrowed.iterator();
     while (itr.next()) |entry| {
       var ident = entry.key_ptr.*;
@@ -161,7 +161,7 @@ const TypeEnv = struct {
   /// transforms types by negation - negates the narrowed types using the global types
   pub fn not_(self: *@This(), name: []const u8, tc: *TypeChecker) !bool {
     _ = tc;
-    var allocator = self.global.allocator;
+    var allocator = self.global.allocator();
     if (self.narrowed.get(name)) |t2| {
       var t1 = self.global.lookup(name).?;
       var neg = blk: {
@@ -184,7 +184,6 @@ const TypeEnv = struct {
 };
 
 pub const TypeChecker = struct {
-  allocator: std.mem.Allocator,
   ctx: TContext,
   cfg: *FlowNode = undefined,
   diag: Diagnostic,
@@ -206,9 +205,8 @@ pub const TypeChecker = struct {
   const MAX_STRING_SYNTH_LEN = 0xc;
   pub const TypeCheckError = error{TypeCheckError};
 
-  pub fn init(allocator: std.mem.Allocator, filename: []const u8, src: []const u8) @This() {
+  pub fn init(allocator: std.mem.Allocator, filename: *const[]const u8, src: *[]const u8) @This() {
     return Self {
-      .allocator = allocator, 
       .ctx = TContext.init(allocator, filename, src),
       .diag = Diagnostic.init(allocator, filename, src),
     };
@@ -267,11 +265,11 @@ pub const TypeChecker = struct {
   }
 
   fn getTypename(self: *Self, typ: *Type) []const u8 {
-    return typ.typename(self.allocator);
+    return typ.typename(self.ctx.allocator());
   }
 
   fn newAstNode(self: *Self) *Node {
-    return util.alloc(Node, self.allocator);
+    return util.alloc(Node, self.ctx.allocator());
   }
 
   fn newUnaryNode(self: *Self, expr: *Node, op: Token) *Node {
@@ -320,7 +318,7 @@ pub const TypeChecker = struct {
         }
         var token = ast.Token.tokenFrom(&vr.token);
         token.value = std.fmt.allocPrint(
-          self.allocator, "{s}.{s}",
+          self.ctx.allocator(), "{s}.{s}",
           .{vr.token.value, lit.token.value}
         ) catch return error.SynthFailure;
         var ret = ast.VarNode.init(token);
@@ -472,7 +470,7 @@ pub const TypeChecker = struct {
         _ = try self.inferBinary(node);
         // if we get here, then right must be a TypeNode
         var ty = try self.lookupName(&node.left.AstVar, true);
-        if (Type.is(ty, &node.right.AstNType.typ, self.allocator)) |is_ty| {
+        if (Type.is(ty, &node.right.AstNType.typ, self.ctx.allocator())) |is_ty| {
           env.putNarrowed(node.left.AstVar.token.value, is_ty);
           if (!assume_true) {
             if (!try env.not_(node.left.AstVar.token.value, self)) {
@@ -515,37 +513,37 @@ pub const TypeChecker = struct {
       env.global.pushScope();
       if (assume_true) {
         try self.narrow(node.left, env, true);
-        var rhs_env = TypeEnv.init(self.allocator, env);
+        var rhs_env = TypeEnv.init(self.ctx.allocator(), env);
         rhs_env.promoteNarrowed();
         try self.narrow(node.right, &rhs_env, true);
         env.and_(&rhs_env);
-        node.typ = Type.unionify(node.left.getType().?, node.right.getType().?, self.allocator);
+        node.typ = Type.unionify(node.left.getType().?, node.right.getType().?, self.ctx.allocator());
       } else {
         try self.narrow(node.left, env, false);
-        var lhs_env = TypeEnv.init(self.allocator, null);
+        var lhs_env = TypeEnv.init(self.ctx.allocator(), null);
         lhs_env.global = env.global;
         try self.narrow(node.left, &lhs_env, true);
         try self.narrow(node.right, &lhs_env, false);
         env.or_(&lhs_env);
-        node.typ = Type.unionify(node.left.getType().?, node.right.getType().?, self.allocator);
+        node.typ = Type.unionify(node.left.getType().?, node.right.getType().?, self.ctx.allocator());
       }
       return;
     } else if (node.op.optype == .OpOr) {
       if (assume_true) {
         try self.narrow(node.left, env, true);
-        var lhs_env = TypeEnv.init(self.allocator, null);
+        var lhs_env = TypeEnv.init(self.ctx.allocator(), null);
         lhs_env.global = env.global;
         try self.narrow(node.left, &lhs_env, false);
         try self.narrow(node.right, &lhs_env, true);
         env.or_(&lhs_env);
-        node.typ = Type.unionify(node.left.getType().?, node.right.getType().?, self.allocator);
+        node.typ = Type.unionify(node.left.getType().?, node.right.getType().?, self.ctx.allocator());
       } else {
         try self.narrow(node.left, env, false);
-        var rhs_env = TypeEnv.init(self.allocator, env);
+        var rhs_env = TypeEnv.init(self.ctx.allocator(), env);
         rhs_env.promoteNarrowed();
         try self.narrow(node.right, &rhs_env, false);
         env.and_(&rhs_env);
-        node.typ = Type.unionify(node.left.getType().?, node.right.getType().?, self.allocator);
+        node.typ = Type.unionify(node.left.getType().?, node.right.getType().?, self.ctx.allocator());
       }
       return;
     } else if (self.canNarrow(node.left) and node.right.isNilLiteral()) {
@@ -584,7 +582,7 @@ pub const TypeChecker = struct {
     if (node.op.optype == .OpNot) {
       try self.narrow(node.expr, env, !assume_true);
       // at this point, node.expr typechecked successfully
-      node.typ = UnitTypes.bol.toType(node.op.token).box(self.allocator);
+      node.typ = UnitTypes.bol.toType(node.op.token).box(self.ctx.allocator());
     } else {
       try self.narrow(node.expr, env, assume_true);
       _ = try self.inferUnary(node);
@@ -650,13 +648,13 @@ pub const TypeChecker = struct {
     // As a meet point, all types on the incoming edges are merged.
     // As a branch point, types are narrowed along outgoing edges based 
     // on the condition expression.
-    var env = TypeEnv.init(self.allocator, null);
+    var env = TypeEnv.init(self.ctx.allocator(), null);
     env.global.pushScope();
     self.narrow(node.node.AstCondition.cond, &env, true) catch return error.TypeCheckError;
     // TODO: rework token extraction for better error reporting
     try self.checkCondition(node.node.getType().?, node.node.AstCondition.cond.getToken());
     // get all nodes on the true edges & flowInfer with env
-    var out_nodes = node.getOutgoingNodes(.ETrue, self.allocator);
+    var out_nodes = node.getOutgoingNodes(.ETrue, self.ctx.allocator());
     self.copyEnv(&env);
     for (out_nodes.items()) |nd| {
       try self.flowInfer(nd, false);
@@ -664,7 +662,7 @@ pub const TypeChecker = struct {
     self.ctx.varScope.popScope();
     self.ctx.varScope.pushScope();
     // get all nodes on the false edges & flowInfer with not\env
-    out_nodes = node.getOutgoingNodes(.EFalse, self.allocator);
+    out_nodes = node.getOutgoingNodes(.EFalse, self.ctx.allocator());
     env.clear();
     env.global.pushScope();
     // TODO: finetune
@@ -716,7 +714,7 @@ pub const TypeChecker = struct {
     if (node.typ) |typ| {
       return typ;
     } else {
-      node.typ = kind.toType(node.token).box(self.allocator);
+      node.typ = kind.toType(node.token).box(self.ctx.allocator());
       node.typ.?.kind.Concrete.val = &node.token.value;
       return node.typ.?;
     }
@@ -740,13 +738,14 @@ pub const TypeChecker = struct {
 
   inline fn inferCollection(self: *Self, node: *ast.ListNode, name: []const u8) !*Type {
     // create a new type
-    var base = Type.newConcrete(.TyClass, name, node.token).box(self.allocator);
-    node.typ = Type.newGeneric(self.allocator, base, node.token).box(self.allocator);
+    var al = self.ctx.allocator();
+    var base = Type.newConcrete(.TyClass, name, node.token).box(al);
+    node.typ = Type.newGeneric(al, base, node.token).box(al);
     if (node.elems.len() == 0) {
       return node.typ.?;
     }
     // infer type of elements stored in the list
-    var typeset = TypeHashSet.init(self.allocator);
+    var typeset = TypeHashSet.init(al);
     typeset.ensureTotalCapacity(node.elems.len());
     for (node.elems.items()) |elem| {
       var typ = try self.infer(elem);
@@ -767,8 +766,9 @@ pub const TypeChecker = struct {
 
   fn inferMap(self: *Self, node: *ast.MapNode) !*Type {
     // create a new type
-    var base = Type.newConcrete(.TyClass, "map", node.token).box(self.allocator);
-    node.typ = Type.newGeneric(self.allocator, base, node.token).box(self.allocator);
+    var al = self.ctx.allocator();
+    var base = Type.newConcrete(.TyClass, "map", node.token).box(al);
+    node.typ = Type.newGeneric(al, base, node.token).box(al);
     if (node.pairs.len() == 0) {
       return node.typ.?;
     }
@@ -822,7 +822,7 @@ pub const TypeChecker = struct {
       std.debug.assert(node.op.optype == .OpNot);
       // `!` accepts any type and returns a boolean. 
       // It applies an implicit bool cast to such a type.
-      node.typ = UnitTypes.bol.toType(node.typ.?.debug).box(self.allocator);
+      node.typ = UnitTypes.bol.toType(node.typ.?.debug).box(self.ctx.allocator());
     }
     return node.typ.?;
   }
@@ -836,7 +836,7 @@ pub const TypeChecker = struct {
     node.typ = lhsTy;
     try self.checkBinary(node, rhsTy, false);
     if (node.op.optype.isCmpOp()) {
-      node.typ = UnitTypes.bol.toType(lhsTy.debug).box(self.allocator);
+      node.typ = UnitTypes.bol.toType(lhsTy.debug).box(self.ctx.allocator());
     }
     return node.typ.?;
   }
@@ -877,7 +877,7 @@ pub const TypeChecker = struct {
     // use the actual type on rhs for checks
     try self.checkBinary(node, ty, true);
     // `is` returns type bool, so reassign
-    node.typ = UnitTypes.bol.toType(lhsTy.debug).box(self.allocator);
+    node.typ = UnitTypes.bol.toType(lhsTy.debug).box(self.ctx.allocator());
     return node.typ.?;
   }
 
@@ -956,7 +956,7 @@ pub const TypeChecker = struct {
     // set yet, hence, we use `node.narrowed == null` to check that we're not narrowing,
     // hence, the narrowed type should already exist in varScope
     if (node.narrowed == null and self.canNarrowSubscript(node)) {
-      var env = TypeEnv.init(self.allocator, null);
+      var env = TypeEnv.init(self.ctx.allocator(), null);
       env.global.pushScope();
       node.narrowed = self.synthesizeSubscript(node, &env, true) catch return error.TypeCheckError;
       if (node.narrowed) |*narrowed| {
@@ -984,7 +984,7 @@ pub const TypeChecker = struct {
     // if this node is not being narrowed (`node.narrowed == null`),
     // try to see if we can obtain an inferred narrow type.
     if (node.narrowed == null and self.canNarrowDeref(node)) {
-      var env = TypeEnv.init(self.allocator, null);
+      var env = TypeEnv.init(self.ctx.allocator(), null);
       env.global.pushScope();
       node.narrowed = self.synthesizeDeref(node, &env, true) catch return error.TypeCheckError;
       if (node.narrowed) |*narrowed| {
@@ -1026,7 +1026,7 @@ pub const TypeChecker = struct {
   }
 
   fn checkCast(self: *Self, node_ty: *Type, cast_ty: *Type, debug: Token, emit: bool) TypeCheckError!*Type {
-    var ty = node_ty.canBeCastTo(cast_ty, self.allocator) catch |e| {
+    var ty = node_ty.canBeCastTo(cast_ty, self.ctx.allocator()) catch |e| {
       if (e == error.UnionCastError) {
         var active = if (node_ty.isUnion()) self.getTypename(node_ty.union_().active.?) else "different";
         return self.error_(
@@ -1052,7 +1052,7 @@ pub const TypeChecker = struct {
   }
 
   fn checkAssign(self: *Self, target: *Type, source: *Type, debug: ?Token, emit: bool) !*Type {
-    var typ = target.canBeAssigned(source, self.allocator);
+    var typ = target.canBeAssigned(source, self.ctx.allocator());
     if (typ == null) {
       return self.error_(
         emit, if (debug) |deb| deb else source.debug,
@@ -1083,7 +1083,7 @@ pub const TypeChecker = struct {
     // source is type of rhs
     // node.typ is type of lhs
     if (node.op.optype == .OpEqq or node.op.optype == .OpNeq or node.op.optype == .OpIs) {
-      if (!node.typ.?.isEitherWayRelatedTo(source, .RCAny, self.allocator)) {
+      if (!node.typ.?.isEitherWayRelatedTo(source, .RCAny, self.ctx.allocator())) {
         return self.error_(
           true, node.op.token,
           "types must be related for comparison.{s}'{s}' is not related to '{s}'",
@@ -1096,7 +1096,7 @@ pub const TypeChecker = struct {
       return;
     }
     if (node.op.optype == .OpAnd or node.op.optype == .OpOr) {
-      node.typ = node.typ.?.unionify(source, self.allocator);
+      node.typ = node.typ.?.unionify(source, self.ctx.allocator());
       return;
     }
     var errTy: ?*Type = null;
@@ -1167,7 +1167,7 @@ pub const TypeChecker = struct {
         .{self.getTypename(expr_ty)}
       );
     }
-    node.typ = expr_ty.subtype(self.allocator);
+    node.typ = expr_ty.subtype(self.ctx.allocator());
   }
 
   fn checkCondition(self: *Self, cond_ty: *Type, debug: Token) !void {
@@ -1209,12 +1209,12 @@ pub const TypeChecker = struct {
   }
 
   pub fn typecheck(self: *Self, node: *Node) TypeCheckError!void {
-    var linker = link.TypeLinker.init(self.allocator, self.ctx.filename, self.ctx.src);
+    var linker = link.TypeLinker.init(self.ctx.allocator(), self.ctx.filename, self.ctx.src);
     linker.linkTypes(node) catch {
       return error.TypeCheckError;
     };
     self.ctx.typScope = linker.ctx.typScope;
-    var builder = CFGBuilder.init(node, self.allocator);
+    var builder = CFGBuilder.init(node, self.ctx.allocator());
     self.cfg = builder.build();
     self.flowInferEntry() catch {
       // just stack up as much errors as we can from here.

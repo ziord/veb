@@ -16,12 +16,12 @@ pub const DiagData = struct {
 
 pub const Diagnostic = struct {
   data: std.ArrayList(DiagData),
-  filename: []const u8,
-  src: []const u8,
+  filename: *const[]const u8,
+  src: *[]const u8,
 
   const Self = @This();
 
-  pub fn init(allocator: std.mem.Allocator, filename: []const u8, src: []const u8) Self {
+  pub fn init(allocator: std.mem.Allocator, filename: *const[]const u8, src: *[]const u8) Self {
     return Self {.data = std.ArrayList(DiagData).init(allocator), .filename = filename, .src = src};
   }
 
@@ -38,7 +38,7 @@ pub const Diagnostic = struct {
   fn pushData(self: *Self, level: DiagLevel, token: Token, comptime fmt: []const u8, args: anytype)
   !void {
     var allocator = self.data.allocator;
-    var col = token.column(self.src);
+    var col = token.column(self.src.*);
     var msg = try std.fmt.allocPrint(allocator, fmt ++ "\n", args);
     if (self.alreadyIn(token, msg)) return;
     try self.data.append(.{.level = level, .msg = msg, .token = token});
@@ -48,7 +48,7 @@ pub const Diagnostic = struct {
         .token = token,
         .msg = try std.fmt.allocPrint(
           allocator, "{s}.{}:{}:\n\t{s}\n",
-          .{self.filename, token.line,col, token.getLine(self.src)}
+          .{self.filename.*, token.line,col, token.getLine(self.src.*)}
         )
       }
     );

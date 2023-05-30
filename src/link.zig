@@ -45,15 +45,18 @@ fn CreateMap(comptime K: type, comptime V: type) type {
 pub fn GenScope(comptime K: type, comptime V: type) type {
   return struct {
     decls: ds.ArrayList(ScopeMap),
-    allocator: std.mem.Allocator,
     const ScopeMap = CreateMap(K, V);
 
-    pub fn init(allocator: std.mem.Allocator) @This(){
-      return @This() {.decls = ds.ArrayList(ScopeMap).init(allocator), .allocator = allocator};
+    pub fn init(al: std.mem.Allocator) @This(){
+      return @This() {.decls = ds.ArrayList(ScopeMap).init(al)};
+    }
+
+    pub inline fn allocator(self: *@This()) std.mem.Allocator {
+      return self.decls.allocator();
     }
 
     pub fn pushScope(self: *@This()) void {
-      self.decls.append(ScopeMap.init(self.allocator));
+      self.decls.append(ScopeMap.init(self.decls.allocator()));
     }
 
     pub fn popScope(self: *@This()) void {
@@ -122,28 +125,30 @@ pub fn GenScope(comptime K: type, comptime V: type) type {
 
 fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
   return struct {
-    allocator: std.mem.Allocator,
     /// type scope
     typScope: TypScope,
     /// scope for other declarations, e.g. variables, functions, etc.
     varScope: VarScope,
-    filename: []const u8,
-    src: []const u8,
+    filename: *const[]const u8,
+    src: *[]const u8,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, filename: []const u8, src: []const u8) Self {
+    pub fn init(al: std.mem.Allocator, filename: *const[]const u8, src: *[]const u8) Self {
       return Self {
-        .allocator = allocator, 
-        .typScope = TypScope.init(allocator), 
-        .varScope = VarScope.init(allocator),
+        .typScope = TypScope.init(al), 
+        .varScope = VarScope.init(al),
         .filename = filename,
         .src = src,
       };
     }
 
+    pub inline fn allocator(self: *Self) std.mem.Allocator {
+      return @call(.always_inline, self.typScope.allocator, .{});
+    }
+
     pub inline fn newType(self: *Self, kind: TypeInfo, debug: Token) *Type {
-      return util.box(Type, Type.init(kind, debug), self.allocator);
+      return util.box(Type, Type.init(kind, debug), self.typScope.allocator());
     }
 
     pub inline fn enterScope(self: *Self) void {
@@ -158,7 +163,7 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
 
     pub fn copyType(self: *Self, typ: *Type) *Type {
       // we need to deepcopy typ
-      var new = typ.clone(self.allocator);
+      var new = typ.clone(self.typScope.allocator());
       return new;
     }
   };
@@ -187,7 +192,7 @@ pub const TypeLinker = struct {
 
   const Self = @This();
 
-  pub fn init(allocator: std.mem.Allocator, filename: []const u8, src: []const u8) @This() {
+  pub fn init(allocator: std.mem.Allocator, filename: *const[]const u8, src: *[]const u8) @This() {
     return Self {
       .ctx = TContext.init(allocator, filename, src),
       .cyc_scope = PairScope.init(allocator),
@@ -253,7 +258,7 @@ pub const TypeLinker = struct {
         // we're resolving an infinite type, then return a recursive type
         if (!from_gen or self.in_inf) {
           _ = rec.typeid();
-          return Type.newRecursive(rec, rec.debug).box(self.ctx.allocator);
+          return Type.newRecursive(rec, rec.debug).box(self.ctx.allocator());
         }
       }
       var result = switch (ty.kind) {
@@ -282,7 +287,7 @@ pub const TypeLinker = struct {
   inline fn assertMaxSubStepsNotExceeded(self: *Self, typ: *Type, emit: bool) !void {
     errdefer {
       self.cyc_scope.decls.clearAndFree();
-      self.cyc_scope = PairScope.init(self.ctx.allocator);
+      self.cyc_scope = PairScope.init(self.ctx.allocator());
     }
     if (self.sub_steps >= MAX_DEPTH) {
       if (!emit) return error.TypeLinkError;
@@ -444,7 +449,7 @@ pub const TypeLinker = struct {
       // TODO: need to figure out how to do this in-place
       var uni = typ.union_();
       var old_variants = uni.variants;
-      uni.variants = types.TypeHashSet.init(self.ctx.allocator);
+      uni.variants = types.TypeHashSet.init(self.ctx.allocator());
       for (old_variants.values()) |variant| {
         uni.set(try self.resolveType(variant));
       }
@@ -464,7 +469,7 @@ pub const TypeLinker = struct {
             return self.error_(
               typ.debug,
               "generic type '{s}' may not have been instantiated correctly",
-              .{typ.typename(self.ctx.allocator)}
+              .{typ.typename(self.ctx.allocator())}
             );
           }
         }
@@ -572,7 +577,7 @@ pub const TypeLinker = struct {
   fn linkNType(self: *Self, node: *ast.TypeNode) !void {
     // TODO: using an indirection here because somehow using the `node.typ` 
     //      itself leads to aliasing issues in Zig.
-    var typ = node.typ.box(self.ctx.allocator);
+    var typ = node.typ.box(self.ctx.allocator());
     var tmp = try self.resolve(typ);
     node.typ = tmp.*;
   }

@@ -27,7 +27,6 @@ pub const Parser = struct {
   allocator: std.mem.Allocator,
   diag: Diagnostic,
   cna: *CnAllocator,
-  filename: []const u8,
   allow_nl: usize = 0,
   using_is: u32 = 0,
   in_cast: u32 = 0,
@@ -128,14 +127,13 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkEof
   };
 
-  pub fn init(src: []const u8, filename: []const u8, allocator: *CnAllocator) Self {
+  pub fn init(src: *[]const u8, filename: *const[]const u8, allocator: *CnAllocator) Self {
     var al = allocator.getArenaAllocator();
     return Self {
       .current_tok = undefined,
       .previous_tok = undefined,
-      .lexer = lex.Lexer.init(src, allocator),
+      .lexer = lex.Lexer.init(src.*, allocator),
       .cna = allocator,
-      .filename = filename,
       .diag = Diagnostic.init(al, filename, src),
       // use the arena allocator for allocating general nodes.
       .allocator = al,

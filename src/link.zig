@@ -129,17 +129,13 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
     typScope: TypScope,
     /// scope for other declarations, e.g. variables, functions, etc.
     varScope: VarScope,
-    filename: *const[]const u8,
-    src: *[]const u8,
 
     const Self = @This();
 
-    pub fn init(al: std.mem.Allocator, filename: *const[]const u8, src: *[]const u8) Self {
+    pub fn init(al: std.mem.Allocator) Self {
       return Self {
         .typScope = TypScope.init(al), 
         .varScope = VarScope.init(al),
-        .filename = filename,
-        .src = src,
       };
     }
 
@@ -194,7 +190,7 @@ pub const TypeLinker = struct {
 
   pub fn init(allocator: std.mem.Allocator, filename: *const[]const u8, src: *[]const u8) @This() {
     return Self {
-      .ctx = TContext.init(allocator, filename, src),
+      .ctx = TContext.init(allocator),
       .cyc_scope = PairScope.init(allocator),
       .diag = Diagnostic.init(allocator, filename, src),
     };

@@ -24,8 +24,8 @@ fn doTest(src: []const u8) !value.Value {
   var code = value.Code.init();
   var cpu = vm.VM.init(&cna, &code);
   defer cpu.deinit();
-  var compiler = compile.Compiler.init(node, filename, src, &cpu, &code, &cna);
-  compiler.compile();
+  var compiler = compile.Compiler.init(filename, src, &cpu, &code, &cna);
+  compiler.compile(node);
   debug.Disassembler.disCode(code, "test");
   try cpu.run();
   value.printValue(cpu.stack[0]);

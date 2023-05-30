@@ -207,7 +207,7 @@ pub const TypeChecker = struct {
 
   pub fn init(allocator: std.mem.Allocator, filename: *const[]const u8, src: *[]const u8) @This() {
     return Self {
-      .ctx = TContext.init(allocator, filename, src),
+      .ctx = TContext.init(allocator),
       .diag = Diagnostic.init(allocator, filename, src),
     };
   }
@@ -1211,7 +1211,7 @@ pub const TypeChecker = struct {
   }
 
   pub fn typecheck(self: *Self, node: *Node) TypeCheckError!void {
-    var linker = link.TypeLinker.init(self.ctx.allocator(), self.ctx.filename, self.ctx.src);
+    var linker = link.TypeLinker.init(self.ctx.allocator(), self.diag.filename, self.diag.src);
     linker.linkTypes(node) catch {
       return error.TypeCheckError;
     };

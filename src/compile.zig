@@ -14,7 +14,7 @@ const Inst = value.Inst;
 const TypeKind = parse.TypeKind;
 
 const VRegister = struct {
-  regs: [value.MAX_REGISTERS]Reg,
+  regs: std.MultiArrayList(Reg),
 
   const DummyReg = 0xfff;
 
@@ -29,19 +29,22 @@ const VRegister = struct {
 
   const Self = @This();
 
-  pub fn init() Self {
-    var regs: [value.MAX_REGISTERS]Reg = undefined;
+  pub fn init(al: std.mem.Allocator) Self {
+    var regs = std.MultiArrayList(Reg){};
+    regs.ensureTotalCapacity(al, value.MAX_REGISTERS) catch {};
     for (0..value.MAX_REGISTERS) |i| {
-      regs[i] = .{.val = @intCast(u8, i), .free = true};
+      regs.append(al, .{.val = @intCast(u8, i), .free = true}) catch {};
     }
     return Self {.regs = regs};
   }
 
   pub fn getReg(self: *Self) error{RegistersExhausted}!u32 {
-    for (&self.regs) |*reg| {
-      if (reg.free) {
-        reg.setFree(false);
-        return @as(u32, reg.val);
+    var slice = self.regs.slice();
+    var frees = slice.items(.free);
+    for (frees, 0..) |free, i| {
+      if (free) {
+        frees[i] = false;
+        return @as(u32, slice.items(.val)[i]);
       }
     }
     return error.RegistersExhausted;
@@ -49,10 +52,13 @@ const VRegister = struct {
 
   pub fn releaseReg(self: *Self, reg: u32) void {
     if (reg == DummyReg) return;
-    for (&self.regs) |*_reg| {
-      if (_reg.val == reg) {
-        std.debug.assert(!_reg.free);
-        _reg.setFree(true);
+    var slice = self.regs.slice();
+    var vals = slice.items(.val);
+    for (vals, 0..) |val, i| {
+      if (val == reg) {
+        var frees = slice.items(.free);
+        std.debug.assert(!frees[i]);
+        frees[i] = true;
         return;
       }
     }
@@ -91,12 +97,12 @@ pub const Compiler = struct {
   gsyms: std.MultiArrayList(GSymVar),
   locals: std.MultiArrayList(LocalVar),
   globals: std.MultiArrayList(GlobalVar),
+  loop_ctrls: ds.ArrayList(*ast.ControlNode),
   vreg: VRegister,
   allocator: *CnAllocator,
-  scope: i32 = GLOBAL_SCOPE, // defaults to global scope
   vm: *VM,
+  scope: i32 = GLOBAL_SCOPE, // defaults to global scope
   rk_bx: RkBxPair = RkBxPair{},
-  loop_ctrls: ds.ArrayList(*ast.ControlNode),
   
   const Self = @This();
 
@@ -130,7 +136,7 @@ pub const Compiler = struct {
       .locals = locals,
       .globals = globals,
       .loop_ctrls = ds.ArrayList(*ast.ControlNode).init(al),
-      .vreg = VRegister.init(),
+      .vreg = VRegister.init(al),
       .vm = vm,
     };
   }

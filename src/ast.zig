@@ -77,7 +77,7 @@ pub const BinaryNode = struct {
 pub const SubscriptNode = struct {
   expr: *AstNode,
   index: *AstNode,
-  narrowed: ?VarNode = null,
+  narrowed: ?*VarNode = null,
   typ: ?*Type = null,
 
   pub fn init(expr: *AstNode, index: *AstNode) @This() {
@@ -105,37 +105,21 @@ pub const UnaryNode = struct {
 
 pub const ListNode = struct {
   elems: AstNodeList,
-  token: Token,
   typ: ?*Type = null,
 
-  pub fn init(allocator: std.mem.Allocator, token: Token) @This() {
-    return @This() {
-      .elems = AstNodeList.init(allocator),
-      .token = token
-    };
-  }
-
-  pub inline fn line(self: *@This()) usize {
-    return self.token.line;
+  pub fn init(allocator: std.mem.Allocator) @This() {
+    return @This() {.elems = AstNodeList.init(allocator)};
   }
 };
 
 pub const MapNode = struct {
   pairs: ds.ArrayList(Pair),
-  token: Token,
   typ: ?*Type = null,
 
   pub const Pair = struct {key: *AstNode, value: *AstNode};
 
-  pub fn init(allocator: std.mem.Allocator, token: Token) @This() {
-    return @This() {
-      .pairs = ds.ArrayList(Pair).init(allocator),
-      .token = token
-    };
-  }
-
-  pub inline fn line(self: *@This()) usize {
-    return self.token.line;
+  pub fn init(allocator: std.mem.Allocator) @This() {
+    return @This() {.pairs = ds.ArrayList(Pair).init(allocator)};
   }
 };
 
@@ -150,14 +134,19 @@ pub const VarNode = struct {
   pub inline fn line(self: *@This()) usize {
     return self.token.line;
   }
+
+  pub inline fn box(self: *@This(), al: std.mem.Allocator) *@This() {
+    var new = util.alloc(VarNode, al);
+    new.* = self.*;
+    return new;
+  }
 };
 
 pub const ExprStmtNode = struct {
   expr: *AstNode,
-  line: usize,
 
-  pub fn init(expr: *AstNode, line: usize) @This() {
-    return @This() {.expr = expr, .line = line};
+  pub fn init(expr: *AstNode) @This() {
+    return @This() {.expr = expr};
   }
 };
 
@@ -176,15 +165,14 @@ pub const VarDeclNode = struct {
 
 pub const BlockNode = struct {
   nodes: AstNodeList,
-  line: usize,
 
-  pub fn init(allocator: std.mem.Allocator, line: usize) @This() {
-    return @This() {.nodes = AstNodeList.init(allocator), .line = line};
+  pub fn init(allocator: std.mem.Allocator) @This() {
+    return @This() {.nodes = AstNodeList.init(allocator)};
   }
 
-  pub fn newEmptyBlock(line: usize, alloc: std.mem.Allocator) *AstNode {
+  pub fn newEmptyBlock(alloc: std.mem.Allocator) *AstNode {
     var block = util.alloc(AstNode, alloc);
-    block.* = .{.AstBlock = BlockNode.init(alloc, line)};
+    block.* = .{.AstBlock = BlockNode.init(alloc)};
     return block;
   }
 
@@ -195,27 +183,26 @@ pub const BlockNode = struct {
 };
 
 pub const TypeNode = struct {
-  typ: Type,
+  typ: *Type,
   token: Token,
   /// track whether this type was created in an alias or annotation context
   from_alias_or_annotation: bool = false,
 
-  pub fn init(typ: Type, token: Token) @This() {
+  pub fn init(typ: *Type, token: Token) @This() {
     return @This() {.typ = typ, .token = token};
   }
 };
 
 pub const AliasNode = struct {
-  token: Token, // token for 'type'
   alias: *TypeNode,
   aliasee: *TypeNode,
   typ: *Type, // alias and aliasee is set in `typ`
 
-  pub fn init(typ_token: Token, alias: *TypeNode, aliasee: *TypeNode) @This() {
-    aliasee.typ.alias = &alias.typ;
+  pub fn init(alias: *TypeNode, aliasee: *TypeNode) @This() {
+    aliasee.typ.alias = alias.typ;
     alias.from_alias_or_annotation = true;
     aliasee.from_alias_or_annotation = true;
-    return @This() {.alias = alias, .aliasee = aliasee, .token = typ_token, .typ = &alias.typ};
+    return @This() {.alias = alias, .aliasee = aliasee, .typ = alias.typ};
   }
 };
 
@@ -223,7 +210,7 @@ pub const AliasNode = struct {
 pub const DerefNode = struct {
   token: Token,
   expr: *AstNode,
-  narrowed: ?VarNode = null,
+  narrowed: ?*VarNode = null,
   typ: ?*Type = null,
 
   pub fn init(expr: *AstNode, token: Token) @This() {
@@ -272,7 +259,7 @@ pub const ElifNode = struct {
     var list = AstNodeList.init(alloc);
     return IfNode.init(
       self.cond, self.then, list,
-      BlockNode.newEmptyBlock(self.cond.getToken().line, alloc),
+      BlockNode.newEmptyBlock(alloc),
     );
   }
 };
@@ -328,10 +315,9 @@ pub const ControlNode = struct {
 // TODO: refactor to BlockNode if no other useful info needs to be added.
 pub const ProgramNode = struct {
   decls: AstNodeList,
-  line: usize,
 
-  pub fn init(allocator: std.mem.Allocator, line: usize) @This() {
-    return @This() {.decls = AstNodeList.init(allocator), .line = line};
+  pub fn init(allocator: std.mem.Allocator) @This() {
+    return @This() {.decls = AstNodeList.init(allocator)};
   }
 };
 
@@ -448,9 +434,9 @@ pub const AstNode = union(AstType) {
     };
   }
 
-  pub fn getNarrowed(self: *@This()) ?VarNode {
+  pub fn getNarrowed(self: *@This()) ?*VarNode {
     return switch (self.*) {
-      .AstVar => |vr| vr,
+      .AstVar => |*vr| vr,
       .AstSubscript => |*sub| sub.narrowed,
       .AstDeref => |*der| der.narrowed,
       else => null,
@@ -468,9 +454,9 @@ pub const AstNode = union(AstType) {
       .AstVarDecl => |decl| decl.ident.typ,
       .AstVar => |id| id.typ,
       .AstAssign => |asi| asi.typ,
-      .AstNType => |*typn| &typn.typ,
+      .AstNType => |*typn| typn.typ,
       .AstAlias => |ali| ali.typ,
-      .AstCast => |*cst| &cst.typn.typ,
+      .AstCast => |*cst| cst.typn.typ,
       .AstSubscript => |sub| if (sub.narrowed) |nrw| nrw.typ else sub.typ,
       .AstDeref => |der| if (der.narrowed) |nrw| nrw.typ else der.typ,
       .AstCondition => |cnd| cnd.cond.getType(),
@@ -485,8 +471,6 @@ pub const AstNode = union(AstType) {
       .AstNumber, .AstString, .AstBool, .AstNil => |lit| lit.token,
       .AstBinary, .AstAssign => |bin| bin.op.token,
       .AstUnary => |una| una.op.token,
-      .AstList, .AstTuple => |col| col.token,
-      .AstMap => |map| map.token,
       .AstExprStmt => |stmt| stmt.expr.getToken(),
       .AstVarDecl => |decl| decl.ident.token,
       .AstVar => |id| id.token,
@@ -500,14 +484,27 @@ pub const AstNode = union(AstType) {
       .AstIf => |ifn| ifn.cond.getToken(),
       .AstElif => |elif| elif.cond.getToken(),
       .AstWhile => |whi| whi.cond.getToken(),
-      .AstBlock => |*blk| {
-        if (blk.nodes.len() > 0) {
-          return blk.nodes.items()[0].getToken();
-        } else {
-          util.error_("Could not obtain token from node: {}", .{self});
+      else => {
+        switch (self.*) {
+          .AstList, .AstTuple => |*col| {
+            if (col.elems.len() > 0) {
+              return col.elems.items()[0].getToken();
+            }
+          },
+          .AstMap => |*map| {
+            if (map.pairs.len() > 0) {
+              return map.pairs.items()[0].key.getToken();
+            }
+          },
+          .AstBlock => |*blk| {
+            if (blk.nodes.len() > 0) {
+              return blk.nodes.items()[0].getToken();
+            }
+          },
+          else => {}
         }
+        util.error_("Could not obtain token from node: {}", .{self});
       },
-      else => unreachable,
     };
   }
 };

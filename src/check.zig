@@ -308,9 +308,9 @@ pub const TypeChecker = struct {
   //***********************************************************//
   const NarrowError = error{TypeCheckError, SynthFailure, SynthTooLarge};
 
-  fn synthesizeVar(self: *Self, vr: *ast.VarNode, other: ?*Node, env: *TypeEnv) NarrowError!ast.VarNode {
+  fn synthesizeVar(self: *Self, vr: *ast.VarNode, other: ?*Node, env: *TypeEnv) NarrowError!*ast.VarNode {
     if (vr.typ == null) _ = try self.inferVar(vr, false);
-    if (other == null) return vr.*;
+    if (other == null) return vr;
     switch (other.?.*) {
       .AstNumber, .AstString, .AstBool, .AstNil => |lit| {
         if (lit.token.value.len > MAX_STRING_SYNTH_LEN) {
@@ -326,7 +326,7 @@ pub const TypeChecker = struct {
         _ = self.narrowVariable(&ret, env) catch {
           self.diag.popUntil(last);
         };
-        return ret;
+        return ret.box(self.ctx.allocator());
       },
       else => |els| {
         std.debug.print("unexpected ast type for synth {}", .{els});
@@ -335,7 +335,7 @@ pub const TypeChecker = struct {
     }
   }
 
-  fn synthesizeSubscript(self: *Self, node: *ast.SubscriptNode, env: *TypeEnv, assume_true: bool) NarrowError!ast.VarNode {
+  fn synthesizeSubscript(self: *Self, node: *ast.SubscriptNode, env: *TypeEnv, assume_true: bool) NarrowError!*ast.VarNode {
     // synthesize node.expr with node.index
     try self.narrow(node.expr, env, assume_true);
     // if this node has been narrowed before, we don't want to reset its type,
@@ -346,11 +346,11 @@ pub const TypeChecker = struct {
       // since we're in the process of narrowing this subscript, we do not want `inferSubscript()`
       // to assume that this node is already narrowed, hence, we set a dummy value for `node.narrowed`
       // as a flag to `inferSubscript()` indicating that this node is being narrowed.
-      node.narrowed = .{.token = undefined, .typ = null};
+      node.narrowed = @constCast(&.{.token = undefined, .typ = null});
     }
     var ty = try self.inferSubscript(node);
     var narrowed = try self.synthesize(node.expr, env, assume_true);
-    narrowed = try self.synthesizeVar(&narrowed, node.index, env);
+    narrowed = try self.synthesizeVar(narrowed, node.index, env);
     if (narrowed.typ == null) {
       narrowed.typ = ty;
     }
@@ -360,19 +360,19 @@ pub const TypeChecker = struct {
     return narrowed;
   }
   
-  fn synthesizeDeref(self: *Self, node: *ast.DerefNode, env: *TypeEnv, assume_true: bool) NarrowError!ast.VarNode {
+  fn synthesizeDeref(self: *Self, node: *ast.DerefNode, env: *TypeEnv, assume_true: bool) NarrowError!*ast.VarNode {
     // synthesize node.expr
     try self.narrow(node.expr, env, assume_true);
     // similar to what inferSubscript() does here.
     var change = (node.narrowed == null);
     if (change) {
       // similar to what inferSubscript() does here.
-      node.narrowed = .{.token = undefined, .typ = null};
+      node.narrowed = @constCast(&.{.token = undefined, .typ = null});
     }
     var ty = try self.inferDeref(node);
     var narrowed = try self.synthesize(node.expr, env, assume_true);
     var nil = self.newStringNode("?", node.token);
-    narrowed = try self.synthesizeVar(&narrowed, &nil, env);
+    narrowed = try self.synthesizeVar(narrowed, &nil, env);
     if (narrowed.typ == null) {
       narrowed.typ = ty;
     }
@@ -382,7 +382,7 @@ pub const TypeChecker = struct {
     return narrowed;
   }
 
-  fn synthesize(self: *Self, node: *Node, env: *TypeEnv, assume_true: bool) NarrowError!ast.VarNode {
+  fn synthesize(self: *Self, node: *Node, env: *TypeEnv, assume_true: bool) NarrowError!*ast.VarNode {
     return switch (node.*) {
       .AstVar => |*vr| try self.synthesizeVar(vr, null, env),
       .AstSubscript => |*sub| try self.synthesizeSubscript(sub, env, assume_true),
@@ -436,7 +436,7 @@ pub const TypeChecker = struct {
     if (self.canNarrowSubscript(node)) {
       var vr = try self.synthesizeSubscript(node, env, assume_true);
       if (self.findName(vr.token.value)) |_| {
-        try self.narrowVariable(&vr, env);
+        try self.narrowVariable(vr, env);
         node.typ = env.getGlobal(vr.token.value);
       } else {
         self.insertType(vr.token.value, vr.typ.?);
@@ -452,7 +452,7 @@ pub const TypeChecker = struct {
     if (self.canNarrowDeref(node)) {
       var vr = try self.synthesizeDeref(node, env, assume_true);
       if (self.findName(vr.token.value)) |_| {
-        try self.narrowVariable(&vr, env);
+        try self.narrowVariable(vr, env);
         node.typ = env.getGlobal(vr.token.value);
       } else {
         self.insertType(vr.token.value, vr.typ.?);
@@ -470,7 +470,7 @@ pub const TypeChecker = struct {
         _ = try self.inferBinary(node);
         // if we get here, then right must be a TypeNode
         var ty = try self.lookupName(&node.left.AstVar, true);
-        if (Type.is(ty, &node.right.AstNType.typ, self.ctx.allocator())) |is_ty| {
+        if (Type.is(ty, node.right.AstNType.typ, self.ctx.allocator())) |is_ty| {
           env.putNarrowed(node.left.AstVar.token.value, is_ty);
           if (!assume_true) {
             if (!try env.not_(node.left.AstVar.token.value, self)) {
@@ -488,7 +488,7 @@ pub const TypeChecker = struct {
         try self.narrow(node.left, env, assume_true);
         if (node.left.getNarrowed()) |vr| {
           var synth = node.*;
-          synth.left = &.{.AstVar = vr};
+          synth.left = &.{.AstVar = vr.*};
           try self.narrowBinary(&synth, env, assume_true);
           node.typ = synth.typ;
           return;
@@ -549,7 +549,7 @@ pub const TypeChecker = struct {
     } else if (self.canNarrow(node.left) and node.right.isNilLiteral()) {
       var token = node.right.AstNil.token;
       var tmp = self.newAstNode();
-      tmp.* = .{.AstNType = ast.TypeNode.init(Type.newConcrete(.TyNil, null), token)};
+      tmp.* = .{.AstNType = ast.TypeNode.init(Type.newConcrete(.TyNil, null).box(self.ctx.allocator()), token)};
       var bin = b: {
         if (node.op.optype == .OpEqq or node.op.optype == .OpNeq) {
           var bin = node.*;
@@ -866,7 +866,7 @@ pub const TypeChecker = struct {
       );
     }
     // at this point, rhs is a TypeNode
-    var ty = &node.right.AstNType.typ;
+    var ty = node.right.AstNType.typ;
     if (!ty.isConcrete() and ty.isGeneric() and ty.generic().tparams_len() != 0) {
       return self.error_(
         true, node.op.token,
@@ -892,7 +892,7 @@ pub const TypeChecker = struct {
 
   fn inferCast(self: *Self, node: *ast.CastNode) !*Type {
     var typ = try self.infer(node.expr);
-    var cast_typ = &node.typn.typ;
+    var cast_typ = node.typn.typ;
     // use coercion rules
     return try self.checkCast(typ, cast_typ, node.typn.token, true);
   }
@@ -927,7 +927,7 @@ pub const TypeChecker = struct {
     if (!node.from_alias_or_annotation) {
       return &UnitTypes.TyTy;
     }
-    return &node.typ;
+    return node.typ;
   }
 
   fn inferAlias(self: *Self, node: *ast.AliasNode) !*Type {
@@ -961,7 +961,7 @@ pub const TypeChecker = struct {
       var env = TypeEnv.init(self.ctx.allocator(), null);
       env.global.pushScope();
       node.narrowed = self.synthesizeSubscript(node, &env, true) catch return error.TypeCheckError;
-      if (node.narrowed) |*narrowed| {
+      if (node.narrowed) |narrowed| {
         node.typ = self.inferVar(narrowed, false) catch null;
         if (node.typ) |ty| {
           return ty;
@@ -989,7 +989,7 @@ pub const TypeChecker = struct {
       var env = TypeEnv.init(self.ctx.allocator(), null);
       env.global.pushScope();
       node.narrowed = self.synthesizeDeref(node, &env, true) catch return error.TypeCheckError;
-      if (node.narrowed) |*narrowed| {
+      if (node.narrowed) |narrowed| {
         node.typ = self.inferVar(narrowed, false) catch null;
         if (node.typ) |ty| {
           return ty;

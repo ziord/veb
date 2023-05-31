@@ -571,11 +571,7 @@ pub const TypeLinker = struct {
   }
 
   fn linkNType(self: *Self, node: *ast.TypeNode) !void {
-    // TODO: using an indirection here because somehow using the `node.typ` 
-    //      itself leads to aliasing issues in Zig.
-    var typ = node.typ.box(self.ctx.allocator());
-    var tmp = try self.resolve(typ, node.token);
-    node.typ = tmp.*;
+    node.typ = try self.resolve(node.typ, node.token);
   }
 
   fn linkCast(self: *Self, node: *ast.CastNode) !void {
@@ -594,7 +590,7 @@ pub const TypeLinker = struct {
   fn linkAlias(self: *Self, node: *ast.AliasNode) !void {
     var typ = node.alias.typ;
     var tokens = if (typ.isGeneric()) typ.generic().base.variable().tokens else typ.variable().tokens;
-    self.ctx.typScope.insert(tokens.items()[0].value, &node.aliasee.typ);
+    self.ctx.typScope.insert(tokens.items()[0].value, node.aliasee.typ);
   }
 
   fn linkSubscript(self: *Self, node: *ast.SubscriptNode) !void {

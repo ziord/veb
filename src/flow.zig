@@ -174,7 +174,7 @@ pub const CFGBuilder = struct {
     // if .. else (.. if .. else)
     var ifn = ast.SimpleIfNode.init(
       node.cond, node.then,
-      ast.BlockNode.newEmptyBlock(node.cond.getToken().line, self.allocator)
+      ast.BlockNode.newEmptyBlock(self.allocator)
     );
     var els: ?*Node = null;
     if (node.elifs.len() > 0) {

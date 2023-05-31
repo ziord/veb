@@ -334,7 +334,7 @@ pub const Parser = struct {
     const node = self.newNode();
     // wrap nil literal as nil TypeNode
     if (rhs.isNilLiteral()) {
-      var nil = Type.newConcrete(.TyNil, null);
+      var nil = Type.newConcrete(.TyNil, null).box(self.allocator);
       rhs.* = .{.AstNType = ast.TypeNode.init(nil, self.previous_tok)};
     }
     node.* = .{.AstBinary = ast.BinaryNode.init(lhs, rhs, op)};    
@@ -377,7 +377,7 @@ pub const Parser = struct {
   fn tupling(self: *Self, assignable: bool, first: ?*Node) !*Node {
     _ = assignable;
     var node = self.newNode();
-    node.* = .{.AstTuple = ast.ListNode.init(self.allocator, self.current_tok)};
+    node.* = .{.AstTuple = ast.ListNode.init(self.allocator)};
     var tuple = &node.*.AstTuple.elems;
     if (first) |elem| {
       tuple.append(elem);
@@ -400,7 +400,7 @@ pub const Parser = struct {
   fn listing(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     var node = self.newNode();
-    node.* = .{.AstList = ast.ListNode.init(self.allocator, self.current_tok)};
+    node.* = .{.AstList = ast.ListNode.init(self.allocator)};
     self.incNl();
     try self.consume(.TkLSqrBracket);
     var list = &node.*.AstList.elems;
@@ -425,7 +425,7 @@ pub const Parser = struct {
   fn mapping(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     var node = self.newNode();
-    node.* = .{.AstMap = ast.MapNode.init(self.allocator, self.current_tok)};
+    node.* = .{.AstMap = ast.MapNode.init(self.allocator)};
     self.incNl();
     try self.consume(.TkLCurly);
     var pairs = &node.*.AstMap.pairs;
@@ -736,7 +736,7 @@ pub const Parser = struct {
     var token = self.current_tok;
     var typ = try self.tExpr();
     var node = self.newNode();
-    node.* = .{.AstNType = ast.TypeNode.init(typ, token)};
+    node.* = .{.AstNType = ast.TypeNode.init(typ.box(self.allocator), token)};
     return node;
   }
 
@@ -796,18 +796,17 @@ pub const Parser = struct {
 
   fn typeAlias(self: *Self) !*Node {
     // TypeAlias   := "type" AbstractType "=" ConcreteType
-    var type_tok = self.previous_tok;
-    var alias_typ = try self.abstractType();
+    var alias_typ = (try self.abstractType()).box(self.allocator);
     var alias = self.newNode();
     alias.* = .{.AstNType = ast.TypeNode.init(alias_typ, self.current_tok)};
     try self.consume(.TkEqual);
     var aliasee = try self.typing(false);
     var node = self.newNode();
     // check that generic type variable parameters in `AbstractType` are not generic in `ConcreteType`
-    try self.assertNoGenericParameterTypeVariable(&alias_typ, &aliasee.AstNType.typ);
+    try self.assertNoGenericParameterTypeVariable(alias_typ, aliasee.AstNType.typ);
     // TODO: should this be disallowed? It poses no issues at the moment.
     // self.assertNoDirectRecursiveAlias(&alias_typ, &aliasee.AstNType.typ);
-    node.* = .{.AstAlias = ast.AliasNode.init(type_tok, &alias.AstNType, &aliasee.AstNType)};
+    node.* = .{.AstAlias = ast.AliasNode.init(&alias.AstNType, &aliasee.AstNType)};
     try self.consumeNlOrEof();
     return node;
   }
@@ -816,7 +815,7 @@ pub const Parser = struct {
     if (self.match(.TkColon)) {
       var typ_node = &(try self.typing(false)).AstNType;
       typ_node.from_alias_or_annotation = true;
-      ident.typ = &typ_node.typ;
+      ident.typ = typ_node.typ;
     }
   }
 
@@ -825,11 +824,10 @@ pub const Parser = struct {
   }
 
   fn blockStmt(self: *Self, skip_do: bool) !*Node {
-    const line = self.current_tok.line;
     if (!skip_do) try self.consume(.TkDo);
     try self.consume(.TkNewline);
     var node = self.newNode();
-    node.* = .{.AstBlock = ast.BlockNode.init(self.allocator, line)};
+    node.* = .{.AstBlock = ast.BlockNode.init(self.allocator)};
     while (!self.check(.TkEof) and !self.check(.TkEnd)) {
       node.AstBlock.nodes.append(try self.statement());
     }
@@ -859,7 +857,7 @@ pub const Parser = struct {
     const cond = try self.parseExpr();
     _ = self.match(.TkThen);
     try self.consume(.TkNewline);
-    var then = ast.BlockNode.init(self.allocator, self.previous_tok.line);
+    var then = ast.BlockNode.init(self.allocator);
     while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
       then.nodes.append(try self.statement());
     }
@@ -868,7 +866,7 @@ pub const Parser = struct {
       var elif_cond = try self.parseExpr();
       _ = self.match(.TkThen);
       try self.consume(.TkNewline);
-      var elif_then = ast.BlockNode.init(self.allocator, self.previous_tok.line);
+      var elif_then = ast.BlockNode.init(self.allocator);
       while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
         elif_then.nodes.append(try self.statement());
       }
@@ -878,7 +876,7 @@ pub const Parser = struct {
       elif_node.* = .{.AstElif = ast.ElifNode.init(elif_cond, elif_then_node)};
       elifs.append(elif_node);
     }
-    var els = ast.BlockNode.init(self.allocator, self.previous_tok.line);
+    var els = ast.BlockNode.init(self.allocator);
     if (self.match(.TkElse)) {
       try self.consume(.TkNewline);
       while (!self.check(.TkEof) and !self.check(.TkEnd)) {
@@ -921,16 +919,15 @@ pub const Parser = struct {
   }
 
   fn exprStmt(self: *Self) !*Node {
-    const line = self.current_tok.line;
     const expr = try self.parseExpr();
     const node = self.newNode();
-    node.* = .{.AstExprStmt = ast.ExprStmtNode.init(expr, line)};
+    node.* = .{.AstExprStmt = ast.ExprStmtNode.init(expr)};
     try self.consumeNlOrEof();
     return node;
   }
 
   fn emptyStmt(self: *Self) *Node {
-    return ast.BlockNode.newEmptyBlock(self.previous_tok.line, self.allocator);
+    return ast.BlockNode.newEmptyBlock(self.allocator);
   }
 
   fn recover(self: *Self) void {
@@ -965,7 +962,7 @@ pub const Parser = struct {
   pub fn parse(self: *Self) !*Node {
     self.advance() catch {};
     var program = self.newNode();
-    program.* = .{.AstProgram = ast.ProgramNode.init(self.allocator, self.current_tok.line)};
+    program.* = .{.AstProgram = ast.ProgramNode.init(self.allocator)};
     while (!self.match(.TkEof)) {
       var stmt = self.statement() catch blk: {
         self.recover();

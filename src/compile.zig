@@ -149,7 +149,12 @@ pub const Compiler = struct {
   }
 
   fn lastLine(self: *Self) u32 {
-    return self.code.lines.items[self.code.lines.items.len - 1];
+    return (
+      if (self.code.lines.items.len > 0)
+        self.code.lines.items[self.code.lines.items.len - 1]
+      else 
+        1
+    );
   }
 
   fn getReg(self: *Self) u32 {
@@ -498,7 +503,7 @@ pub const Compiler = struct {
 
   inline fn cCollection(self: *Self, node: *ast.ListNode, dst: u32, new: OpCode, set: OpCode) u32 {
     const size = @intCast(u32, node.elems.len());
-    self.code.write2ArgsInst(new, dst, size, node.line(), self.vm);
+    self.code.write2ArgsInst(new, dst, size, self.lastLine(), self.vm);
     var idx: u32 = undefined;
     for (node.elems.items(), 0..) |elem, i| {
       var reg = self.getReg();
@@ -508,10 +513,10 @@ pub const Compiler = struct {
         idx = self.code.storeConst(val, self.vm);
       } else {
         idx = self.getReg();
-        _ = self.cConst(idx, val, node.line());
+        _ = self.cConst(idx, val, self.lastLine());
         self.vreg.releaseReg(idx);
       }
-      self.code.write3ArgsInst(set, dst, idx, rk_val, node.line(), self.vm);
+      self.code.write3ArgsInst(set, dst, idx, rk_val, self.lastLine(), self.vm);
       self.vreg.releaseReg(reg);
     }
     return dst;
@@ -528,13 +533,13 @@ pub const Compiler = struct {
   fn cMap(self: *Self, node: *ast.MapNode, dst: u32) u32 {
     const size = @intCast(u32, node.pairs.len());
     // TODO: specialize map with k-v types
-    self.code.write2ArgsInst(.Nmap, dst, size, node.line(), self.vm);
+    self.code.write2ArgsInst(.Nmap, dst, size, self.lastLine(), self.vm);
     for (node.pairs.items()) |pair| {
       var reg1 = self.getReg();
       var reg2 = self.getReg();
       var rk_key = self.c(pair.key, reg1);
       var rk_val = self.c(pair.value, reg2);
-      self.code.write3ArgsInst(.Smap, dst, rk_key, rk_val, node.line(), self.vm);
+      self.code.write3ArgsInst(.Smap, dst, rk_key, rk_val, self.lastLine(), self.vm);
       self.vreg.releaseReg(reg1);
       self.vreg.releaseReg(reg2);
     }
@@ -882,8 +887,7 @@ pub const Compiler = struct {
   pub fn compile(self: *Self, node: *Node) void {
     self.preallocateGlobals(&node.AstProgram.decls);
     util.assert(self.c(node, VRegister.DummyReg) == VRegister.DummyReg, "should be a dummy register");
-    const last_line = if (self.code.lines.items.len > 0) self.code.lines.items[self.code.lines.items.len - 1] else 0;
-    self.code.writeNoArgInst(.Ret, last_line, self.vm);
+    self.code.writeNoArgInst(.Ret, self.lastLine(), self.vm);
     self.validateNoUnpatchedGlobals();
     // release memory associated with the arena, since we're done with it at this point.
     self.allocator.deinitArena();

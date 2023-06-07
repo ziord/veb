@@ -28,17 +28,13 @@ pub const FlowEdge = enum {
   ESequential,
 };
 
-pub const ResolutionState = enum {
-  Resolved,
-  Processing,
-  Unresolved,
+pub const FlowMeta = struct {
+  entry: *FlowNode,
+  exit: *FlowNode,
+  dead: *FlowNode,
 
-  pub inline fn isResolved(res: @This()) bool {
-    return res == .Resolved;
-  }
-
-  pub inline fn isUnresolved(res: @This()) bool {
-    return res == .Unresolved;
+  pub fn init(entry: *FlowNode, exit: *FlowNode, dead: *FlowNode) @This() {
+    return @This() {.entry = entry, .exit = exit, .dead = dead};
   }
 };
 
@@ -81,22 +77,21 @@ pub const FlowNode = struct {
     return list;
   }
 
-  fn outgoingNodes(node: *@This(), visited: *std.AutoHashMap(*FlowNode, u32), edge: FlowEdge, list: *FlowList) void {
+  fn outgoingNodes(node: *@This(), visited: *std.AutoArrayHashMap(*FlowNode, u32), edge: FlowEdge) void {
     if (visited.get(node)) |_| return;
     for (node.prev_next.items()) |nd| {
       if (nd.next and nd.flo.edge == edge) {
-        list.append(nd.flo);
         visited.put(nd.flo, 0) catch {};
-        outgoingNodes(nd.flo, visited, edge, list);
+        outgoingNodes(nd.flo, visited, edge);
       }
     }
   }
 
   pub fn getOutgoingNodes(node: *@This(), edge: FlowEdge, allocator: std.mem.Allocator) FlowList {
     var nodes = FlowList.init(allocator);
-    var visited = std.AutoHashMap(*FlowNode, u32).init(allocator);
-    outgoingNodes(node, &visited, edge, &nodes);
-    visited.clearAndFree();
+    var visited = std.AutoArrayHashMap(*FlowNode, u32).init(allocator);
+    outgoingNodes(node, &visited, edge);
+    nodes.list.items = visited.keys();
     return nodes;
   }
 
@@ -109,13 +104,63 @@ pub const FlowNode = struct {
   }
 };
 
+pub const ResolutionState = enum {
+  Resolved,
+  Processing,
+  Unresolved,
+
+  pub inline fn isResolved(res: @This()) bool {
+    return res == .Resolved;
+  }
+
+  pub inline fn isUnresolved(res: @This()) bool {
+    return res == .Unresolved;
+  }
+};
+
+pub const CFG = struct {
+  /// named functions
+  funcs: std.StringArrayHashMap(FlowMeta),
+  /// anonymous functions
+  afuncs: ds.ArrayList(FlowMeta),
+  /// whole program
+  program: FlowMeta,
+
+  pub fn init(al: std.mem.Allocator) @This() {
+    return @This() {
+      .funcs = std.StringArrayHashMap(FlowMeta).init(al),
+      .afuncs = ds.ArrayList(FlowMeta).init(al),
+      .program = undefined,
+    };
+  }
+
+  pub fn putFunc(self: *@This(), name: []const u8, info: FlowMeta) void {
+    self.funcs.put(name, info) catch {};
+  }
+
+  pub fn putAFunc(self: *@This(), info: FlowMeta) void {
+    self.afuncs.append(info);
+  }
+
+  pub fn lookup(self: *@This(), name: ?[]const u8, node: *Node) FlowMeta {
+    if (name) |nm| {
+      return self.funcs.get(nm).?;
+    }
+    for (self.afuncs.items()) |itm| {
+      if (itm.entry.node == node) {
+        return itm;
+      }
+    }
+    unreachable;
+  }
+};
+
 pub const CFGBuilder = struct {
-  allocator: std.mem.Allocator,
   nodes: std.AutoHashMap(*Node, *FlowNode),
-  root: *Node,
   entry: *FlowNode,
   exit: *FlowNode,
   dead: *FlowNode,
+  cfg: *CFG = undefined,
   /// the condition node of the current while loop
   curr_while_cond: ?*FlowNode = null,
   /// the node after the current while loop
@@ -123,16 +168,18 @@ pub const CFGBuilder = struct {
 
   const Self = @This();
 
-  pub fn init(root: *Node, allocator: std.mem.Allocator) Self {
+  pub fn init(allocator: std.mem.Allocator) Self {
     var empty = createEmptyNode(allocator);
     return Self {
-      .root = root,
-      .allocator = allocator,
       .entry = FlowNode.init(.CfgEntry, empty, allocator),
       .exit = FlowNode.init(.CfgExit, empty, allocator),
       .dead = FlowNode.init(.CfgDead, empty, allocator),
       .nodes = std.AutoHashMap(*Node, *FlowNode).init(allocator),
     };
+  }
+
+  inline fn alloc(self: *Self) std.mem.Allocator {
+    return self.nodes.allocator;
   }
 
   fn createEmptyNode(allocator: std.mem.Allocator) *Node {
@@ -142,13 +189,13 @@ pub const CFGBuilder = struct {
   }
 
   fn createConditionNode(self: *Self, cond: *Node) *Node {
-    var node = util.alloc(Node, self.allocator);
+    var node = util.alloc(Node, self.alloc());
     node.* = .{.AstCondition = ast.ConditionNode.init(cond)};
     return node;
   }
 
   fn getFlowNode(self: *Self, node: *Node, tag: FlowTag) *FlowNode {
-    var flow = FlowNode.init(tag, node, self.allocator);
+    var flow = FlowNode.init(tag, node, self.alloc());
     self.nodes.put(node, flow) catch |e| {
       std.debug.print("Error - {}", .{e});
       std.debug.assert(false);
@@ -174,13 +221,13 @@ pub const CFGBuilder = struct {
     // if .. else (.. if .. else)
     var ifn = ast.SimpleIfNode.init(
       node.cond, node.then,
-      ast.BlockNode.newEmptyBlock(self.allocator)
+      ast.BlockNode.newEmptyBlock(self.alloc(), node.cond)
     );
     var els: ?*Node = null;
     if (node.elifs.len() > 0) {
       for (node.elifs.items(), 0..) |elif, i| {
-        var if_ = elif.AstElif.toIf(self.allocator);
-        var nd = util.alloc(Node, self.allocator);
+        var if_ = elif.AstElif.toIf(self.alloc());
+        var nd = util.alloc(Node, self.alloc());
         nd.* = .{.AstSimpleIf = self.simplifyIfNode(&if_)};
         if (els) |_els| _els.AstSimpleIf.els = nd;
         if (i == 0) ifn.els = nd;
@@ -194,19 +241,25 @@ pub const CFGBuilder = struct {
     return ifn;
   }
 
-  fn linkExprStmt(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
-    var flow = self.getFlowNode(node, .CfgOther);
+  fn linkAtomic(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge, tag: FlowTag) FlowList {
+    var flow = self.getFlowNode(node, tag);
     self.connectVerticesWithEdgeInfo(prev, flow, edge);
-    return flow.toList(self.allocator);
+    return flow.toList(self.alloc());
   }
 
-  fn linkNodeList(self: *Self, nodes: *ast.AstNodeList, prev: FlowList, edge: FlowEdge) FlowList {
+  fn linkNodeList(self: *Self, nodes: *ast.AstNodeList, cond: ?*Node, prev: FlowList, edge: FlowEdge) FlowList {
+    // cond indicates whether this block is from a branching entry or a normal do..end block
     var _prev = prev;
     for (nodes.items(), 0..) |item, i| {
       if (item.isTypeAlias()) {
         continue;
       } else if (item.isControl()) {
-        _prev = self.linkControl(item, _prev, edge, i + 1 == nodes.len());
+        var is_last = if (cond != null) i + 1 == nodes.len() else false;
+        _prev = self.linkControl(item, _prev, edge, is_last);
+        continue;
+      } else if (item.isRet()) {
+        var is_last = if (cond != null) i + 1 == nodes.len() else false;
+        _prev = self.linkRet(item, _prev, edge, is_last);
         continue;
       } else if (item.isWhile()) {
         if (i + 1 < nodes.len()) {
@@ -220,22 +273,14 @@ pub const CFGBuilder = struct {
   
   fn linkBlock(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
     var block = &node.AstBlock;
-    return self.linkNodeList(&block.nodes, prev, edge);
-  }
-
-  fn linkVarDecl(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
-    var curr = self.getFlowNode(node, .CfgOther);
-    self.connectVerticesWithEdgeInfo(prev, curr, edge);
-    return curr.toList(self.allocator);
+    return self.linkNodeList(&block.nodes, block.cond, prev, edge);
   }
 
   fn linkSimpleIf(self: *Self, ast_node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
     var node = &ast_node.AstSimpleIf;
     var cond = self.createConditionNode(node.cond);
-    var flow = self.getFlowNode(cond, .CfgOther);
-    self.connectVerticesWithEdgeInfo(prev, flow, edge);
-    var flow_list = flow.toList(self.allocator);
-    var ret = FlowList.init(self.allocator);
+    var flow_list = self.linkAtomic(cond, prev, edge, .CfgOther);
+    var ret = FlowList.init(self.alloc());
     // cond->then.body, and to if-exit 
     var if_then = self.linkBlock(node.then, flow_list, .ETrue);
     ret.extend(&if_then);
@@ -247,7 +292,7 @@ pub const CFGBuilder = struct {
 
   fn linkIf(self: *Self, ast_node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
     var tmp = self.simplifyIfNode(&ast_node.AstIf);
-    var simple_if = util.alloc(Node, self.allocator);
+    var simple_if = util.alloc(Node, self.alloc());
     simple_if.* = .{.AstSimpleIf = tmp};
     return self.linkSimpleIf(simple_if, prev, edge);
   }
@@ -266,15 +311,18 @@ pub const CFGBuilder = struct {
     self.curr_while_cond = flow;
     // prev -> cond
     self.connectVerticesWithEdgeInfo(prev, flow, edge);
-    var flow_list = flow.toList(self.allocator);
+    var flow_list = flow.toList(self.alloc());
     // cond -> then.body
     var then = self.linkBlock(node.then, flow_list, .ETrue);
     // last.then.body -> cond
     if (node.then.AstBlock.getLast()) |last| {
-      for (then.items()) |item| {
-        if (item.node == last) {
-          self.connectVerticesWithEdgeInfo(item.toList(self.allocator), flow, .ESequential);
-          item.res = .Processing;
+      // return node should not link back to condition
+      if (!last.isRet()) {
+        for (then.items()) |item| {
+          if (item.node == last) {
+            self.connectVerticesWithEdgeInfo(item.toList(self.alloc()), flow, .ESequential);
+            item.res = .Processing;
+          }
         }
       }
     }
@@ -286,17 +334,15 @@ pub const CFGBuilder = struct {
 
   fn linkControl(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge, is_last: bool) FlowList {
     // continue -> loop-cond, break -> loop-exit
-    var flow = self.getFlowNode(node, .CfgOther);
-    self.connectVerticesWithEdgeInfo(prev, flow, edge);
-    var flow_list = flow.toList(self.allocator);
+    var flow_list = self.linkAtomic(node, prev, edge, .CfgOther);
     std.debug.assert(self.curr_while_cond != null);
     var ctrl = &node.AstControl;
     if (ctrl.isContinue()) {
       self.connectVerticesWithEdgeInfo(flow_list, self.curr_while_cond.?, edge);
       if (!is_last) {
-        return self.dead.toList(self.allocator);
+        return self.dead.toList(self.alloc());
       } else {
-        return FlowList.init(self.allocator);
+        return FlowList.init(self.alloc());
       }
     } else { // break
       if (self.after_while) |after| {
@@ -306,36 +352,84 @@ pub const CFGBuilder = struct {
       // cfg node (from this node) to not be dead - since a break statement at the end
       // of a loop body is essentially normal control flow. - similar to continue (see if part)
       if (!is_last) {
-        return self.dead.toList(self.allocator);
-      } else {
-        return flow_list;
+        flow_list.append(self.dead);
       }
+      return flow_list;
     }
   }
 
-  fn linkProgram(self: *Self, ast_node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
+  fn linkRet(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge, is_last: bool) FlowList {
+    var flow_list = self.linkAtomic(node, prev, edge, .CfgOther);
+    self.connectVerticesWithEdgeInfo(flow_list, self.exit, edge);
+    if (!is_last) {
+      flow_list.append(self.dead);
+    }
+    return flow_list;
+  }
+
+  fn linkFun(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
+    // this is just a placeholder node to complete the link
+    // between functions and non-functions in the flow graph
+    var flow_list = self.linkAtomic(node, prev, edge, .CfgOther);
+    var fun = &node.AstFun;
+    // build the cfg of fun
+    var builder = CFGBuilder.init(self.alloc());
+    var synth = ast.BlockNode.init(self.alloc(), fun.body.AstBlock.cond);
+    synth.nodes.ensureTotalCapacity(fun.params.len() + fun.body.AstBlock.nodes.len());
+    for (fun.params.items()) |param| {
+      var tmp = util.alloc(Node, self.alloc());
+      tmp.* = @as(Node, .{.AstVarDecl = param});
+      synth.nodes.append(tmp);
+    }
+    synth.nodes.extend(&fun.body.AstBlock.nodes);
+    var body = @as(Node, .{.AstBlock = synth});
+    var cfg = builder.buildBlock(&body);
+    if (fun.isAnonymous()) {
+      self.cfg.putAFunc(cfg.program);
+    } else {
+      self.cfg.putFunc(fun.name.?.token.value, cfg.program);
+    }
+    return flow_list;
+  }
+
+  fn linkProgram(self: *Self, ast_node: *Node, prev: FlowList, edge: FlowEdge) void {
     var node = &ast_node.AstProgram;
-    var _prev = self.linkNodeList(&node.decls, prev, edge);
+    var _prev = self.linkNodeList(&node.decls, null, prev, edge);
     self.connectVertices(_prev, self.exit);
-    return undefined;
+    self.cfg.program = FlowMeta.init(self.entry, self.exit, self.dead);
   }
 
   fn link(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
     return switch (node.*) {
-      .AstExprStmt => self.linkExprStmt(node, prev, edge),
-      .AstVarDecl => self.linkVarDecl(node, prev, edge),
+      .AstExprStmt => self.linkAtomic(node, prev, edge, .CfgOther),
+      .AstVarDecl => self.linkAtomic(node, prev, edge, .CfgOther),
+      .AstCall => self.linkAtomic(node, prev, edge, .CfgOther),
       .AstBlock => self.linkBlock(node, prev, edge),
       .AstIf => self.linkIf(node, prev, edge),
       .AstSimpleIf => self.linkSimpleIf(node, prev, edge),
       .AstWhile => self.linkWhile(node, prev, edge),
       .AstControl => self.linkControl(node, prev, edge, false),
-      .AstProgram => self.linkProgram(node, prev, edge),
+      .AstFun => self.linkFun(node, prev, edge),
       else => unreachable,
     };
   }
 
-  pub fn build(self: *Self) *FlowNode {
-    _ = self.linkProgram(self.root, self.entry.toList(self.allocator), .ESequential);
-    return self.entry;
+  pub fn buildBlock(self: *Self, ast_node: *Node) CFG {
+    var cfg = CFG.init(self.alloc());
+    self.cfg = &cfg;
+    var node = &ast_node.AstBlock;
+    var _prev = self.linkNodeList(&node.nodes, node.cond, self.entry.toList(self.alloc()), .ESequential);
+    self.connectVertices(_prev, self.exit);
+    self.cfg.program = FlowMeta.init(self.entry, self.exit, self.dead);
+    self.cfg = undefined;
+    return cfg;
+  }
+
+  pub fn build(self: *Self, root: *Node) CFG {
+    var cfg = CFG.init(self.alloc());
+    self.cfg = &cfg;
+    _ = self.linkProgram(root, self.entry.toList(self.alloc()), .ESequential);
+    self.cfg = undefined;
+    return cfg;
   }
 };

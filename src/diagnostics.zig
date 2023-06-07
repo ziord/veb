@@ -48,7 +48,7 @@ pub const Diagnostic = struct {
         .token = token,
         .msg = try std.fmt.allocPrint(
           allocator, "{s}.{}:{}:\n\t{s}\n",
-          .{self.filename.*, token.line,col, token.getLine(self.src.*)}
+          .{self.filename.*, token.line, col, token.getLine(self.src.*)}
         )
       }
     );

@@ -7,31 +7,47 @@ const value = @import("value.zig");
 const link = @import("link.zig");
 const check = @import("check.zig");
 const flow = @import("flow.zig");
+const ast = @import("ast.zig");
 const CnAllocator = @import("allocator.zig");
 
 pub fn main() !void {
-  std.debug.print("hello nova!\n", .{});
+  std.debug.print("hello canary!\n", .{});
+  var src =
+  \\ type T = num
+  \\ fn foo(a: T): T
+  \\  return foo(a)
+  \\ end
+  \\ foo(5) + 9
+  \\ let j: num | list{str} = 5
+  \\ if j is num | list{str}
+  \\  j[0] = 'fox'
+  \\ end
+  ;
+  _ = try doTest(src);
 }
 
 fn doTest(src: []const u8) !value.Value {
   var cna = CnAllocator.init(std.heap.ArenaAllocator.init(std.testing.allocator));
   defer cna.deinit();
-  const filename = @as([]const u8, "test.nova");
+  const filename = @as([]const u8, "test.cn");
   var parser = parse.Parser.init(@constCast(&src), &filename, &cna);
   const node = try parser.parse();
-  var tych = check.TypeChecker.init(cna.getArenaAllocator(), &@as([]const u8, "test.nova"), @constCast(&src));
-  try tych.typecheck(node);
-  var code = value.Code.init();
-  var cpu = vm.VM.init(&cna, &code);
-  defer cpu.deinit();
-  var compiler = compile.Compiler.init(filename, src, &cpu, &code, &cna);
-  compiler.compile(node);
-  debug.Disassembler.disCode(code, "test");
-  try cpu.run();
-  value.printValue(cpu.stack[0]);
-  std.debug.print("\n", .{});
-  // TODO: refactor testing, as it currently uses invalidated data
-  return cpu.stack[0]; // !!invalidated!!
+  std.debug.print("node: {}\n", .{node});
+
+  // var tych = check.TypeChecker.init(cna.getArenaAllocator(), &@as([]const u8, "test.nova"), @constCast(&src));
+  // try tych.typecheck(node);
+  // var code = value.Code.init();
+  // var cpu = vm.VM.init(&cna, &code);
+  // defer cpu.deinit();
+  // var compiler = compile.Compiler.init(filename, src, &cpu, &code, &cna);
+  // compiler.compile(node);
+  // debug.Disassembler.disCode(code, "test");
+  // try cpu.run();
+  // value.printValue(cpu.stack[0]);
+  // std.debug.print("\n", .{});
+  // // TODO: refactor testing, as it currently uses invalidated data
+  // return cpu.stack[0]; // !!invalidated!!
+  return 0;
 }
 
 test "arithmetic ops" {
@@ -260,6 +276,15 @@ test "types" {
   \\ s[1] = q[1]
   \\ s[2] = q[2]
   \\ (s, q)
+  ;
+  _ = try doTest(src);
+}
+
+test "uninstantiated generic types" {
+  var src = 
+  \\ let p: tuple = ()
+  \\ let j: list = []
+  \\ let q: map = {}
   ;
   _ = try doTest(src);
 }

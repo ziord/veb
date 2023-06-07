@@ -22,13 +22,13 @@ pub const VM = struct {
   gc: GC,
 
   const Self = @This();
-  const STACK_MAX = 0xffff;
+  const STACK_MAX = 0xfff;
   pub const MAX_GSYM_ITEMS = vl.MAX_REGISTERS << 1;
   pub const MAX_LOCAL_ITEMS = vl.MAX_REGISTERS << 1;
   const RuntimeError = error{RuntimeError};
   const TypeTag2CheckFunc = [_]*const fn(Value) bool {
     vl.isBoolNoInline, vl.isNumberNoInline, vl.isStringNoInline,
-    vl.isNilNoInline, vl.isListNoInline, vl.isMapNoInline,
+    vl.isNilNoInline, vl.isVoidNoInline, vl.isListNoInline, vl.isMapNoInline,
     vl.isTupleNoInline,
   };
 
@@ -122,7 +122,7 @@ pub const VM = struct {
 
   pub fn run(self: *Self) RuntimeError!void {
     while (true) {
-      const inst = @call(.always_inline, self.readWord, .{});
+      const inst = @call(.always_inline, Self.readWord, .{self});
       switch (@call(.always_inline, Code.readInstOp, .{inst})) {
         .Gglb => {
           // gglb rx, bx -> r(x) = G[K(bx)]
@@ -250,7 +250,7 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
           self.read3Args(inst, &rx, &rk1, &rk2);
-          var next_inst = @call(.always_inline, self.readWord, .{});
+          var next_inst = @call(.always_inline, Self.readWord, .{self});
           const cmp_op = @call(.always_inline, Code.readInstOpNoConv, .{next_inst});
           const a = self.RK(rk1);
           const b = self.RK(rk2);
@@ -520,5 +520,4 @@ pub const VM = struct {
       }
     }
   }
-
 };

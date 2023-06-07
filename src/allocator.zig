@@ -12,8 +12,8 @@ pub fn init(arena: std.heap.ArenaAllocator) Self {
 
 pub fn deinit(self: *Self) void {
   defer self.deinitArena();
-  const leaked = self.gpa.deinit();
-  if (leaked) @panic("Memory leak detected!");
+  const check = self.gpa.deinit();
+  if (check == .leak) @panic("Memory leak detected!");
 }
 
 pub fn deinitArena(self: *Self) void {

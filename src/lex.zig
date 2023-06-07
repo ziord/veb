@@ -12,6 +12,7 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"and", .TkAnd},
   .{"let", .TkLet},
   .{"do", .TkDo},
+  .{"fn", .TkFn},
   .{"is", .TkIs},
   .{"or", .TkOr},
   .{"as", .TkAs},
@@ -29,6 +30,7 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"tuple", .TkTuple},
   .{"then", .TkThen},
   .{"break", .TkBreak},
+  .{"void", .TkVoid},
   .{"continue", .TkContinue},
 });
 
@@ -66,6 +68,7 @@ pub const TokenType = enum (u8) {
   Tk2Gthan,         // >>
   TkAs,             // as
   TkDo,             // do
+  TkFn,             // fn
   TkIs,             // is
   TkIf,             // if
   TkOr,             // or
@@ -85,6 +88,7 @@ pub const TokenType = enum (u8) {
   TkElse,           // else
   TkElif,           // elif
   TkTrue,           // true
+  TkVoid,           // void
   TkBreak,          // break
   TkFalse,          // false
   TkTuple,          // tuple
@@ -181,6 +185,7 @@ pub const TokenType = enum (u8) {
       .TkIf => "if",
       .TkOr => "or",
       .TkDo => "do",
+      .TkFn => "fn",
       .TkIs => "is",
       .TkFor => "for",
       .TkAnd => "and",
@@ -198,6 +203,7 @@ pub const TokenType = enum (u8) {
       .TkElse => "else",
       .TkElif => "elif",
       .TkTrue => "true",
+      .TkVoid => "void",
       .TkBreak => "break",
       .TkFalse => "false",
       .TkTuple => "tuple",
@@ -322,7 +328,8 @@ pub const Token = struct {
         self.offset - col - 1
       else 
         self.offset
-    ) + self.value.len;
+    ) + self.value.len 
+      + @boolToInt((self.ty == .TkString or self.ty == .TkAllocString)); // quote
   }
 
   pub fn isAlloc(self: @This()) bool {
@@ -664,7 +671,7 @@ pub const Lexer = struct {
     var buf = self.allocator.alloc(u8, token.value.len - escapes) catch {
       return self.errToken("could not allocate string with escape sequence");
     };
-    std.mem.set(u8, buf, 0);
+    @memset(buf, 0);
     var len = token.value.len;
     var i: u32 = 0;
     var idx: u32 = 0;

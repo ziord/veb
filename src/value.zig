@@ -266,6 +266,12 @@ pub fn isNilNoInline(val: Value) bool {
   return isNil(val);
 }
 
+/// placeholder
+pub fn isVoidNoInline(val: Value) bool {
+  _ = val;
+  return false;
+}
+
 pub inline fn isNothing(val: Value) bool {
   return val == NOTHING_VAL;
 }

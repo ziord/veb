@@ -639,7 +639,7 @@ pub const Compiler = struct {
   fn cVarDecl(self: *Self, node: *ast.VarDeclNode, reg: u32) u32 {
     // let var = expr
     var bin: ast.BinaryNode = .{
-      .left = &.{.AstVar = node.ident.*},
+      .left = @constCast(&@as(Node, .{.AstVar = node.ident.*})),
       .right = node.value,
       .op = undefined, .typ = node.ident.typ
     };
@@ -848,6 +848,24 @@ pub const Compiler = struct {
     return .{.jmp_to_next = cond_jmp, .jmp_to_end = then_jmp};
   }
 
+  fn cFun(self: *Self, node: *ast.FunNode, reg: u32) u32 {
+    _ = node;
+    _ = self;
+    return reg;
+  }
+
+  fn cCall(self: *Self, node: *ast.CallNode, reg: u32) u32 {
+    _ = node;
+    _ = self;
+    return reg;
+  }
+
+  fn cRet(self: *Self, node: *ast.RetNode, reg: u32) u32 {
+    _ = node;
+    _ = self;
+    return reg;
+  }
+
   fn cProgram(self: *Self, node: *ast.ProgramNode, reg: u32) u32 {
     for (node.decls.items()) |nd| {
       _ = self.c(nd, reg);
@@ -879,6 +897,9 @@ pub const Compiler = struct {
       .AstIf => |*nd| self.cIf(nd, reg),
       .AstWhile => |*nd| self.cWhile(nd, reg),
       .AstControl => |*nd| self.cControl(nd, reg),
+      .AstFun => |*nd| self.cFun(nd, reg),
+      .AstCall => |*nd| self.cCall(nd, reg),
+      .AstRet => |*nd| self.cRet(nd, reg),
       .AstProgram => |*nd| self.cProgram(nd, reg),
       .AstSimpleIf, .AstElif, .AstCondition, .AstEmpty => unreachable,
     };

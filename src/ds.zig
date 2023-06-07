@@ -45,6 +45,14 @@ pub fn ArrayList(comptime T: type) type {
       return self.list.pop();
     }
 
+    const CmpFn = fn (a: T, b: T) callconv(.Inline) bool;
+    pub fn contains(self: *@This(), item: T, comptime cmp_fn: CmpFn) bool {
+      for (self.list.items) |itm| {
+        if (cmp_fn(itm, item)) return true;
+      }
+      return false;
+    }
+
     pub inline fn clearAndFree(self: *@This()) void {
       self.list.clearAndFree();
     }

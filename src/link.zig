@@ -7,6 +7,7 @@ pub const types = @import("type.zig");
 pub const Token = @import("lex.zig").Token;
 
 pub const Type = types.Type;
+pub const TypeList = types.TypeList;
 pub const Union = types.Union;
 pub const TypeKind = types.TypeKind;
 pub const TypeInfo = types.TypeInfo;
@@ -140,7 +141,7 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
     }
 
     pub inline fn allocator(self: *Self) std.mem.Allocator {
-      return @call(.always_inline, self.typScope.allocator, .{});
+      return @call(.always_inline, TypScope.allocator, .{&self.typScope});
     }
 
     pub inline fn newType(self: *Self, kind: TypeInfo, debug: Token) *Type {
@@ -178,7 +179,9 @@ pub const TypeLinker = struct {
   cyc_scope: PairScope,
   /// resolving an infinite/recursive type?
   in_inf: bool = false,
-  diag: Diagnostic,
+  diag: *Diagnostic,
+  /// types that shouldn't be used as aliases
+  ban_alias: ?*TypeList = null,
 
   const MultiPair = struct {setter: *Type, key: *Type, value: *Type};
   const PairScope = GenScope([]const u8, MultiPair);
@@ -188,11 +191,11 @@ pub const TypeLinker = struct {
 
   const Self = @This();
 
-  pub fn init(allocator: std.mem.Allocator, filename: *const[]const u8, src: *[]const u8) @This() {
+  pub fn init(allocator: std.mem.Allocator, diag: *Diagnostic) @This() {
     return Self {
       .ctx = TContext.init(allocator),
       .cyc_scope = PairScope.init(allocator),
-      .diag = Diagnostic.init(allocator, filename, src),
+      .diag = diag,
     };
   }
 
@@ -203,7 +206,7 @@ pub const TypeLinker = struct {
 
   fn insertTVar(self: *Self, typ: *Type, data: MultiPair) void {
     var tvar = typ.variable();
-    if (tvar.tokens.len() > 1) return;
+    if (tvar.tokens.len() > 1) util.todo("multiple var tokens!");
     var name = tvar.tokens.items()[0].value;
     self.cyc_scope.insert(name, data);
   }
@@ -499,8 +502,11 @@ pub const TypeLinker = struct {
     const ty = try self.tryResolveType(typ, debug);
     // set alias info for debugging
     if (typ.alias == null) {
-      // TODO: does this need to be set only for variable types?
-      ty.alias = typ;
+      if (self.ban_alias) |banned_types| {
+        if (!banned_types.contains(typ, Type.typeidEql)) {
+          ty.alias = typ;
+        }
+      } else ty.alias = typ;
     }
     return ty;
   }
@@ -621,6 +627,46 @@ pub const TypeLinker = struct {
     try self.linkBlock(&node.then.AstBlock);
   }
 
+  fn linkCall(self: *Self, node: *ast.CallNode) !void {
+    try self.link(node.expr);
+    if (node.targs) |targs| {
+      for (targs.items()) |typn| {
+        try self.linkNType(&typn.AstNType);
+      }
+    }
+    for (node.args.items()) |arg| {
+      try self.link(arg);
+    }
+    if (node.typ) |typ| {
+      node.typ = try self.resolve(typ, node.expr.getToken());
+    }
+  }
+
+  pub fn linkFun(self: *Self, node: *ast.FunNode, allow_generic: bool) !void {
+    if (node.isGeneric()) {
+      if (!allow_generic) return;
+      self.ban_alias = node.tparams;
+    }
+    self.ctx.enterScope();
+    for (node.params.items()) |vd| {
+      vd.ident.typ = try self.resolve(vd.ident.typ.?, vd.ident.token);
+      self.ctx.varScope.insert(vd.ident.token.value, vd.ident.typ.?);
+    }
+    if (node.ret) |ret| {
+      try self.link(ret);
+    }
+    self.ctx.enterScope();
+    try self.link(node.body);
+    self.ctx.leaveScope();
+    self.ctx.leaveScope();
+  }
+
+  fn linkRet(self: *Self, node: *ast.RetNode) !void {
+    if (node.expr) |expr| {
+      try self.link(expr); 
+    }
+  }
+
   fn linkProgram(self: *Self, node: *ast.ProgramNode) !void {
     self.ctx.enterScope();
     for (node.decls.items()) |item| {
@@ -655,6 +701,9 @@ pub const TypeLinker = struct {
       .AstElif => |*nd| try self.linkElif(nd),
       .AstWhile => |*nd| try self.linkWhile(nd),
       .AstControl => {},
+      .AstCall => |*nd| try self.linkCall(nd),
+      .AstFun => |*nd| try self.linkFun(nd, false),
+      .AstRet => |*nd| try self.linkRet(nd),
       .AstProgram => |*nd| try self.linkProgram(nd),
       .AstSimpleIf, .AstCondition, .AstEmpty => unreachable,
     }

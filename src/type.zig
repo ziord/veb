@@ -27,6 +27,9 @@ pub const TypeKind = enum (u8) {
   /// nil type:
   ///  nil
   TyNil,
+  /// void type:
+  ///  void
+  TyVoid,
   /// class type:
   ///  ex. list, map, etc.
   TyClass,
@@ -81,7 +84,7 @@ pub const Concrete = struct {
           return true;
         }
       },
-      .Generic, .Variable, .Recursive => return false,
+      .Generic, .Variable, .Recursive, .Function => return false,
     }
     return false;
   }
@@ -114,7 +117,7 @@ pub const Constant = struct {
         }
         return false;
       },
-      .Union, .Generic, .Variable, .Recursive => return false,
+      .Union, .Generic, .Variable, .Recursive, .Function => return false,
     }
     return false;
   }
@@ -158,7 +161,7 @@ pub const Union = struct {
     }
   }
 
-  pub fn addSlice(self: *@This(), types: []*Type) void {
+  pub fn addSlice(self: *@This(), types: []const *Type) void {
     for (types) |ty| {
       self.set(ty);
     }
@@ -182,7 +185,7 @@ pub const Union = struct {
         }
         return true;
       },
-      .Constant, .Concrete, .Generic, .Variable, .Recursive => {
+      .Constant, .Concrete, .Generic, .Variable, .Recursive, .Function => {
         if (ctx == .RCTypeParams) return false;
         // related if there exists a variant of T1 that is related to T2
         for (this.variants.values()) |variant| {
@@ -235,7 +238,7 @@ pub const Generic = struct {
         }
         return true;
       },
-      .Constant, .Concrete, .Union, .Variable, .Recursive => return false,
+      .Constant, .Concrete, .Union, .Variable, .Recursive, .Function => return false,
     }
     return false;
   }
@@ -267,7 +270,54 @@ pub const Variable = struct {
     _ = ctx;
     return switch (other.kind) {
       .Variable => |*vr| this.eql(vr),
-      .Constant, .Concrete, .Union, .Recursive, .Generic => false,
+      .Constant, .Concrete, .Union, .Recursive, .Generic, .Function => false,
+    };
+  }
+};
+
+pub const Function = struct {
+  params: TypeList,
+  ret: *Type,
+  tparams: ?*TypeList = null,
+  node: *@import("ast.zig").AstNode = undefined,
+
+  pub fn init(allocator: std.mem.Allocator, ret: *Type) @This() {
+    return Function {.params = TypeList.init(allocator), .ret = ret};
+  }
+
+  pub fn isGeneric(self: *@This()) bool {
+    return self.tparams != null;
+  }
+
+  pub fn toType(self: @This()) Type {
+    return Type.init(.{.Function = self});
+  }
+
+  pub fn eql(self: *@This(), other: *@This()) bool {
+    // TODO: is typeidEql() sufficient?
+    if (self.tparams) |tp1| {
+      if (other.tparams) |tp2| {
+        if (tp1.len() != tp2.len()) {
+          return false;
+        }
+      } else return false;
+    } else if (self.tparams != other.tparams) {
+      return false;
+    }
+    if (self.params.len() != other.params.len()) return false;
+    if (!self.ret.typeidEql(other.ret)) return false;
+    for (self.params.items(), other.params.items()) |a, b| {
+      if (!a.typeidEql(b)) return false;
+    }
+    return true;
+  }
+
+  pub fn isRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
+    _ = A;
+    _ = ctx;
+    return switch (other.kind) {
+      .Function => |*fun| this.eql(fun),
+      .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic => false,
     };
   }
 };
@@ -311,6 +361,7 @@ pub const TypeInfo = union(enum) {
   Variable: Variable,
   Union: Union,
   Generic: Generic,
+  Function: Function,
   Recursive: Recursive,
 };
 
@@ -346,7 +397,7 @@ pub const Type = struct {
 
   pub fn clone(self: *Self, A: std.mem.Allocator) *Self {
     switch (self.kind) {
-      .Constant, .Concrete, .Variable, .Recursive => return self,
+      .Constant, .Concrete, .Variable, .Recursive, .Function => return self,
       .Generic => |*gen| {
         var new = Generic.init(A, gen.base.clone(A));
         new.tparams.ensureTotalCapacity(gen.tparams.capacity());
@@ -408,6 +459,10 @@ pub const Type = struct {
     return Self.init(.{.Generic = Generic.init(allocator, base)});
   }
 
+  pub fn newFunction(allocator: std.mem.Allocator, ret: *Self) Self {
+    return Self.init(.{.Function = Function.init(allocator, ret)});
+  }
+
   pub fn newRecursive(base: *Self) Self {
     return Self.init(.{.Recursive = Recursive.init(base)});
   }
@@ -418,6 +473,10 @@ pub const Type = struct {
     nvr.value = "never";
     ty.variable().append(nvr);
     return ty;
+  }
+
+  pub fn newVoid() Self {
+    return Self.init(.{.Concrete = Concrete.init(.TyVoid)});
   }
 
   pub fn subtype(self: *Self, al: std.mem.Allocator) *Type {
@@ -489,6 +548,14 @@ pub const Type = struct {
     };
   }
 
+  /// a function type
+  pub inline fn isFunction(self: *Self) bool {
+    return switch (self.kind) {
+      .Function => true,
+      else => false,
+    };
+  }
+
   /// a recursive type
   pub inline fn isRecursive(self: *Self) bool {
     return switch (self.kind) {
@@ -518,6 +585,11 @@ pub const Type = struct {
   /// a type that may be constant
   pub inline fn isLikeConstant(self: *Self) bool {
     return self.isLikeXTy(isConstant);
+  }
+
+  /// a type that may be void
+  pub inline fn isLikeVoid(self: *Self) bool {
+    return self.isLikeXTy(isVoidTy);
   }
 
   inline fn isConcreteTypeEq(self: *Self, kind: TypeKind) bool {
@@ -552,6 +624,10 @@ pub const Type = struct {
 
   pub inline fn isNilTy(self: *Self) bool {
     return self.isConcreteTypeEq(.TyNil);
+  }
+
+  pub inline fn isVoidTy(self: *Self) bool {
+    return self.isConcreteTypeEq(.TyVoid);
   }
 
   pub inline fn isClassTy(self: *Self) bool {
@@ -599,6 +675,10 @@ pub const Type = struct {
     return &self.kind.Union;
   }
 
+  pub inline fn function(self: *Self) *Function {
+    return &self.kind.Function;
+  }
+
   pub inline fn recursive(self: *Self) Recursive {
     return self.kind.Recursive;
   }
@@ -615,12 +695,18 @@ pub const Type = struct {
     switch (self.kind) {
       .Concrete => |conc| {
         switch (conc.tkind) {
-          .TyBool =>   self.tid = 1 << ID_HASH,
+          .TyBool   => self.tid = 1 << ID_HASH,
           .TyNumber => self.tid = 2 << ID_HASH,
           .TyString => self.tid = 3 << ID_HASH,
-          .TyNil =>    self.tid = 4 << ID_HASH,
-          .TyClass =>  self.tid = 5 << ID_HASH,
-          .TyType =>   self.tid = 12 << ID_HASH,
+          .TyNil    => self.tid = 4 << ID_HASH,
+          .TyVoid   => self.tid = 9 << ID_HASH,
+          .TyClass  => {
+            self.tid = 5 << ID_HASH;
+            for (conc.name.?) |ch| {
+              self.tid += @as(u8, ch);
+            }
+          },
+          .TyType   => self.tid = 12 << ID_HASH,
         }
       },
       .Generic => |*gen| {
@@ -633,7 +719,7 @@ pub const Type = struct {
         self.tid = 6 << ID_HASH;
         for (uni.variants.values()) |ty| {
           self.tid += ty.typeid();
-          self.tid <<= 1; // mix
+          // self.tid <<= 1; // mix
         }
       },
       .Constant => |*cons| {
@@ -642,6 +728,16 @@ pub const Type = struct {
         for (cons.val) |ch| {
           self.tid += @as(u8, ch);
         }
+      },
+      .Function => |*fun| {
+        self.tid = 8 << ID_HASH;
+        if (fun.tparams) |tparams| {
+          self.tid += @intCast(u32, tparams.len());
+        }
+        for (fun.params.items()) |ty| {
+          self.tid += ty.typeid();
+        }
+        self.tid += fun.ret.typeid();
       },
       .Variable => |*vr| {
         for (vr.tokens.items()) |tok| {
@@ -677,7 +773,8 @@ pub const Type = struct {
       return;
     }
     switch (typ.kind) {
-      .Concrete, .Variable, .Constant => list.append(typ),
+      .Concrete, .Variable,
+      .Constant, .Function => list.append(typ),
       .Generic => |*gen| {
         gen.base._unfoldRecursive(step + 1, list, visited);
         for (gen.tparams.items()) |param| {
@@ -698,7 +795,7 @@ pub const Type = struct {
 
   fn _unfold(self: *Self, list: *TypeList) void {
     switch (self.kind) {
-      .Concrete, .Constant, .Variable => list.append(self),
+      .Concrete, .Constant, .Variable, .Function => list.append(self),
       .Generic => |*gen| {
         gen.base._unfold(list);
         for (gen.tparams.items()) |param| {
@@ -760,6 +857,9 @@ pub const Type = struct {
       },
       .Variable => |*vr| {
         return vr.isRelatedTo(other, ctx, A);
+      },
+      .Function => |*fun| {
+        return fun.isRelatedTo(other, ctx, A);
       },
       .Recursive => |*rec| {
         return rec.isRelatedTo(other, ctx, A);
@@ -939,12 +1039,13 @@ pub const Type = struct {
     if (depth.* > MAX_STEPS) return "...";
     return switch (self.kind) {
       .Concrete => |conc| switch (conc.tkind) {
-        .TyBool =>   "bool",
+        .TyBool   => "bool",
         .TyNumber => "num",
         .TyString => "str",
-        .TyNil =>    "nil",
-        .TyType => "Type",
-        .TyClass => conc.name.?,
+        .TyNil    => "nil",
+        .TyVoid   => "void",
+        .TyType   => "Type",
+        .TyClass  => conc.name.?,
       },
       .Constant => |*cons| {
         if (cons.kind != .TyString) return cons.val;
@@ -981,6 +1082,32 @@ pub const Type = struct {
             _ = try writer.write(" | ");
           }
         }
+        return writer.context.items;
+      },
+      .Function => |*fun| {
+        // fn (params): ret
+        var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
+        _ = try writer.write("fn ");
+        if (fun.tparams) |tparams| {
+          _ = try writer.write("{");
+          for (tparams.items(), 0..) |ty, i| {
+            _ = try writer.write(try ty._typename(allocator, depth));
+            if (i < tparams.len() - 1) {
+              _ = try writer.write(", ");
+            }
+          }
+          _ = try writer.write("}");
+        }
+        _ = try writer.write("(");
+        for (fun.params.items(), 0..) |ty, i| {
+          _ = try writer.write(try ty._typename(allocator, depth));
+          if (i < fun.params.len() - 1) {
+            _ = try writer.write(", ");
+          }
+        }
+        _ = try writer.write(")");
+        _ = try writer.write(": ");
+        _ = try writer.write(try fun.ret._typename(allocator, depth));
         return writer.context.items;
       },
       .Variable => |*vr| try writeName(allocator, &vr.tokens),
@@ -1159,7 +1286,7 @@ pub const Type = struct {
         }
         return Self.compressTypes(&new_uni, null);
       },
-      .Constant, .Concrete, .Generic, .Variable, => return error.Negation,
+      .Constant, .Concrete, .Generic, .Variable, .Function => return error.Negation,
       // TODO: c'est fini?
       .Recursive => return t1,
     }
@@ -1205,6 +1332,12 @@ pub const Type = struct {
       .Variable => |*vr| {
         if (!t2.isVariable()) return null;
         if (vr.eql(t2.variable())) {
+          return t1;
+        }
+      },
+      .Function => |*fun| {
+        if (!t2.isFunction()) return null;
+        if (fun.eql(t2.function())) {
           return t1;
         }
       },

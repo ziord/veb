@@ -45,29 +45,54 @@ pub inline fn forceCollect(self: *Self, vm: *VM, likely: bool) void {
 pub fn freeObject(self: *Self, obj: *Obj, vm: *VM) void {
   _ = self;
   switch (obj.id) {
-    .ObjStr => {
+    .objstring => {
       const T = value.ObjString;
       var string = @ptrCast(*T, obj);
       vm.mem.freeBuf(u8, vm, string.str[0..string.len]);
       vm.mem.free(T, vm, string);
     },
-    .ObjLst => {
+    .objlist => {
       const T = value.ObjList;
       var list = @ptrCast(*T, obj);
       vm.mem.freeBuf(value.Value, vm, list.items[0..list.capacity]);
       vm.mem.free(T, vm, list);
     },
-    .ObjTup => {
+    .objtuple => {
       const T = value.ObjTuple;
       var tuple = @ptrCast(*T, obj);
       vm.mem.freeBuf(value.Value, vm, tuple.items[0..tuple.len]);
       vm.mem.free(T, vm, tuple);
     },
-    .ObjValMap => {
+    .objvalmap => {
       const T = value.ObjMap;
       var map = @ptrCast(*T, obj);
       map.meta.free(vm);
       vm.mem.free(T, vm, map);
-    }
+    },
+    .objfn => {
+      const T = value.ObjFn;
+      var fun = @ptrCast(*T, obj);
+      fun.code.deinit(vm);
+      vm.mem.free(T, vm, fun);
+    },
+    .objzfn => {
+      vm.mem.free(value.ObjZFn, vm, @ptrCast(*value.ObjZFn, obj));
+    },
+    .objclosure => {
+      const T = value.ObjClosure;
+      var clo = @ptrCast(*T, obj);
+      vm.mem.freeBuf(*value.ObjUpvalue, vm, clo.env[0..clo.fun.envlen]);
+      vm.mem.free(T, vm, clo);
+    },
+    .objupvalue => {
+      vm.mem.free(value.ObjUpvalue, vm, @ptrCast(*value.ObjUpvalue, obj));
+    },
+    .objfiber => {
+      const T = value.ObjFiber;
+      var fiber = @ptrCast(*T, obj);
+      vm.mem.freeBuf(value.CallFrame, vm, fiber.frames[0..fiber.frame_cap]);
+      vm.mem.freeBuf(value.Value, vm, fiber.stack[0..fiber.stack_cap]);
+      vm.mem.free(T, vm, fiber);
+    },
   }
 }

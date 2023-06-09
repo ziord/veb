@@ -13,15 +13,16 @@ const CnAllocator = @import("allocator.zig");
 pub fn main() !void {
   std.debug.print("hello canary!\n", .{});
   var src =
-  \\ type T = num
-  \\ fn foo(a: T): T
-  \\  return foo(a)
-  \\ end
-  \\ foo(5) + 9
-  \\ let j: num | list{str} = 5
-  \\ if j is num | list{str}
-  \\  j[0] = 'fox'
-  \\ end
+  \\ let j = 19
+  // \\ type T = num
+  // \\ fn foo(a: T): T
+  // \\  return foo(a)
+  // \\ end
+  // \\ foo(5) + 9
+  // \\ let j: num | list{str} = 5
+  // \\ if j is num | list{str}
+  // \\  j[0] = 'fox'
+  // \\ end
   ;
   _ = try doTest(src);
 }
@@ -34,20 +35,21 @@ fn doTest(src: []const u8) !value.Value {
   const node = try parser.parse();
   std.debug.print("node: {}\n", .{node});
 
-  // var tych = check.TypeChecker.init(cna.getArenaAllocator(), &@as([]const u8, "test.nova"), @constCast(&src));
-  // try tych.typecheck(node);
-  // var code = value.Code.init();
-  // var cpu = vm.VM.init(&cna, &code);
-  // defer cpu.deinit();
-  // var compiler = compile.Compiler.init(filename, src, &cpu, &code, &cna);
-  // compiler.compile(node);
-  // debug.Disassembler.disCode(code, "test");
-  // try cpu.run();
-  // value.printValue(cpu.stack[0]);
-  // std.debug.print("\n", .{});
-  // // TODO: refactor testing, as it currently uses invalidated data
-  // return cpu.stack[0]; // !!invalidated!!
-  return 0;
+  var tych = check.TypeChecker.init(cna.getArenaAllocator(), &@as([]const u8, "test.nova"), @constCast(&src));
+  try tych.typecheck(node);
+  var cpu = vm.VM.init(&cna);
+  defer cpu.deinit();
+  var fun = value.createFn(&cpu);
+  var compiler = compile.Compiler.init(filename, src, &cpu, fun, &cna);
+  compiler.compile(node);
+  debug.Disassembler.disCode(&fun.code, "test");
+  cpu.boot(fun);
+  try cpu.run();
+  value.printValue(cpu.fiber.fp.stack[0]);
+  std.debug.print("\n", .{});
+  // TODO: refactor testing, as it currently uses invalidated data
+  return cpu.fiber.fp.stack[0]; // !!invalidated!!
+  // return 0;
 }
 
 test "arithmetic ops" {

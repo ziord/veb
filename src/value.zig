@@ -9,7 +9,7 @@ pub const OpType = @import("lex.zig").OpType;
 /// a register-encoded instruction
 pub const Inst = u32;
 
-pub const Code = struct {
+pub const Code = extern struct {
   words: Vec(Inst),
   values: Vec(Value),
   lines: Vec(u32),
@@ -89,7 +89,7 @@ pub const Code = struct {
 
   pub fn writeValue(self: *Self, value: Value, vm: *VM) u32 {
     self.values.push(value, vm);
-    return @intCast(u32, self.values.items.len - 1);
+    return @intCast(u32, self.values.len - 1);
   }
 
   pub fn write3ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, arg3: u32, line: usize, vm: *VM) void {
@@ -126,7 +126,7 @@ pub const Code = struct {
     const offset = 0x40000;
     self.write2ArgsInst(op, arg1, offset, line, vm);
     // return instruction offset
-    return self.words.items.len - 1;
+    return self.words.len - 1;
   }
 
   pub fn patch2ArgsJmp(self: *Self, index: usize) void {
@@ -134,7 +134,7 @@ pub const Code = struct {
     // get jmp_inst, arg1
     const first = (inst >> 26) & _6bits;
     const second = (inst >> 18) & _8bits;
-    const real_offset = self.words.items.len - index - 1;
+    const real_offset = self.words.len - index - 1;
     checkOffset(real_offset, _18bits, "max jump offset exceeded");
     const new = (first << 26) | (second << 18) | real_offset;
     self.words.items[index] = @intCast(u32, new);
@@ -169,12 +169,21 @@ pub const FALSE_VAL = @as(Value, (QNAN | TAG_FALSE));
 pub const TRUE_VAL = @as(Value, (QNAN | TAG_TRUE));
 pub const NOTHING_VAL = @as(Value, (QNAN | TAG_NOTHING));
 
+pub const ZFn = *const fn (*VM, argc: u8, args: *Value) Value;
+pub const StringNullKey = ObjString {.obj = .{.id = .objstring, .next = null}, .hash = 0, .str = "", .len = 0};
+pub const StringHashMap = Map(*const ObjString, Value);
+pub const ValueHashMap = Map(Value, Value);
+
 pub const ObjId = enum(u8) {
-  ObjStr,
-  ObjLst,
-  ObjValMap,
-  ObjTup,
-  // ObjStrMap,
+  objstring,
+  objlist,
+  objvalmap,
+  objtuple,
+  objfn,
+  objclosure,
+  objupvalue,
+  objzfn,
+  objfiber,
 };
 
 pub const Obj = extern struct {
@@ -212,11 +221,85 @@ pub const ObjSMap = extern struct {
   meta: StringHashMap,
 };
 
-pub const StringNullKey = ObjString {.obj = .{.id = .ObjStr, .next = null}, .hash = 0, .str = "", .len = 0};
+pub const ObjFn = extern struct {
+  obj: Obj,
+  arity: u8,
+  envlen: u32,
+  code: Code,
+  name: ?*ObjString,
 
-pub const StringHashMap = Map(*const ObjString, Value);
+  pub fn getName(self: *ObjFn) []const u8 {
+    if (self.name) |name| {
+      return name.str[0..name.len];
+    }
+    return "<lambda>";
+  }
+};
 
-pub const ValueHashMap = Map(Value, Value);
+pub const ObjZFn = extern struct {
+  obj: Obj,
+  arity: u8,
+  fun: ZFn,
+  name: usize,
+
+  pub fn getName(self: *ObjZFn) []const u8 {
+    return VM.ZFnNames[self.name];
+  }
+};
+
+pub const ObjClosure = extern struct {
+  obj: Obj,
+  fun: *ObjFn,
+  env: [*]*ObjUpvalue,
+};
+
+pub const ObjUpvalue = extern struct {
+  obj: Obj,
+  value: Value = NOTHING_VAL,
+  loc: *Value,
+  next: ?*ObjUpvalue,
+};
+
+pub const ObjFiber = extern struct {
+  obj: Obj,
+  errval: Value = NOTHING_VAL, // TODO: remove?
+  origin: FiberOrigin,
+  stack_cap: usize,
+  frame_cap: usize,
+  frame_len: usize,
+  // sp: *Value,
+  fp: *CallFrame,
+  stack: [*]Value,
+  frames: [*]CallFrame,
+  upvalues: ?*ObjUpvalue,
+  caller: ?*ObjFiber,
+
+  pub fn appendFrame(self: *ObjFiber, clos: *ObjClosure, stack: [*]Value) void {
+    std.debug.assert(self.frame_len < self.frame_cap);
+    self.frames[self.frame_len] = CallFrame {.ip = 0, .closure = clos, .stack = stack};
+    self.fp = &self.frames[self.frame_len];
+    self.frame_len += 1;
+  }
+};
+
+pub const CallFrame = struct {
+  ip: usize,
+  closure: *ObjClosure,
+  stack: [*]Value,
+};
+
+pub const FiberOrigin = enum (u8) {
+  Root,
+  Other,
+};
+
+pub const FiberStatus = enum {
+  Created,
+  Running,
+  Suspended,
+  Completed,
+};
+
 
 pub inline fn numberVal(num: f64) Value {
   return @ptrCast(*const Value, &num).*;
@@ -293,27 +376,47 @@ pub inline fn isObjType(val: Value, id: ObjId) bool {
 }
 
 pub inline fn isString(val: Value) bool {
-  return isObjType(val, .ObjStr);
+  return isObjType(val, .objstring);
+}
+
+pub inline fn isList(val: Value) bool {
+  return isObjType(val, .objlist);
+}
+
+pub inline fn isTuple(val: Value) bool {
+  return isObjType(val, .objtuple);
+}
+
+pub inline fn isMap(val: Value) bool {
+  return isObjType(val, .objvalmap);
+}
+
+pub inline fn isFn(val: Value) bool {
+  return isObjType(val, .objfn);
+}
+
+pub inline fn isClosure(val: Value) bool {
+  return isObjType(val, .objclosure);
+}
+
+pub inline fn isUpvalue(val: Value) bool {
+  return isObjType(val, .objupvalue);
+}
+
+pub inline fn isZFn(val: Value) bool {
+  return isObjType(val, .objzfn);
+}
+
+pub inline fn isFiber(val: Value) bool {
+  return isObjType(val, .objfiber);
 }
 
 pub fn isStringNoInline(val: Value) bool {
   return isString(val);
 }
 
-pub inline fn isList(val: Value) bool {
-  return isObjType(val, .ObjLst);
-}
-
-pub inline fn isTuple(val: Value) bool {
-  return isObjType(val, .ObjTup);
-}
-
 pub fn isListNoInline(val: Value) bool {
   return isList(val);
-}
-
-pub inline fn isMap(val: Value) bool {
-  return isObjType(val, .ObjValMap);
 }
 
 pub fn isMapNoInline(val: Value) bool {
@@ -322,6 +425,26 @@ pub fn isMapNoInline(val: Value) bool {
 
 pub fn isTupleNoInline(val: Value) bool {
   return isTuple(val);
+}
+
+pub fn isFnNoInline(val: Value) bool {
+  return isFn(val);
+}
+
+pub fn isClosureNoInline(val: Value) bool {
+  return isClosure(val);
+}
+
+pub fn isUpvalueNoInline(val: Value) bool {
+  return isUpvalue(val);
+}
+
+pub fn isZFnNoInline(val: Value) bool {
+  return isZFn(val);
+}
+
+pub fn isFiberNoInline(val: Value) bool {
+  return isFiber(val);
 }
 
 pub inline fn asString(val: Value) *ObjString {
@@ -338,6 +461,30 @@ pub inline fn asMap(val: Value) *ObjMap {
 
 pub inline fn asTuple(val: Value) *ObjTuple {
   return @ptrCast(*ObjTuple, asObj(val));
+}
+
+pub inline fn asFn(val: Value) *ObjFn {
+  return @ptrCast(*ObjFn, asObj(val));
+}
+
+pub inline fn asZFn(val: Value) *ObjZFn {
+  return @ptrCast(*ObjZFn, asObj(val));
+}
+
+pub inline fn asClosure(val: Value) *ObjClosure {
+  return @ptrCast(*ObjClosure, asObj(val));
+}
+
+pub inline fn asUpvalue(val: Value) *ObjUpvalue {
+  return @ptrCast(*ObjUpvalue, asObj(val));
+}
+
+pub inline fn asFiber(val: Value) *ObjFiber {
+  return @ptrCast(*ObjFiber, asObj(val));
+}
+
+pub fn getZFnName(name: usize) []const u8 {
+  return VM.ZFnNames[name];
 }
 
 pub inline fn valueEqual(a: Value, b: Value) bool {
@@ -380,11 +527,11 @@ pub fn printValue(val: Value) void {
 pub fn printObject(val: Value) void {
   const obj = asObj(val);
   switch (obj.id) {
-    .ObjStr => {
+    .objstring => {
       var tmp = asString(val);
       util.print("{s}", .{tmp.str[0..tmp.len]});
     },
-    .ObjLst => {
+    .objlist => {
       var list = asList(val);
       var add_comma = list.len > 1;
       var comma_end = if (add_comma) list.len - 1 else 0;
@@ -397,7 +544,7 @@ pub fn printObject(val: Value) void {
       }
       util.print("]", .{});
     },
-    .ObjTup => {
+    .objtuple => {
       var tuple = asTuple(val);
       var add_comma = tuple.len > 1;
       var comma_end = if (add_comma) tuple.len - 1 else 0;
@@ -414,31 +561,58 @@ pub fn printObject(val: Value) void {
         util.print(")", .{});
       }
     },
-    .ObjValMap => {
+    .objvalmap => {
       asMap(val).meta.display();
-    }
+    },
+    .objclosure => {
+      util.print("fn {s}", .{asClosure(val).fun.getName()});
+    },
+    .objupvalue => {
+      util.print("<upvalue>", .{});
+    },
+    .objzfn => {
+      util.print("builtin_fn {s}", .{asZFn(val).getName()});
+    },
+    .objfiber => {
+      util.print("<fiber>", .{});
+    },
+    .objfn => unreachable,
   }
 }
 
 pub fn objectToString(val: Value, vm: *VM) Value {
   // TODO: handle size overflow
   switch (asObj(val).id) {
-    .ObjStr => return val,
-    .ObjValMap => {
+    .objstring => return val,
+    .objvalmap => {
       var buff: [20]u8 = undefined;
       var fmt = std.fmt.bufPrint(&buff, "@map[{}]", .{asMap(val).meta.len}) catch "";
       return createStringV(vm, &vm.strings, fmt, false);
     },
-    .ObjLst => {
+    .objlist => {
       var buff: [20]u8 = undefined;
       var fmt = std.fmt.bufPrint(&buff, "@list[{}]", .{asList(val).len}) catch "";
       return createStringV(vm, &vm.strings, fmt, false);
     },
-    .ObjTup => {
+    .objtuple => {
       var buff: [20]u8 = undefined;
       var fmt = std.fmt.bufPrint(&buff, "@tuple[{}]", .{asTuple(val).len}) catch "";
       return createStringV(vm, &vm.strings, fmt, false);
     },
+    .objclosure => {
+      var buff: [30]u8 = undefined;
+      var fmt = std.fmt.bufPrint(&buff, "@fn[{s}]", .{asFn(val).getName()}) catch "fn()";
+      return createStringV(vm, &vm.strings, fmt, false);
+    },
+    .objzfn => {
+      var buff: [30]u8 = undefined;
+      var fmt = std.fmt.bufPrint(&buff, "@builtin_fn[{s}]", .{asZFn(val).getName()}) catch "builtin_fn()";
+      return createStringV(vm, &vm.strings, fmt, false);
+    },
+    .objfiber => {
+      return createStringV(vm, &vm.strings, "<fiber>", false);
+    },
+    .objupvalue, .objfn => unreachable,
   }
   unreachable;
 }
@@ -494,7 +668,7 @@ pub fn hashBits(val: Value) u64 {
 
 pub fn hashObject(val: Value) u64 {
   return switch (asObj(val).id) {
-    .ObjStr => asString(val).hash,
+    .objstring => asString(val).hash,
     else => |id| std.debug.panic("unhashable type: '{}'", .{id})
   };
 }
@@ -518,7 +692,7 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
   const hash = hashString(str);
   var string = map.findInterned(str, hash);
   if (string == null) {
-    var tmp = @call(.always_inline, createObject, .{vm, .ObjStr, ObjString});
+    var tmp = @call(.always_inline, createObject, .{vm, .objstring, ObjString});
     tmp.str = @ptrCast([*]const u8, str);
     tmp.hash = hash;
     tmp.len = str.len;
@@ -538,7 +712,7 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
 
 pub fn createList(vm: *VM, len: usize) *ObjList {
   const cap = Mem.alignTo(Mem.growCapacity(len), Mem.BUFFER_INIT_SIZE);
-  var list = @call(.always_inline, createObject, .{vm, .ObjLst, ObjList});
+  var list = @call(.always_inline, createObject, .{vm, .objlist, ObjList});
   list.items = @ptrCast([*]Value, vm.mem.allocBuf(Value, cap, vm));
   list.capacity = cap;
   list.len = len;
@@ -546,14 +720,14 @@ pub fn createList(vm: *VM, len: usize) *ObjList {
 }
 
 pub fn createMap(vm: *VM, len: usize) *ObjMap {
-  var map = @call(.always_inline, createObject, .{vm, .ObjValMap, ObjMap});
+  var map = @call(.always_inline, createObject, .{vm, .objvalmap, ObjMap});
   map.meta = ValueHashMap.init();
   map.meta.ensureCapacity(vm, len);
   return map;
 }
 
 pub fn createTuple(vm: *VM, len: usize) *ObjTuple {
-  var tuple = @call(.always_inline, createObject, .{vm, .ObjTup, ObjTuple});
+  var tuple = @call(.always_inline, createObject, .{vm, .objtuple, ObjTuple});
   tuple.items = @ptrCast([*]Value, vm.mem.allocBuf(Value, len, vm));
   tuple.len = len;
   return tuple;
@@ -561,4 +735,59 @@ pub fn createTuple(vm: *VM, len: usize) *ObjTuple {
 
 pub inline fn createStringV(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: bool) Value {
   return objVal(createString(vm, map, str, is_alloc));
+}
+
+pub fn createFn(vm: *VM) *ObjFn {
+  var fun = @call(.always_inline, createObject, .{vm, .objfn, ObjFn});
+  fun.code = Code.init();
+  fun.name = null;
+  fun.arity = 0;
+  fun.envlen = 0;
+  return fun;
+}
+
+pub fn createZFn(vm: *VM, zfun: ZFn, arity: u8, name: usize) *ObjZFn {
+  var fun = @call(.always_inline, createObject, .{vm, .objzfn, ObjZFn});
+  fun.fun = zfun;
+  fun.arity = arity;
+  fun.name = name;
+  return fun;
+}
+
+pub fn createClosure(vm: *VM, fun: *ObjFn) *ObjClosure {
+  var env = vm.mem.allocBuf(*ObjUpvalue, fun.envlen, vm);
+  var clos = @call(.always_inline, createObject, .{vm, .objclosure, ObjClosure});
+  clos.env = env.ptr;
+  clos.fun = fun;
+  return clos;
+}
+
+pub fn createUpvalue(vm: *VM, loc: *Value) *ObjUpvalue {
+  var upv = @call(.always_inline, createObject, .{vm, .objupvalue, ObjUpvalue});
+  upv.next = null;
+  upv.loc = loc;
+  return upv;
+}
+
+pub fn createFiber(vm: *VM, clo: ?*ObjClosure, origin: FiberOrigin, caller: ?*ObjFiber) *ObjFiber {
+  var arity = if (clo != null) clo.?.fun.arity else 1;  // heuristic
+  const cap = Mem.alignTo(arity + 0xff, Mem.BUFFER_INIT_SIZE);
+  var frames = vm.mem.allocBuf(CallFrame, Mem.BUFFER_INIT_SIZE, vm);
+  var stack = vm.mem.allocBuf(Value, cap, vm);
+  var fiber = @call(.always_inline, createObject, .{vm, .objfiber, ObjFiber});
+  fiber.errval = NOTHING_VAL;
+  fiber.origin = origin;
+  fiber.caller = caller;
+  fiber.frame_cap = Mem.BUFFER_INIT_SIZE;
+  fiber.stack_cap = cap;
+  fiber.frame_len = 0;
+  fiber.frames = frames.ptr;
+  fiber.stack = stack.ptr;
+  fiber.upvalues = null;
+  fiber.fp = undefined;
+  if (clo) |closure| {
+    fiber.appendFrame(closure, stack.ptr);
+    stack[0] = objVal(closure);
+  }
+  return fiber;
 }

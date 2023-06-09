@@ -39,7 +39,7 @@ pub const Disassembler = struct {
     std.debug.print("{s}\n", .{name});
   }
 
-  pub fn disInstruction(code: Code, word: u32, index: *usize) void {
+  pub fn disInstruction(code: *Code, word: u32, index: *usize) void {
     const idx = index.*;
     if (idx > 0 and code.lines.items[idx] == code.lines.items[idx - 1]) {
       std.debug.print("   |\t{d:0>4}\t", .{idx});
@@ -115,10 +115,10 @@ pub const Disassembler = struct {
     }
   }
 
-  pub fn disCode(code: Code, name: []const u8) void {
+  pub fn disCode(code: *Code, name: []const u8) void {
     std.debug.print(">>Disassembly of {s}<<\n", .{name});
     var i: usize = 0;
-    while (i < code.words.items.len): (i += 1) {
+    while (i < code.words.len): (i += 1) {
       disInstruction(code, code.words.items[i], &i);
     }
   }

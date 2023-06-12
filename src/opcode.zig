@@ -138,7 +138,15 @@ pub const OpCode = enum (u8) {
   //  [6] [8]  [18]
   Load,
 
-  // ret
-  // [6]
+  // bclo rx, bx
+  // [6] [8] [18]
+  Bclo,
+
+  // call rx, rk
+  // [6] [8] [18]
+  Call,
+
+  // ret rx
+  // [6] [8]
   Ret   
 };

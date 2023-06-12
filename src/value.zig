@@ -280,6 +280,15 @@ pub const ObjFiber = extern struct {
     self.fp = &self.frames[self.frame_len];
     self.frame_len += 1;
   }
+
+  pub fn popFrame(self: *ObjFiber) CallFrame {
+    self.frame_len -= 1;
+    var frame = self.frames[self.frame_len];
+    if (self.frame_len > 0) {
+      self.fp = &self.frames[self.frame_len - 1];
+    }
+    return frame;
+  }
 };
 
 pub const CallFrame = struct {
@@ -565,13 +574,13 @@ pub fn printObject(val: Value) void {
       asMap(val).meta.display();
     },
     .objclosure => {
-      util.print("fn {s}", .{asClosure(val).fun.getName()});
+      util.print("fn${s}", .{asClosure(val).fun.getName()});
     },
     .objupvalue => {
       util.print("<upvalue>", .{});
     },
     .objzfn => {
-      util.print("builtin_fn {s}", .{asZFn(val).getName()});
+      util.print("builtin_fn${s}", .{asZFn(val).getName()});
     },
     .objfiber => {
       util.print("<fiber>", .{});
@@ -737,11 +746,11 @@ pub inline fn createStringV(vm: *VM, map: *StringHashMap, str: []const u8, is_al
   return objVal(createString(vm, map, str, is_alloc));
 }
 
-pub fn createFn(vm: *VM) *ObjFn {
+pub fn createFn(vm: *VM, arity: u8) *ObjFn {
   var fun = @call(.always_inline, createObject, .{vm, .objfn, ObjFn});
   fun.code = Code.init();
   fun.name = null;
-  fun.arity = 0;
+  fun.arity = arity;
   fun.envlen = 0;
   return fun;
 }
@@ -786,8 +795,9 @@ pub fn createFiber(vm: *VM, clo: ?*ObjClosure, origin: FiberOrigin, caller: ?*Ob
   fiber.upvalues = null;
   fiber.fp = undefined;
   if (clo) |closure| {
-    fiber.appendFrame(closure, stack.ptr);
     stack[0] = objVal(closure);
+    // + 1 for closure
+    fiber.appendFrame(closure, stack.ptr + 1);
   }
   return fiber;
 }

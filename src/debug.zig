@@ -77,7 +77,9 @@ pub const Disassembler = struct {
       .Ggsym => _2ArgsInst("ggsym", word),
       .Sgsym => _2ArgsInst("sgsym", word),
       .Bcst => _2ArgsInst("bcst", word),
-      .Ret => plainInst("ret"),
+      .Bclo => _2ArgsInst("bclo", word),
+      .Call => _2ArgsInst("call", word),
+      .Ret => _2ArgsInst("ret", word),
       .Mov => {
         // mov is a 2-arg inst using a 3-arg format.
         const a1 = Code.readRX(word);
@@ -121,5 +123,6 @@ pub const Disassembler = struct {
     while (i < code.words.len): (i += 1) {
       disInstruction(code, code.words.items[i], &i);
     }
+    std.debug.print("\n", .{});
   }
 };

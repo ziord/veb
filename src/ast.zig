@@ -572,7 +572,8 @@ pub const AstNode = union(AstType) {
         if (fun.body.AstBlock.nodes.len() > 0) {
           return fun.body.AstBlock.nodes.items()[0].getToken();
         }
-        util.error_("Could not obtain token from node: {}", .{self});
+        // std.debug.print("Could not obtain token from node: {}", .{self});
+        return Token.getDefault();
       },
       else => {
         switch (self.*) {
@@ -591,9 +592,15 @@ pub const AstNode = union(AstType) {
               return blk.nodes.items()[0].getToken();
             }
           },
+          .AstProgram => |*prog| {
+            if (prog.decls.len() > 0) {
+              return prog.decls.items()[0].getToken();
+            }
+          },
           else => {}
         }
-        util.error_("Could not obtain token from node: {}", .{self});
+        // std.debug.print("Could not obtain token from node: {}", .{self});
+        return Token.getDefault();
       },
     };
   }

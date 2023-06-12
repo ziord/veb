@@ -8,15 +8,28 @@ const link = @import("link.zig");
 const check = @import("check.zig");
 const flow = @import("flow.zig");
 const ast = @import("ast.zig");
+const diagnostics = @import("diagnostics.zig");
 const CnAllocator = @import("allocator.zig");
 
 pub fn main() !void {
   std.debug.print("hello canary!\n", .{});
   var src =
-  \\ let j = 19
-  // \\ type T = num
-  // \\ fn foo(a: T): T
-  // \\  return foo(a)
+  // // \\ do
+  // \\ fn fib(n: num): num
+  // \\  if n <= 1
+  // \\    return n
+  // \\  end
+  // \\  return fib(n - 1) + fib(n - 2)
+  // \\ end
+  // \\ fib(12)
+  \\ type T = num
+  \\ fn foo(a: T): T
+  \\  let j = 12
+  \\  return a * 5 + j
+  \\ end
+  \\ let j = 4
+  \\ let p = 12 * foo(foo(j))
+  \\ {j: p}
   // \\ end
   // \\ foo(5) + 9
   // \\ let j: num | list{str} = 5
@@ -28,26 +41,27 @@ pub fn main() !void {
 }
 
 fn doTest(src: []const u8) !value.Value {
-  var cna = CnAllocator.init(std.heap.ArenaAllocator.init(std.testing.allocator));
+  var cna = CnAllocator.init(std.heap.ArenaAllocator.init(std.heap.page_allocator));
   defer cna.deinit();
   const filename = @as([]const u8, "test.cn");
   var parser = parse.Parser.init(@constCast(&src), &filename, &cna);
   const node = try parser.parse();
-  std.debug.print("node: {}\n", .{node});
+  // std.debug.print("node: {}\n", .{node});
 
   var tych = check.TypeChecker.init(cna.getArenaAllocator(), &@as([]const u8, "test.nova"), @constCast(&src));
   try tych.typecheck(node);
   var cpu = vm.VM.init(&cna);
   defer cpu.deinit();
-  var fun = value.createFn(&cpu);
-  var compiler = compile.Compiler.init(filename, src, &cpu, fun, &cna);
-  compiler.compile(node);
+  var fun = value.createFn(&cpu, 0);
+  var compiler = compile.Compiler.init(&tych.diag, &cpu, fun, &cna);
+  try compiler.compile(node);
   debug.Disassembler.disCode(&fun.code, "test");
   cpu.boot(fun);
   try cpu.run();
   value.printValue(cpu.fiber.fp.stack[0]);
   std.debug.print("\n", .{});
   // TODO: refactor testing, as it currently uses invalidated data
+  cpu.printStack();
   return cpu.fiber.fp.stack[0]; // !!invalidated!!
   // return 0;
 }

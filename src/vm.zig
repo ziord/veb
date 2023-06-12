@@ -26,7 +26,8 @@ pub const VM = struct {
   const Self = @This();
   const STACK_MAX = 0xfff;
   pub const MAX_GSYM_ITEMS = vl.MAX_REGISTERS << 1;
-  pub const MAX_LOCAL_ITEMS = vl.MAX_REGISTERS << 1;
+  pub const MAX_LOCAL_ITEMS = vl.MAX_REGISTERS;
+  pub const MAX_FRAMES = 0xffff;
   const RuntimeError = error{RuntimeError};
   const TypeTag2CheckFunc = [_]*const fn(Value) bool {
     vl.isBoolNoInline, vl.isNumberNoInline, vl.isStringNoInline,
@@ -111,6 +112,22 @@ pub const VM = struct {
     return if (x < vl.MAX_REGISTERS) fp.stack[x] else fp.closure.fun.code.values.items[x - vl.MAX_REGISTERS];
   }
 
+  fn ensureFrameCapacity(self: *Self) !void {
+    if (self.fiber.frame_len + 1 < self.fiber.frame_cap) return;
+    if (self.fiber.frame_cap >= MAX_FRAMES) {
+      // TODO: unwind
+      return self.runtimeError("Stack overflow: too many call frames", .{});
+    }
+    var cap = Mem.alignTo(Mem.growCapacity(self.fiber.frame_cap), Mem.BUFFER_INIT_SIZE);
+    self.fiber.frames = self.mem.resizeBuf(
+      CallFrame, self,
+      self.fiber.frames[0..self.fiber.frame_cap],
+      self.fiber.frame_cap,
+      cap
+    ).ptr;
+    self.fiber.frame_cap = cap;
+  }
+
   inline fn assert(self: *Self, cond: bool) void {
     _ = self;
     std.debug.assert(cond);
@@ -122,8 +139,8 @@ pub const VM = struct {
     return error.RuntimeError;
   }
 
-  inline fn printStack(self: *Self) void {
-    for (self.fiber.fp.stack) |val| {
+  pub inline fn printStack(self: *Self) void {
+    for (self.fiber.stack[0..self.fiber.stack_cap]) |val| {
       std.debug.print("[ ", .{});
       vl.printValue(val);
       std.debug.print(" ]", .{});
@@ -241,20 +258,42 @@ pub const VM = struct {
           fp.stack[rx] = vl.numberVal(vl.asNumber(a) / vl.asNumber(b));
           continue;
         },
-        .Mod => {
-          // div rx, rk(x), rk(x)
+        .Bclo => {
           var rx: u32 = undefined;
-          var rk1: u32 = undefined;
-          var rk2: u32 = undefined;
-          self.read3Args(inst, &rx, &rk1, &rk2);
-          const a = self.RK(rk1, fp);
-          const b = self.RK(rk2, fp);
-          self.assert(vl.isNumber(a));
-          self.assert(vl.isNumber(b));
-          if (@call(.always_inline, vl.asNumber, .{b}) == 0) {
-            return self.runtimeError("Modulo by zero\n", .{});
+          var bx: u32 = undefined;
+          self.read2Args(inst, &rx, &bx);
+          var clo = vl.createClosure(self, vl.asFn(self.RK(bx, fp)));
+          fp.stack[rx] = vl.objVal(clo);
+          continue;
+        },
+        .Call => {
+          var rx: u32 = undefined;
+          // TODO: use function arg count; n
+          var n: u32 = undefined;
+          self.read2Args(inst, &rx, &n);
+          try self.ensureFrameCapacity();
+          self.fiber.appendFrame(vl.asClosure(fp.stack[rx]), fp.stack + rx + 1);
+          fp = self.fiber.fp;
+          continue;
+        },
+        .Ret => {
+          var rx: u32 = undefined;
+          var bx: u32 = undefined;
+          self.read2Args(inst, &rx, &bx);
+          var res = fp.stack[rx];
+          var frame = fiber.popFrame();
+          // TODO: close upvalues
+          fp = self.fiber.fp;
+          if (fiber.frame_len == 0) {
+            if (fiber.caller == null) {
+              // TODO: handle result
+              return;
+            }
+            // TODO: handle resuming fibers
+          } else {
+            // place result where future instructions expect it; at the function's slot
+            (frame.stack - 1)[0] = res;
           }
-          fp.stack[rx] = vl.numberVal(@rem(vl.asNumber(a), vl.asNumber(b)));
           continue;
         },
         .Cmp => {
@@ -364,6 +403,22 @@ pub const VM = struct {
           const a = self.RK(rk, fp);
           self.assert(vl.isNumber(a));
           fp.stack[rx] = vl.numberVal(@intToFloat(f64, ~vl.asIntNumber(i64, a)));
+          continue;
+        },
+         .Mod => {
+          // div rx, rk(x), rk(x)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          const a = self.RK(rk1, fp);
+          const b = self.RK(rk2, fp);
+          self.assert(vl.isNumber(a));
+          self.assert(vl.isNumber(b));
+          if (@call(.always_inline, vl.asNumber, .{b}) == 0) {
+            return self.runtimeError("Modulo by zero\n", .{});
+          }
+          fp.stack[rx] = vl.numberVal(@rem(vl.asNumber(a), vl.asNumber(b)));
           continue;
         },
         .Jt => {
@@ -526,9 +581,6 @@ pub const VM = struct {
           self.read2Args(inst, &rx, &rk);
           fp.stack[rx] = vl.boolVal(!vl.valueFalsy(self.RK(rk, fp)));
           continue;
-        },
-        .Ret => {
-          break;
         },
       }
     }

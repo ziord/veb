@@ -13,35 +13,10 @@ const CnAllocator = @import("allocator.zig");
 
 pub fn main() !void {
   std.debug.print("hello canary!\n", .{});
-  var src =
-  // // \\ do
-  // \\ fn fib(n: num): num
-  // \\  if n <= 1
-  // \\    return n
-  // \\  end
-  // \\  return fib(n - 1) + fib(n - 2)
-  // \\ end
-  // \\ fib(12)
-  \\ type T = num
-  \\ fn foo(a: T): T
-  \\  let j = 12
-  \\  return a * 5 + j
-  \\ end
-  \\ let j = 4
-  \\ let p = 12 * foo(foo(j))
-  \\ {j: p}
-  // \\ end
-  // \\ foo(5) + 9
-  // \\ let j: num | list{str} = 5
-  // \\ if j is num | list{str}
-  // \\  j[0] = 'fox'
-  // \\ end
-  ;
-  _ = try doTest(src);
 }
 
 fn doTest(src: []const u8) !value.Value {
-  var cna = CnAllocator.init(std.heap.ArenaAllocator.init(std.heap.page_allocator));
+  var cna = CnAllocator.init(std.heap.ArenaAllocator.init(std.testing.allocator));
   defer cna.deinit();
   const filename = @as([]const u8, "test.cn");
   var parser = parse.Parser.init(@constCast(&src), &filename, &cna);
@@ -56,12 +31,15 @@ fn doTest(src: []const u8) !value.Value {
   var compiler = compile.Compiler.init(&tych.diag, &cpu, fun, &cna);
   try compiler.compile(node);
   debug.Disassembler.disCode(&fun.code, "test");
+  var start = std.time.milliTimestamp();
   cpu.boot(fun);
   try cpu.run();
+  var end = std.time.milliTimestamp();
+  std.debug.print("took: {}ms\n", .{end - start});
   value.printValue(cpu.fiber.fp.stack[0]);
   std.debug.print("\n", .{});
   // TODO: refactor testing, as it currently uses invalidated data
-  cpu.printStack();
+  // cpu.printStack();
   return cpu.fiber.fp.stack[0]; // !!invalidated!!
   // return 0;
 }
@@ -1123,4 +1101,51 @@ test "while loop" {
   \\ i == 0o177777
   ;
   _ = try doTest(src3);
+}
+
+test "functions" {
+  var src =
+  \\ type T = num
+  \\ fn j(a: T): T
+  \\  return (a * 2)
+  \\ end
+  \\ j(5) + 9 == 19
+  ;
+  _ = try doTest(src);
+  var src2 =
+  \\ do
+  \\ fn fox(a: num)
+  \\  fn foo(b: num)
+  \\    return a + b
+  \\  end
+  \\  return foo
+  \\ end
+  \\ fox(5)(9) == 14
+  \\ let j = fox(5)(8)
+  \\ j == 13
+  \\ end
+  ;
+  _ = try doTest(src2);
+  var src3 =
+  \\ fn fib(n: num): num
+  \\  if n <= 1 then
+  \\    return n
+  \\  end
+  \\  return fib(n - 1) + fib(n - 2)
+  \\ end
+  \\ fib(13) == 233
+  ;
+  _ = try doTest(src3);
+  var src4 =
+  \\ type T = num
+  \\ fn foo(a: T): T
+  \\  let j = 12
+  \\  return a * 5 + j
+  \\ end
+  \\ let j = 4
+  \\ let p = 12 * foo(foo(j))
+  \\ let q = {j: p}
+  \\ q[j] == 2064
+  ;
+  _ = try doTest(src4);
 }

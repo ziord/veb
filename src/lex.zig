@@ -261,7 +261,12 @@ pub const OpType = enum (u8) {
       .OpOr => OpCode.Jt,
       .OpIs => OpCode.Is,
       .OpNot => OpCode.Not,
-      .OpLess, .OpGrt, .OpLeq, .OpGeq, .OpEqq, .OpNeq => OpCode.Cmp,
+      .OpLess => OpCode.Cles,
+      .OpGrt => OpCode.Cgrt,
+      .OpLeq => OpCode.Cleq,
+      .OpGeq => OpCode.Cgeq,
+      .OpEqq => OpCode.Ceqq,
+      .OpNeq => OpCode.Cneq,
       else => unreachable, // todo
     };
   }

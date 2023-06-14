@@ -132,9 +132,19 @@ const LocalVar = struct {
   name: *[]const u8,
   index: u32,
   initialized: bool = false,
+  captured: bool = false,
 
   pub fn init(scope: i32, name: *[]const u8, reg: u32, index: u32) @This() {
     return @This() {.scope = scope, .name = name, .reg = reg, .index = index};
+  }
+};
+
+const Upvalue = struct {
+  index: u32,
+  is_local: bool,
+
+  pub fn init(index: u32, is_local: bool) @This() {
+    return @This() {.index = index, .is_local = is_local};
   }
 };
 
@@ -142,6 +152,7 @@ pub const Compiler = struct {
   fun: *ObjFn,
   gsyms: std.MultiArrayList(GSymVar),
   locals: std.MultiArrayList(LocalVar),
+  upvalues: std.MultiArrayList(Upvalue),
   globals: std.MultiArrayList(GlobalVar),
   loop_ctrls: ds.ArrayList(*ast.ControlNode),
   vreg: VRegister,
@@ -156,11 +167,14 @@ pub const Compiler = struct {
 
   const GLOBAL_SCOPE = 0;
   const MAX_LOCALS = VM.MAX_LOCAL_ITEMS;
+  const MAX_UPVALUES = VM.MAX_UPVALUE_ITEMS;
   const MAX_GSYMS = VM.MAX_GSYM_ITEMS;
   const GlobalVarInfo = struct {
     pos: u32,
     isGSym: bool,
-    gvar: ?GlobalVar
+    gvar: ?GlobalVar,
+    /// whether this GlobalVarInfo from an enclosing compiler instead of the current compiler
+    from_enclosing: bool = false,
   };
   const RkBxPair = struct {
     optimizeRK: u32 = 0, // can optimize for rk
@@ -173,6 +187,7 @@ pub const Compiler = struct {
     var al = allocator.getArenaAllocator();
     var gsyms = std.MultiArrayList(GSymVar){};
     var locals = std.MultiArrayList(LocalVar){};
+    var upvalues = std.MultiArrayList(Upvalue){};
     var globals = std.MultiArrayList(GlobalVar){};
     gsyms.ensureTotalCapacity(al, VM.MAX_GSYM_ITEMS) catch {};
     locals.ensureTotalCapacity(al, VM.MAX_LOCAL_ITEMS) catch {};
@@ -181,6 +196,7 @@ pub const Compiler = struct {
       .allocator = allocator,
       .gsyms = gsyms,
       .locals = locals,
+      .upvalues = upvalues,
       .globals = globals,
       .loop_ctrls = ds.ArrayList(*ast.ControlNode).init(al),
       .vreg = VRegister.init(al),
@@ -294,6 +310,26 @@ pub const Compiler = struct {
     return dst;
   }
 
+  fn addUpvalue(self: *Self, index: u32, is_local: bool, debug: Token) !u32 {
+     if (self.locals.len >= MAX_LOCALS) {
+      return self.compileError(debug, "Too many upvalues", .{});
+    }
+    var slice = self.upvalues.slice();
+    var indexs = slice.items(.index);
+    var is_locals = slice.items(.is_local);
+    for (indexs, is_locals, 0..) |idx, loc, i| {
+      if (index == idx and is_local == loc) {
+        return @intCast(u32, i);
+      }
+    }
+    var ret = @intCast(u32, self.upvalues.len);
+    self.upvalues.append(self.allocator.getArenaAllocator(), Upvalue.init(index, is_local)) catch |e| {
+      std.debug.print("error: {}\n", .{e});
+      return error.CompileError;
+    };
+    return ret;
+  }
+
   /// add gsym and return its index/pos
   fn addGSymVar(self: *Self, node: *ast.VarNode) struct {pos: u32, isGSym: bool} {
     // Deduplicate globals. If a spot is already allocated for a global 'a', 
@@ -339,6 +375,21 @@ pub const Compiler = struct {
     return null;
   }
 
+  fn findUpvalue(self: *Self, node: *ast.VarNode) ?u32 {
+    if (self.enclosing == null) return null;
+    var compiler = self.enclosing.?;
+    var local = compiler.findLocalVar(node);
+    if (local) |loc| {
+      compiler.locals.items(.captured)[loc.index] = true;
+      return self.addUpvalue(loc.index, true, node.token) catch null;
+    }
+    var index = compiler.findUpvalue(node);
+    if (index) |idx| {
+      return self.addUpvalue(idx, false, node.token) catch null;
+    }
+    return null;
+  }
+
   fn findGSymVar(self: *Self, node: *ast.VarNode) ?u32 {
     if (self.gsyms.len == 0) return null;
     var i: usize = self.gsyms.len;
@@ -368,23 +419,35 @@ pub const Compiler = struct {
       return .{.pos = pos, .isGSym = true, .gvar = null};
     } else if (self.findGlobalVar(node)) |gvar| {
       return .{.pos = gvar.mempos, .isGSym = false, .gvar = gvar};
+    } else if (self.enclosing) |compiler| {
+      if (compiler.findGlobal(node)) |info| {
+        var ret = info;
+        ret.from_enclosing = true;
+        return ret;
+      }
     }
     return null;
   }
 
   fn popLocalVars(self: *Self) void {
     if (self.locals.len == 0) return;
-    var i: usize = self.locals.len;
     var slice = self.locals.slice(); 
     var scopes = slice.items(.scope);
     var regs = slice.items(.reg);
-    while (i > 0): (i -= 1) {
-      var idx = i - 1;
-      if (scopes[idx] > self.scope) {
-        // TODO: close upvalues
-        self.vreg.releaseReg(regs[idx]);
+    var captures = slice.items(.captured);
+    var close: ?u32 = null;
+    for (scopes, regs, captures) |scope, reg, captured| {
+      if (scope > self.scope) {
+        // only take the first local, close upwards from there
+        if (captured and close == null) {
+          close = reg;
+        }
+        self.vreg.releaseReg(reg);
         self.locals.len -= 1;
       }
+    }
+    if (close) |reg| {
+      self.fun.code.write2ArgsInst(.Cupv, reg, 0, self.lastLine(), self.vm);
     }
   }
 
@@ -459,6 +522,11 @@ pub const Compiler = struct {
   }
 
   fn validateGlobalVarUse(self: *Self, info: GlobalVarInfo, node: *ast.VarNode) !void {
+    if (info.from_enclosing) {
+      // this global var was obtained from an enclosing compiler's
+      // global state, so it IS already validated. Just return.
+      return;
+    }
     if (info.isGSym) {
       var slice = self.gsyms.slice();
       if (slice.items(.patched)[info.pos] and !slice.items(.initialized)[info.pos]) {
@@ -522,12 +590,6 @@ pub const Compiler = struct {
     return reg;
   }
 
-  inline fn cCmp(self: *Self, node: *ast.BinaryNode) void {
-    // <, >, <=, >=, ==, !=
-    if (!node.op.optype.isCmpOp()) return;
-    self.fun.code.writeNoArgInst(@intToEnum(OpCode, @enumToInt(node.op.optype)), node.line(), self.vm);
-  }
-
   inline fn cLgc(self: *Self, node: *ast.BinaryNode, reg: u32) CompileError!u32 {
     // and, or
     // for and/or we do not want any const optimizations as we need consts to be loaded to registers
@@ -555,7 +617,6 @@ pub const Compiler = struct {
     self.vreg.releaseReg(dst2);
     const inst_op = node.op.optype.toInstOp();
     self.fun.code.write3ArgsInst(inst_op, dst, rk1, rk2, @intCast(u32, node.line()), self.vm);
-    self.cCmp(node);
     self.deoptimizeConstRK();
     return dst;
   }
@@ -648,6 +709,9 @@ pub const Compiler = struct {
     if (self.findLocalVar(node)) |lvar| {
       try self.validateLocalVarUse(lvar.index, node);
       return lvar.reg;
+    } else if (self.findUpvalue(node)) |upv| {
+      self.fun.code.write2ArgsInst(.Gupv, dst, upv, node.line(), self.vm);
+      return dst;
     } else if (self.findGlobal(node)) |info| {
       try self.validateGlobalVarUse(info, node);
       const inst: OpCode = if(info.isGSym) .Ggsym else .Gglb;
@@ -668,6 +732,10 @@ pub const Compiler = struct {
         self.fun.code.write3ArgsInst(.Mov, lvar.reg, ret, 0, node.line(), self.vm);
       }
       return lvar.reg;
+    } else if (self.findUpvalue(node)) |upv| {
+      var rx = try self.c(expr, reg);
+      self.fun.code.write2ArgsInst(.Supv, rx, upv, node.line(), self.vm);
+      return reg;
     } else if (self.findGlobal(node)) |info| {
       // sgsym rx, bx -> GS[bx] = r(x)
       // sglb rx, bx -> G[K(bx)] = r(x)
@@ -788,6 +856,15 @@ pub const Compiler = struct {
   fn cDeref(self: *Self, node: *ast.DerefNode, reg: u32) !u32 {
     var rx = try self.c(node.expr, reg);
     self.fun.code.write3ArgsInst(.Asrt, rx, 0, 0, node.token.line, self.vm);
+    return reg;
+  }
+
+  fn cBlockNoPops(self: *Self, node: *ast.BlockNode, reg: u32) !u32 {
+    self.incScope();
+    for (node.nodes.items()) |nd| {
+      _ = try self.c(nd, reg);
+    }
+    self.decScope();
     return reg;
   }
 
@@ -957,19 +1034,29 @@ pub const Compiler = struct {
     var compiler = Compiler.init(self.diag, self.vm, new_fn, self.allocator);
     compiler.enclosing = self;
     // localize params
-    compiler.incScope(); 
+    compiler.incScope();
     for (node.params.items()) |param| {
       _ = try compiler.initLocal(param.ident);
     }
-    _ = try compiler.cBlock(&node.body.AstBlock, _reg);
+    // compile function body using cBlockNoPops() since no need to pop locals,
+    // - return does this automatically
+    _ = try compiler.cBlockNoPops(&node.body.AstBlock, _reg);
     compiler.decScope();
-    // TODO: upvalues
+    new_fn.envlen = compiler.upvalues.len;
     self.optimizeConstBX();
     var tmp = try self.getReg(token);
     var dst = self.cConst(tmp, value.objVal(new_fn), self.lastLine());
     self.fun.code.write2ArgsInst(.Bclo, reg, dst, self.lastLine(), self.vm);
     self.vreg.releaseReg(tmp);
     self.deoptimizeConstBX();
+    // set upvalues
+    var slice = compiler.upvalues.slice();
+    var indexs = slice.items(.index);
+    var is_locals = slice.items(.is_local);
+    for (indexs, is_locals) |idx, loc| {
+      // use .Bclo as a placeholder
+      self.fun.code.write2ArgsInst(.Bclo, @boolToInt(loc), idx, self.lastLine(), self.vm);
+    }
     if (is_global and node.name != null) {
       var ident = node.name.?;
       var info = self.findGlobal(ident).?;
@@ -989,19 +1076,21 @@ pub const Compiler = struct {
     // - compile the call expr
     // - generate the instruction: call r(func), b(argc)
     var token = node.expr.getToken();
+    var fun_dst = try self.c(node.expr, reg);
     // obtain the number of args
     var n = @intCast(u32, node.args.len());
     var win = try self.getRegWindow(reg, n, token);
-    var fun_dst = try self.c(node.expr, reg);
     // we need the function to be in a specific position in the register window, along with its args
     if (fun_dst != reg) {
       std.debug.assert(self.isLocal());
       self.fun.code.write3ArgsInst(.Mov, reg, fun_dst, 0, self.lastLine(), self.vm);
     }
-    self.enterJmp(); // don't optimize this call's arguments
+    // don't optimize this call's arguments
+    self.enterJmp();
     for (node.args.items(), 0..) |arg, i| {
       var dst = win + @intCast(u32, i);
       var tmp = try self.c(arg, dst);
+      // we need the args to be positioned in line with the function in the register window
       if (tmp != dst) {
         std.debug.assert(self.isLocal());
         self.fun.code.write3ArgsInst(.Mov, dst, tmp, 0, self.lastLine(), self.vm);

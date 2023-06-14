@@ -120,33 +120,23 @@ pub const ResolutionState = enum {
 
 pub const CFG = struct {
   /// named functions
-  funcs: std.StringArrayHashMap(FlowMeta),
-  /// anonymous functions
-  afuncs: ds.ArrayList(FlowMeta),
+  funcs: ds.ArrayList(FlowMeta),
   /// whole program
   program: FlowMeta,
 
   pub fn init(al: std.mem.Allocator) @This() {
     return @This() {
-      .funcs = std.StringArrayHashMap(FlowMeta).init(al),
-      .afuncs = ds.ArrayList(FlowMeta).init(al),
+      .funcs = ds.ArrayList(FlowMeta).init(al),
       .program = undefined,
     };
   }
 
-  pub fn putFunc(self: *@This(), name: []const u8, info: FlowMeta) void {
-    self.funcs.put(name, info) catch {};
+  pub fn putFunc(self: *@This(), info: FlowMeta) void {
+    self.funcs.append(info);
   }
 
-  pub fn putAFunc(self: *@This(), info: FlowMeta) void {
-    self.afuncs.append(info);
-  }
-
-  pub fn lookup(self: *@This(), name: ?[]const u8, node: *Node) FlowMeta {
-    if (name) |nm| {
-      return self.funcs.get(nm).?;
-    }
-    for (self.afuncs.items()) |itm| {
+  pub fn lookup(self: *@This(), node: *Node) FlowMeta {
+    for (self.funcs.items()) |itm| {
       if (itm.entry.node == node) {
         return itm;
       }
@@ -383,12 +373,10 @@ pub const CFGBuilder = struct {
     }
     synth.nodes.extend(&fun.body.AstBlock.nodes);
     var body = @as(Node, .{.AstBlock = synth});
-    var cfg = builder.buildBlock(&body);
-    if (fun.isAnonymous()) {
-      self.cfg.putAFunc(cfg.program);
-    } else {
-      self.cfg.putFunc(fun.name.?.token.value, cfg.program);
-    }
+    var program = builder.buildBlock(self.cfg, &body);
+    // save node for future lookup()s
+    program.entry.node = node;
+    self.cfg.putFunc(program);
     return flow_list;
   }
 
@@ -414,15 +402,12 @@ pub const CFGBuilder = struct {
     };
   }
 
-  pub fn buildBlock(self: *Self, ast_node: *Node) CFG {
-    var cfg = CFG.init(self.alloc());
-    self.cfg = &cfg;
+  pub fn buildBlock(self: *Self, cfg: *CFG, ast_node: *Node) FlowMeta {
+    self.cfg = cfg;
     var node = &ast_node.AstBlock;
     var _prev = self.linkNodeList(&node.nodes, node.cond, self.entry.toList(self.alloc()), .ESequential);
     self.connectVertices(_prev, self.exit);
-    self.cfg.program = FlowMeta.init(self.entry, self.exit, self.dead);
-    self.cfg = undefined;
-    return cfg;
+    return FlowMeta.init(self.entry, self.exit, self.dead);
   }
 
   pub fn build(self: *Self, root: *Node) CFG {

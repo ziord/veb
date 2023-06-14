@@ -733,6 +733,13 @@ pub const TypeChecker = struct {
       .AstCondition => try self.flowInferCondition(node),
       .AstEmpty => try self.flowInferMeta(node),
       .AstControl => {},
+      .AstFun => {
+        if (node.isEntryNode()) {
+          try self.flowInferEntry(node);
+        } else {
+          try self.flowInferNode(node);
+        }
+      },
       else => try self.flowInferNode(node),
     }
     if (!inferNext) return;
@@ -1066,7 +1073,7 @@ pub const TypeChecker = struct {
     }
     // generic is infer-by-need - performed on call.
     if (!fun.isGeneric()) {
-      var flo = self.cfg.lookup(fun.getName(), node);
+      var flo = self.cfg.lookup(node);
       try self.flowInfer(flo.entry, true);
       ty.function().ret = try self.inferFunReturnType(fun, flo);
     }
@@ -1200,7 +1207,7 @@ pub const TypeChecker = struct {
     // link the function
     var fun = &fun_ty.node.AstFun;
     try self.linker.linkFun(fun, true);
-    var flo = self.cfg.lookup(fun.getName(), fun_ty.node);
+    var flo = self.cfg.lookup(fun_ty.node);
     try self.flowInfer(flo.entry, true);
     var ret = try self.inferFunReturnType(fun, flo);
     self.ctx.leaveScope();

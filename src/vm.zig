@@ -11,6 +11,7 @@ const Inst = vl.Inst;
 const ObjFiber = vl.ObjFiber;
 const ObjFn = vl.ObjFn;
 const ObjClosure = vl.ObjClosure;
+const ObjUpvalue = vl.ObjUpvalue;
 const CallFrame = vl.CallFrame;
 const StringHashMap = vl.StringHashMap;
 
@@ -27,6 +28,7 @@ pub const VM = struct {
   const STACK_MAX = 0xfff;
   pub const MAX_GSYM_ITEMS = vl.MAX_REGISTERS << 1;
   pub const MAX_LOCAL_ITEMS = vl.MAX_REGISTERS;
+  pub const MAX_UPVALUE_ITEMS = vl.MAX_REGISTERS;
   pub const MAX_FRAMES = 0xffff;
   const RuntimeError = error{RuntimeError};
   const TypeTag2CheckFunc = [_]*const fn(Value) bool {
@@ -103,16 +105,18 @@ pub const VM = struct {
 
   inline fn readConst(self: *Self, pos: u32, fp: *vl.CallFrame) Value {
     _ = self;
+    @setRuntimeSafety(false);
     return fp.closure.fun.code.values.items[pos];
   }
 
   inline fn RK(self: *Self, x: u32, fp: *CallFrame) Value {
     // rk(x) = r(x) if x < MAX_REGISTERS else k(x - MAX_REGISTERS)
     _ = self;
+    @setRuntimeSafety(false);
     return if (x < vl.MAX_REGISTERS) fp.stack[x] else fp.closure.fun.code.values.items[x - vl.MAX_REGISTERS];
   }
 
-  fn ensureFrameCapacity(self: *Self) !void {
+  fn ensureFrameCapacity(self: *Self, fp: **CallFrame, fiber: **ObjFiber) !void {
     if (self.fiber.frame_len + 1 < self.fiber.frame_cap) return;
     if (self.fiber.frame_cap >= MAX_FRAMES) {
       // TODO: unwind
@@ -126,6 +130,41 @@ pub const VM = struct {
       cap
     ).ptr;
     self.fiber.frame_cap = cap;
+    self.fiber.fp = &self.fiber.frames[self.fiber.frame_len - 1];
+    fp.* = self.fiber.fp;
+    fiber.* = self.fiber;
+  }
+
+  fn captureUpvalue(self: *Self, fiber: *ObjFiber, local: *Value) *ObjUpvalue {
+    var current = fiber.open_upvalues;
+    var previous: ?*ObjUpvalue = null;
+    // try to find a position where `local` fits
+    while (current != null and @ptrToInt(current.?.loc) > @ptrToInt(local)) {
+      previous = current;
+      current = current.?.next;
+    }
+    // if we already captured this local, just return current
+    if (current != null and current.?.loc == local) {
+      return current.?;
+    }
+    var upv = vl.createUpvalue(self, local);
+    upv.next = current;
+    if (previous) |prev| {
+      prev.next = upv;
+    } else {
+      // open_upvalues is null
+      fiber.open_upvalues = upv;
+    }
+    return upv;
+  }
+
+  fn closeUpvalues(fiber: *ObjFiber, slot: *Value) void {
+    while (fiber.open_upvalues != null and @ptrToInt(fiber.open_upvalues.?.loc) >= @ptrToInt(slot)) {
+      var tmp = fiber.open_upvalues.?;
+      tmp.value = tmp.loc.*;
+      tmp.loc = &tmp.value;
+      fiber.open_upvalues = tmp.next;
+    }
   }
 
   inline fn assert(self: *Self, cond: bool) void {
@@ -154,6 +193,15 @@ pub const VM = struct {
     while (true) {
       const inst = @call(.always_inline, Self.readWord, .{self, fp});
       switch (@call(.always_inline, Code.readInstOp, .{inst})) {
+        .Load => {
+          // load rx, bx
+          var rx: u32 = undefined;
+          var bx: u32 = undefined;
+          self.read2Args(inst, &rx, &bx);
+          @setRuntimeSafety(false);
+          fp.stack[rx] = fp.closure.fun.code.values.items[bx];
+          continue;
+        },
         .Gglb => {
           // gglb rx, bx -> r(x) = G[K(bx)]
           var rx: u32 = undefined;
@@ -162,6 +210,7 @@ pub const VM = struct {
           var glb = vl.asString(self.readConst(bx, fp));
           var val = self.globals.get(glb);
           self.assert(val != null);
+          @setRuntimeSafety(false);
           fp.stack[rx] = val.?;
           continue;
         },
@@ -179,6 +228,7 @@ pub const VM = struct {
           var rx: u32 = undefined;
           var bx: u32 = undefined;
           self.read2Args(inst, &rx, &bx);
+          @setRuntimeSafety(false);
           fp.stack[rx] = self.gsyms[bx];
           continue;
         },
@@ -187,6 +237,7 @@ pub const VM = struct {
           var rx: u32 = undefined;
           var bx: u32 = undefined;
           self.read2Args(inst, &rx, &bx);
+          @setRuntimeSafety(false);
           self.gsyms[bx] = fp.stack[rx];
           continue;
         },
@@ -196,14 +247,8 @@ pub const VM = struct {
           var ry: u32 = undefined;
           var dum: u32 = undefined;
           self.read3Args(inst, &rx, &ry, &dum);
+          @setRuntimeSafety(false);
           fp.stack[rx] = fp.stack[ry];
-          continue;
-        },
-        .Asrt => {
-          // asrt rx
-          if (vl.isNil(fp.stack[vl.Code.readRX(inst)])) {
-            return self.runtimeError("Attempt to use value 'nil'", .{});
-          }
           continue;
         },
         .Add => {
@@ -212,11 +257,8 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
           self.read3Args(inst, &rx, &rk1, &rk2);
-          const a = self.RK(rk1, fp);
-          const b = self.RK(rk2, fp);
-          self.assert(vl.isNumber(a));
-          self.assert(vl.isNumber(b));
-          fp.stack[rx] = vl.numberVal(vl.asNumber(a) + vl.asNumber(b));
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.numberVal(vl.asNumber(self.RK(rk1, fp)) + vl.asNumber(self.RK(rk2, fp)));
           continue;
         },
         .Sub => {
@@ -225,11 +267,8 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
           self.read3Args(inst, &rx, &rk1, &rk2);
-          const a = self.RK(rk1, fp);
-          const b = self.RK(rk2, fp);
-          self.assert(vl.isNumber(a));
-          self.assert(vl.isNumber(b));
-          fp.stack[rx] = vl.numberVal(vl.asNumber(a) - vl.asNumber(b));
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.numberVal(vl.asNumber(self.RK(rk1, fp)) - vl.asNumber(self.RK(rk2, fp)));
           continue;
         },
         .Mul => {
@@ -238,11 +277,8 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
           self.read3Args(inst, &rx, &rk1, &rk2);
-          const a = self.RK(rk1, fp);
-          const b = self.RK(rk2, fp);
-          self.assert(vl.isNumber(a));
-          self.assert(vl.isNumber(b));
-          fp.stack[rx] = vl.numberVal(vl.asNumber(a) * vl.asNumber(b));
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.numberVal(vl.asNumber(self.RK(rk1, fp)) * vl.asNumber(self.RK(rk2, fp)));
           continue;
         },
         .Div => {
@@ -251,11 +287,68 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
           self.read3Args(inst, &rx, &rk1, &rk2);
-          const a = self.RK(rk1, fp);
-          const b = self.RK(rk2, fp);
-          self.assert(vl.isNumber(a));
-          self.assert(vl.isNumber(b));
-          fp.stack[rx] = vl.numberVal(vl.asNumber(a) / vl.asNumber(b));
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.numberVal(vl.asNumber(self.RK(rk1, fp)) / vl.asNumber(self.RK(rk2, fp)));
+          continue;
+        },
+        .Cles => {
+          // cles rx, rk(x), rk(x)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.boolVal(self.RK(rk1, fp) < self.RK(rk2, fp));
+          continue;
+        },
+        .Cgrt => {
+          // cgrt rx, rk(x), rk(x)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.boolVal(self.RK(rk1, fp) > self.RK(rk2, fp));
+          continue;
+        },
+        .Cleq => {
+          // cleq rx, rk(x), rk(x)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.boolVal(self.RK(rk1, fp) <= self.RK(rk2, fp));
+          continue;
+        },
+        .Cgeq => {
+          // cgeq rx, rk(x), rk(x)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.boolVal(self.RK(rk1, fp) >= self.RK(rk2, fp));
+          continue;
+        },
+        .Ceqq => {
+          // ceqq rx, rk(x), rk(x)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.boolVal(@call(.always_inline, vl.valueEqual, .{self.RK(rk1, fp), self.RK(rk2, fp)}));
+          continue;
+        },
+        .Cneq => {
+          // cneq rx, rk(x), rk(x)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.boolVal(!@call(.always_inline, vl.valueEqual, .{self.RK(rk1, fp), self.RK(rk2, fp)}));
           continue;
         },
         .Bclo => {
@@ -264,6 +357,17 @@ pub const VM = struct {
           self.read2Args(inst, &rx, &bx);
           var clo = vl.createClosure(self, vl.asFn(self.RK(bx, fp)));
           fp.stack[rx] = vl.objVal(clo);
+          var i: usize = 0;
+          while (i < clo.fun.envlen) : (i += 1) {
+            var next_inst = @call(.always_inline, Self.readWord, .{self, fp});
+            var is_local = Code.readRX(next_inst);
+            var slot = Code.readBX(next_inst);
+            if (is_local == 1) {
+              clo.env[i] = self.captureUpvalue(fiber, &fp.stack[slot]);
+            } else {
+              clo.env[i] = fp.closure.env[slot];
+            }
+          }
           continue;
         },
         .Call => {
@@ -271,19 +375,17 @@ pub const VM = struct {
           // TODO: use function arg count; n
           var n: u32 = undefined;
           self.read2Args(inst, &rx, &n);
-          try self.ensureFrameCapacity();
-          self.fiber.appendFrame(vl.asClosure(fp.stack[rx]), fp.stack + rx + 1);
-          fp = self.fiber.fp;
+          try self.ensureFrameCapacity(&fp, &fiber);
+          fiber.appendFrame(vl.asClosure(fp.stack[rx]), fp.stack + rx + 1);
+          fp = fiber.fp;
           continue;
         },
         .Ret => {
-          var rx: u32 = undefined;
-          var bx: u32 = undefined;
-          self.read2Args(inst, &rx, &bx);
+          var rx: u32 = Code.readRX(inst);
           var res = fp.stack[rx];
           var frame = fiber.popFrame();
-          // TODO: close upvalues
-          fp = self.fiber.fp;
+          closeUpvalues(fiber, &frame.stack[0]);
+          fp = fiber.fp;
           if (fiber.frame_len == 0) {
             if (fiber.caller == null) {
               // TODO: handle result
@@ -296,39 +398,11 @@ pub const VM = struct {
           }
           continue;
         },
-        .Cmp => {
-          // cmp rx, rk(x), rk(x) | cmp_op 
-          var rx: u32 = undefined;
-          var rk1: u32 = undefined;
-          var rk2: u32 = undefined;
-          self.read3Args(inst, &rx, &rk1, &rk2);
-          var next_inst = @call(.always_inline, Self.readWord, .{self, fp});
-          const cmp_op = @call(.always_inline, Code.readInstOpNoConv, .{next_inst});
-          const a = self.RK(rk1, fp);
-          const b = self.RK(rk2, fp);
-          switch (@intToEnum(vl.OpType, cmp_op)) {
-            .OpLess => fp.stack[rx] = vl.boolVal(vl.asNumber(a) < vl.asNumber(b)),
-            .OpGrt => fp.stack[rx] = vl.boolVal(vl.asNumber(a) > vl.asNumber(b)),
-            .OpLeq => fp.stack[rx] = vl.boolVal(vl.asNumber(a) <= vl.asNumber(b)),
-            .OpGeq => fp.stack[rx] = vl.boolVal(vl.asNumber(a) >= vl.asNumber(b)),
-            // todo: type handling?
-            .OpEqq => fp.stack[rx] = vl.boolVal(@call(.always_inline, vl.valueEqual, .{a, b})),
-            .OpNeq => fp.stack[rx] = vl.boolVal(!@call(.always_inline, vl.valueEqual, .{a, b})),
-            else => unreachable,
+        .Asrt => {
+          // asrt rx
+          if (vl.isNil(fp.stack[vl.Code.readRX(inst)])) {
+            return self.runtimeError("Attempt to use value 'nil'", .{});
           }
-          continue;
-        },
-        .Xor => {
-          // xor rx, rk(x), rk(x)
-          var rx: u32 = undefined;
-          var rk1: u32 = undefined;
-          var rk2: u32 = undefined;
-          self.read3Args(inst, &rx, &rk1, &rk2);
-          const a = self.RK(rk1, fp);
-          const b = self.RK(rk2, fp);
-          self.assert(vl.isNumber(a));
-          self.assert(vl.isNumber(b));
-          fp.stack[rx] = vl.numberVal(@intToFloat(f64, (vl.asIntNumber(i64, a) ^ vl.asIntNumber(i64, b))));
           continue;
         },
         .Or => {
@@ -337,11 +411,9 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
           self.read3Args(inst, &rx, &rk1, &rk2);
-          const a = self.RK(rk1, fp);
-          const b = self.RK(rk2, fp);
-          self.assert(vl.isNumber(a));
-          self.assert(vl.isNumber(b));
-          fp.stack[rx] = vl.numberVal(@intToFloat(f64, (vl.asIntNumber(i64, a) | vl.asIntNumber(i64, b))));
+          fp.stack[rx] = vl.numberVal(
+            @intToFloat(f64, (vl.asIntNumber(i64, self.RK(rk1, fp)) | vl.asIntNumber(i64, self.RK(rk2, fp))))
+          );
           continue;
         },
         .And => {
@@ -350,11 +422,32 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
           self.read3Args(inst, &rx, &rk1, &rk2);
-          const a = self.RK(rk1, fp);
-          const b = self.RK(rk2, fp);
-          self.assert(vl.isNumber(a));
-          self.assert(vl.isNumber(b));
-          fp.stack[rx] = vl.numberVal(@intToFloat(f64, (vl.asIntNumber(i64, a) & vl.asIntNumber(i64, b))));
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.numberVal(
+            @intToFloat(f64, (vl.asIntNumber(i64, self.RK(rk1, fp)) & vl.asIntNumber(i64, self.RK(rk2, fp))))
+          );
+          continue;
+        },
+        .Gupv => {
+          // gupv rx, bx
+          var rx: u32 = undefined;
+          var bx: u32 = undefined;
+          self.read2Args(inst, &rx, &bx);
+          @setRuntimeSafety(false);
+          fp.stack[rx] = fp.closure.env[bx].loc.*;
+          continue;
+        },
+        .Supv => {
+          // supv rx, bx
+          var rx: u32 = undefined;
+          var bx: u32 = undefined;
+          self.read2Args(inst, &rx, &bx);
+          @setRuntimeSafety(false);
+          fp.closure.env[bx].loc.* = fp.stack[rx];
+          continue;
+        },
+        .Cupv => {
+          closeUpvalues(fiber, &fp.stack[Code.readRX(inst)]);
           continue;
         },
         .Is => {
@@ -363,10 +456,21 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
           self.read3Args(inst, &rx, &rk1, &rk2);
-          const val = self.RK(rk1, fp);
           const ty_tag = vl.asIntNumber(usize, self.RK(rk2, fp));
           @setRuntimeSafety(false);
-          fp.stack[rx] = vl.boolVal(TypeTag2CheckFunc[ty_tag](val));
+          fp.stack[rx] = vl.boolVal(TypeTag2CheckFunc[ty_tag](self.RK(rk1, fp)));
+          continue;
+        },
+        .Xor => {
+          // xor rx, rk(x), rk(x)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &rk2);
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.numberVal(
+            @intToFloat(f64, (vl.asIntNumber(i64, self.RK(rk1, fp)) ^ vl.asIntNumber(i64, self.RK(rk2, fp))))
+          );
           continue;
         },
         .Shl => {
@@ -375,11 +479,10 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
           self.read3Args(inst, &rx, &rk1, &rk2);
-          const a = self.RK(rk1, fp);
-          const b = self.RK(rk2, fp);
-          self.assert(vl.isNumber(a));
-          self.assert(vl.isNumber(b));
-          fp.stack[rx] = vl.numberVal(@intToFloat(f64, std.math.shl(i64, vl.asIntNumber(i64, a), vl.asIntNumber(i64, b))));
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.numberVal(
+            @intToFloat(f64, std.math.shl(i64, vl.asIntNumber(i64, self.RK(rk1, fp)), vl.asIntNumber(i64, self.RK(rk2, fp))))
+          );
           continue;
         },
         .Shr => {
@@ -388,11 +491,9 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
           self.read3Args(inst, &rx, &rk1, &rk2);
-          const a = self.RK(rk1, fp);
-          const b = self.RK(rk2, fp);
-          self.assert(vl.isNumber(a));
-          self.assert(vl.isNumber(b));
-          fp.stack[rx] = vl.numberVal(@intToFloat(f64, std.math.shr(i64, vl.asIntNumber(i64, a), vl.asIntNumber(i64, b))));
+          fp.stack[rx] = vl.numberVal(
+            @intToFloat(f64, std.math.shr(i64, vl.asIntNumber(i64, self.RK(rk1, fp)), vl.asIntNumber(i64, self.RK(rk2, fp))))
+          );
           continue;
         },
         .Inv => {
@@ -400,9 +501,8 @@ pub const VM = struct {
           var rx: u32 = undefined;
           var rk: u32 = undefined;
           self.read2Args(inst, &rx, &rk);
-          const a = self.RK(rk, fp);
-          self.assert(vl.isNumber(a));
-          fp.stack[rx] = vl.numberVal(@intToFloat(f64, ~vl.asIntNumber(i64, a)));
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.numberVal(@intToFloat(f64, ~vl.asIntNumber(i64, self.RK(rk, fp))));
           continue;
         },
          .Mod => {
@@ -411,14 +511,12 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
           self.read3Args(inst, &rx, &rk1, &rk2);
-          const a = self.RK(rk1, fp);
           const b = self.RK(rk2, fp);
-          self.assert(vl.isNumber(a));
-          self.assert(vl.isNumber(b));
           if (@call(.always_inline, vl.asNumber, .{b}) == 0) {
             return self.runtimeError("Modulo by zero\n", .{});
           }
-          fp.stack[rx] = vl.numberVal(@rem(vl.asNumber(a), vl.asNumber(b)));
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.numberVal(@rem(vl.asNumber(self.RK(rk1, fp)), vl.asNumber(b)));
           continue;
         },
         .Jt => {
@@ -456,15 +554,8 @@ pub const VM = struct {
           var rx: u32 = undefined;
           var rk: u32 = undefined;
           self.read2Args(inst, &rx, &rk);
+          @setRuntimeSafety(false);
           fp.stack[rx] = vl.boolVal(vl.valueFalsy(self.RK(rk, fp)));
-          continue;
-        },
-        .Load => {
-          // load rx, bx
-          var rx: u32 = undefined;
-          var bx: u32 = undefined;
-          self.read2Args(inst, &rx, &bx);
-          fp.stack[rx] = fp.closure.fun.code.values.items[bx];
           continue;
         },
         .Nlst => {
@@ -472,6 +563,7 @@ pub const VM = struct {
           var rx: u32 = undefined;
           var count: u32 = undefined;
           self.read2Args(inst, &rx, &count);
+          @setRuntimeSafety(false);
           fp.stack[rx] = vl.objVal(vl.createList(self, @as(usize, count)));
           continue;
         },
@@ -487,6 +579,7 @@ pub const VM = struct {
           if (idx >= list.len) {
             return self.runtimeError("IndexError: list index out of range: {}", .{idx});
           }
+          @setRuntimeSafety(false);
           list.items[@intCast(usize, idx)] = self.RK(rk2, fp);
           continue;
         },
@@ -502,6 +595,7 @@ pub const VM = struct {
           if (idx >= list.len) {
             return self.runtimeError("IndexError: list index out of range: {}", .{idx});
           }
+          @setRuntimeSafety(false);
           fp.stack[rx] = list.items[@intCast(usize, idx)];
           continue;
         },
@@ -510,6 +604,7 @@ pub const VM = struct {
           var rx: u32 = undefined;
           var count: u32 = undefined;
           self.read2Args(inst, &rx, &count);
+          @setRuntimeSafety(false);
           fp.stack[rx] = vl.objVal(vl.createTuple(self, @as(usize, count)));
           continue;
         },
@@ -522,6 +617,7 @@ pub const VM = struct {
           var tuple = vl.asTuple(fp.stack[rx]);
           var idx = vl.asIntNumber(i64, self.RK(rk1, fp));
           // assumed safe
+          @setRuntimeSafety(false);
           tuple.items[@intCast(usize, idx)] = self.RK(rk2, fp);
           continue;
         },
@@ -537,6 +633,7 @@ pub const VM = struct {
           if (idx >= tuple.len) {
             return self.runtimeError("IndexError: tuple index out of range: {}", .{idx});
           }
+          @setRuntimeSafety(false);
           fp.stack[rx] = tuple.items[@intCast(usize, idx)];
           continue;
         },
@@ -546,6 +643,7 @@ pub const VM = struct {
           var rx: u32 = undefined;
           var count: u32 = undefined;
           self.read2Args(inst, &rx, &count);
+          @setRuntimeSafety(false);
           fp.stack[rx] = vl.objVal(vl.createMap(self, @as(usize, count)));
           continue;
         },
@@ -579,6 +677,7 @@ pub const VM = struct {
           var rx: u32 = undefined;
           var rk: u32 = undefined;
           self.read2Args(inst, &rx, &rk);
+          @setRuntimeSafety(false);
           fp.stack[rx] = vl.boolVal(!vl.valueFalsy(self.RK(rk, fp)));
           continue;
         },

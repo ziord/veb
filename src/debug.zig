@@ -53,6 +53,12 @@ pub const Disassembler = struct {
       .Mul => _3ArgsInst("mul", word),
       .Div => _3ArgsInst("div", word),
       .Mod => _3ArgsInst("mod", word),
+      .Cles => _3ArgsInst("cles", word),
+      .Cgrt => _3ArgsInst("cgrt", word),
+      .Cleq => _3ArgsInst("cleq", word),
+      .Cgeq => _3ArgsInst("cgeq", word),
+      .Ceqq => _3ArgsInst("ceqq", word),
+      .Cneq => _3ArgsInst("cneq", word),
       .Xor => _3ArgsInst("xor", word),
       .Or => _3ArgsInst("or", word),
       .And => _3ArgsInst("and", word),
@@ -77,9 +83,27 @@ pub const Disassembler = struct {
       .Ggsym => _2ArgsInst("ggsym", word),
       .Sgsym => _2ArgsInst("sgsym", word),
       .Bcst => _2ArgsInst("bcst", word),
-      .Bclo => _2ArgsInst("bclo", word),
       .Call => _2ArgsInst("call", word),
       .Ret => _2ArgsInst("ret", word),
+      .Gupv => _2ArgsInst("gupv", word),
+      .Supv => _2ArgsInst("supv", word),
+      .Cupv => _2ArgsInst("cupv", word),
+      .Bclo => {
+        _2ArgsInst("bclo", word);
+        var bx = Code.readBX(word);
+        var tmp = if (bx >= value.MAX_REGISTERS) bx - value.MAX_REGISTERS 
+                  else Code.readBX(code.words.items[idx - 1]); // read the index off the prev inst
+        var envlen = value.asFn(code.values.items[tmp]).envlen;
+        var i = idx;
+        while (envlen > 0): (envlen -= 1) {
+          var inst = code.words.items[i];
+          var is_local = Code.readRX(inst);
+          var slot = Code.readBX(inst);
+          i += 1;
+          std.debug.print("   |\t{d:0>4}\tupvalue -> {{index: {}, is_local: {}}}\n", .{i, slot, is_local});
+        }
+        index.* = i;
+      },
       .Mov => {
         // mov is a 2-arg inst using a 3-arg format.
         const a1 = Code.readRX(word);
@@ -107,12 +131,6 @@ pub const Disassembler = struct {
         std.debug.print("   ( ", .{});
         value.printValue(code.values.items[bx]);
         std.debug.print(" )\n", .{});
-      },
-      .Cmp => {
-        __3ArgsInst("cmp", word);
-        index.* = index.* + 1; // cmp_op
-        const cmp_op = Code.readInstOpNoConv(code.words.items[index.*]);
-        std.debug.print(" ({})\n", .{@intToEnum(value.OpType, cmp_op)});
       },
     }
   }

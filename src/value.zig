@@ -224,7 +224,7 @@ pub const ObjSMap = extern struct {
 pub const ObjFn = extern struct {
   obj: Obj,
   arity: u8,
-  envlen: u32,
+  envlen: usize,
   code: Code,
   name: ?*ObjString,
 
@@ -271,7 +271,7 @@ pub const ObjFiber = extern struct {
   fp: *CallFrame,
   stack: [*]Value,
   frames: [*]CallFrame,
-  upvalues: ?*ObjUpvalue,
+  open_upvalues: ?*ObjUpvalue,
   caller: ?*ObjFiber,
 
   pub fn appendFrame(self: *ObjFiber, clos: *ObjClosure, stack: [*]Value) void {
@@ -792,7 +792,7 @@ pub fn createFiber(vm: *VM, clo: ?*ObjClosure, origin: FiberOrigin, caller: ?*Ob
   fiber.frame_len = 0;
   fiber.frames = frames.ptr;
   fiber.stack = stack.ptr;
-  fiber.upvalues = null;
+  fiber.open_upvalues = null;
   fiber.fp = undefined;
   if (clo) |closure| {
     stack[0] = objVal(closure);

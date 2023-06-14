@@ -21,6 +21,7 @@ const Diagnostic = diagnostics.Diagnostic;
 
 // maximum number of elements of a list literal 
 const MAX_LISTING_ELEMS = 0xff;
+const MAX_PARAMS = 0xff;
 
 
 pub const Parser = struct {
@@ -500,6 +501,7 @@ pub const Parser = struct {
       args.append(try self.parseExpr());
     }
     try self.consume(.TkRBracket);
+    try self.assertMaxArgs(args.len(), "arguments");
     var node = self.newNode();
     node.* = .{.AstCall = ast.CallNode.init(left, args, targs)};
     return node;
@@ -563,6 +565,12 @@ pub const Parser = struct {
   inline fn assertMaxTParams(self: *Self, len: usize) !void {
     if (len >= types.MAX_TPARAMS) {
       return self.err(self.current_tok, "maximum type parameters exceeded");
+    }
+  }
+
+  inline fn assertMaxArgs(self: *Self, len: usize, comptime d: []const u8) !void {
+    if (len >= MAX_PARAMS) {
+      return self.err(self.current_tok, "maximum " ++ d ++ " exceeded");
     }
   }
 
@@ -999,6 +1007,7 @@ pub const Parser = struct {
       }
       try self.consume(.TkRBracket);
     }
+    try self.assertMaxArgs(params.len(), "parameters");
     return params;
   }
 

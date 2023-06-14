@@ -46,9 +46,29 @@ pub const OpCode = enum (u8) {
   // [6] [8]  [9]    [9]
   Shl,
 
-  // cmp rx, rk(x), rk(y) | cmp_op
-  // [6] [8]  [9]    [9]     [32]
-  Cmp,
+  // cles rx, rk(x), rk(y)
+  // [6] [8]  [9]    [9]
+  Cles,
+
+  // cgrt rx, rk(x), rk(y)
+  // [6] [8]  [9]    [9]
+  Cgrt,
+
+  // cleq rx, rk(x), rk(y)
+  // [6] [8]  [9]    [9]
+  Cleq,
+
+  // cgeq rx, rk(x), rk(y)
+  // [6] [8]  [9]    [9]
+  Cgeq,
+
+  // ceqq rx, rk(x), rk(y)
+  // [6] [8]  [9]    [9]
+  Ceqq,
+
+  // cneq rx, rk(x), rk(y)
+  // [6] [8]  [9]    [9]
+  Cneq,
 
   // inv rx, rk(x)
   // [6] [8]  [18]
@@ -130,7 +150,7 @@ pub const OpCode = enum (u8) {
   // [6] [8]  [9]
   Mov,
 
-  // asrt rx
+  // asrt rx (1-arg using 2-arg fmt)
   // [6] [8]
   Asrt,
 
@@ -142,11 +162,23 @@ pub const OpCode = enum (u8) {
   // [6] [8] [18]
   Bclo,
 
-  // call rx, rk
+  // call rx, bx
   // [6] [8] [18]
   Call,
 
-  // ret rx
+  // gupv rx, bx
+  // [6] [8] [18]
+  Gupv,
+
+  // supv rx, bx
+  // [6] [8] [18]
+  Supv,
+
+  // cupv rx (1-arg using 2-arg fmt)
+  // [6] [8]
+  Cupv,
+
+  // ret rx  (1-arg using 2-arg fmt)
   // [6] [8]
   Ret   
 };

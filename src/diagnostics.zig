@@ -113,5 +113,6 @@ pub const Diagnostic = struct {
     for (self.data.items) |data| {
       std.debug.print("{s}", .{data.msg});
     }
+    self.data.clearRetainingCapacity();
   }
 };

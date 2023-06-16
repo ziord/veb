@@ -90,7 +90,7 @@ pub fn GenScope(comptime K: type, comptime V: type) type {
       if (self.len() == 0) return null;
       var i: usize = self.len();
       while (i > 0): (i -= 1) {
-        var map = self.decls.items()[i - 1];
+        var map = self.decls.itemAt(i - 1);
         if (map.get(name)) |ty| {
           return ty;
         }
@@ -102,7 +102,7 @@ pub fn GenScope(comptime K: type, comptime V: type) type {
       if (self.len() == 0) return;
       var i: usize = self.len();
       while (i > 0): (i -= 1) {
-        var map = self.decls.items()[i - 1];
+        var map = self.decls.itemAt(i - 1);
         if (map.del(name)) {
           return;
         }
@@ -207,14 +207,14 @@ pub const TypeLinker = struct {
   fn insertTVar(self: *Self, typ: *Type, data: MultiPair) void {
     var tvar = typ.variable();
     if (tvar.tokens.len() > 1) util.todo("multiple var tokens!");
-    var name = tvar.tokens.items()[0].value;
+    var name = tvar.tokens.itemAt(0).value;
     self.cyc_scope.insert(name, data);
   }
 
   fn checkTVar(self: *Self, typ: *Type, found: *Type) ?*Type {
     var tvar = typ.variable();
     if (tvar.tokens.len() > 1) return null;
-    var name = tvar.tokens.items()[0].value;
+    var name = tvar.tokens.itemAt(0).value;
     if (self.cyc_scope.lookup(name)) |pair| {
       // extra p.o.c;
       if (pair.key == found) {
@@ -227,7 +227,7 @@ pub const TypeLinker = struct {
   fn delTVar(self: *Self, typ: *Type) void {
     var tvar = typ.variable();
     if (tvar.tokens.len() > 1) return;
-    var name = tvar.tokens.items()[0].value;
+    var name = tvar.tokens.itemAt(0).value;
     if (self.cyc_scope.lookup(name)) |pair| {
       // only delete this pair if `typ` is its exact setter
       if (pair.setter == typ) {
@@ -261,7 +261,7 @@ pub const TypeLinker = struct {
         }
       }
       var result = switch (ty.kind) {
-        .Concrete, .Variable => ty,
+        .Concrete, .Variable, .Constant => ty,
         else => self.ctx.copyType(ty),
       };
       // cache the type.
@@ -418,10 +418,10 @@ pub const TypeLinker = struct {
         self.using_tvar += 1;
         var alias_gen = alias.generic();
         for (alias_gen.getSlice(), 0..) |tvar, i| {
-          var tsub = gen.tparams.items()[i];
+          var tsub = gen.tparams.itemAt(i);
           // var r_tsub = try self.resolveType(tsub);
           std.debug.assert(tvar.variable().tokens.len() == 1);
-          self.ctx.typScope.insert(tvar.variable().tokens.items()[0].value, tsub); // r_tsub
+          self.ctx.typScope.insert(tvar.variable().tokens.itemAt(0).value, tsub); // r_tsub
         }
         // `eqn` is the type alias' aliasee, and may not be generic, so we add an extra guard.
         // for ex: type Foo{T} = T  # <-- aliasee/eqn 'T' is not generic here.
@@ -596,7 +596,7 @@ pub const TypeLinker = struct {
   fn linkAlias(self: *Self, node: *ast.AliasNode) !void {
     var typ = node.alias.typ;
     var tokens = if (typ.isGeneric()) typ.generic().base.variable().tokens else typ.variable().tokens;
-    self.ctx.typScope.insert(tokens.items()[0].value, node.aliasee.typ);
+    self.ctx.typScope.insert(tokens.itemAt(0).value, node.aliasee.typ);
   }
 
   fn linkSubscript(self: *Self, node: *ast.SubscriptNode) !void {

@@ -44,6 +44,15 @@ pub const AstType = enum {
   AstProgram,
 };
 
+fn cloneNodeList(ori: *AstNodeList, al: std.mem.Allocator) AstNodeList {
+  var new = AstNodeList.init(al);
+  new.ensureTotalCapacity(ori.capacity());
+  for (ori.items()) |itm| {
+    new.append(itm.clone(al));
+  }
+  return new;
+}
+
 // ast nodes
 pub const LiteralNode = struct {
   token: Token,
@@ -56,6 +65,22 @@ pub const LiteralNode = struct {
 
   pub inline fn line(self: *@This()) usize {
     return self.token.line;
+  }
+
+  pub fn clone(self: *@This(), node: *AstNode, al: std.mem.Allocator) *AstNode {
+    var lit = LiteralNode.init(self.token);
+    var new = util.alloc(AstNode, al);
+    switch (node.*) {
+      .AstNumber => {
+        lit.value = self.value;
+        new.* = .{.AstNumber = lit};
+      },
+      .AstString => new.* = .{.AstString = lit},
+      .AstBool => new.* = .{.AstBool = lit},
+      .AstNil => new.* = .{.AstNil = lit},
+      else => unreachable,
+    }
+    return new;
   }
 };
 
@@ -73,8 +98,23 @@ pub const BinaryNode = struct {
     };
   }
 
-   pub inline fn line(self: *@This()) usize {
+  pub inline fn line(self: *@This()) usize {
     return self.op.token.line;
+  }
+
+  pub fn clone(self: *@This(), node: *AstNode, al: std.mem.Allocator) *AstNode {
+    var bin = @This() {
+      .left = self.left.clone(al),
+      .right = self.right.clone(al),
+      .op = self.op,
+    };
+    var new = util.alloc(AstNode, al);
+    switch (node.*) {
+      .AstBinary => new.* = .{.AstBinary = bin},
+      .AstAssign => new.* = .{.AstAssign = bin},
+      else => unreachable,
+    }
+    return new;
   }
 };
 
@@ -91,6 +131,16 @@ pub const SubscriptNode = struct {
   pub inline fn line(self: *@This()) usize {
     return self.index.getToken().line;
   }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var sub = SubscriptNode.init(self.expr.clone(al), self.index.clone(al));
+    if (self.narrowed) |narrowed| {
+      sub.narrowed = &narrowed.clone(al).AstVar;
+    }
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstSubscript = sub};
+    return new;
+  }
 };
 
 pub const UnaryNode = struct {
@@ -105,6 +155,13 @@ pub const UnaryNode = struct {
    pub inline fn line(self: *@This()) usize {
     return self.op.token.line;
   }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var una =  @This() {.expr = self.expr.clone(al), .op = self.op};
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstUnary = una};
+    return new;
+  }
 };
 
 pub const ListNode = struct {
@@ -113,6 +170,17 @@ pub const ListNode = struct {
 
   pub fn init(allocator: std.mem.Allocator) @This() {
     return @This() {.elems = AstNodeList.init(allocator)};
+  }
+
+  pub fn clone(self: *@This(), node: *AstNode, al: std.mem.Allocator) *AstNode {
+    var list = @This() {.elems = cloneNodeList(&self.elems, al)};
+    var new = util.alloc(AstNode, al);
+    switch (node.*) {
+      .AstList => new.* = .{.AstList = list},
+      .AstTuple => new.* = .{.AstTuple = list},
+      else => unreachable,
+    }
+    return new;
   }
 };
 
@@ -124,6 +192,17 @@ pub const MapNode = struct {
 
   pub fn init(allocator: std.mem.Allocator) @This() {
     return @This() {.pairs = ds.ArrayList(Pair).init(allocator)};
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var map = MapNode.init(al);
+    map.pairs.ensureTotalCapacity(self.pairs.capacity());
+    for (self.pairs.items()) |itm| {
+      map.pairs.append(@as(Pair, .{.key = itm.key.clone(al), .value = itm.value.clone(al)}));
+    }
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstMap = map};
+    return new;
   }
 };
 
@@ -144,6 +223,16 @@ pub const VarNode = struct {
     new.* = self.*;
     return new;
   }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    // var typ: ?*Type = null;
+    // if (self.typ) |ty| {
+    //   typ = ty.clone(al);
+    // }
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstVar = @This() {.token = self.token, .typ = self.typ}};
+    return new;
+  }
 };
 
 pub const ExprStmtNode = struct {
@@ -151,6 +240,13 @@ pub const ExprStmtNode = struct {
 
   pub fn init(expr: *AstNode) @This() {
     return @This() {.expr = expr};
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var es = ExprStmtNode.init(self.expr.clone(al));
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstExprStmt = es};
+    return new;
   }
 };
 
@@ -166,12 +262,22 @@ pub const VarDeclNode = struct {
   pub inline fn line(self: *@This()) usize {
     return self.ident.line();
   }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var value: *AstNode = if (self.is_param) self.value else self.value.clone(al);
+    var vn = VarDeclNode.init(&self.ident.clone(al).AstVar, value, self.is_param);
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstVarDecl = vn};
+    return new;
+  }
 };
 
 pub const BlockNode = struct {
   nodes: AstNodeList,
   /// whether this block is from a branching entry
   cond: ?*AstNode,
+  /// whether this block has been successfully typechecked
+  checked: bool = false,
 
   pub fn init(allocator: std.mem.Allocator, cond: ?*AstNode) @This() {
     return @This() {.nodes = AstNodeList.init(allocator), .cond = cond};
@@ -187,6 +293,13 @@ pub const BlockNode = struct {
     if (self.nodes.len() > 0) return self.nodes.getLast();
     return null;
   }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var bl = @This() {.nodes = cloneNodeList(&self.nodes, al), .cond = self.cond};
+    var block = util.alloc(AstNode, al);
+    block.* = .{.AstBlock = bl};
+    return block;
+  }
 };
 
 pub const TypeNode = struct {
@@ -197,6 +310,16 @@ pub const TypeNode = struct {
 
   pub fn init(typ: *Type, token: Token) @This() {
     return @This() {.typ = typ, .token = token};
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var node = util.alloc(AstNode, al);
+    node.* = .{.AstNType = @This() {
+      .typ = self.typ.clone(al),
+      .token = self.token,
+      .from_alias_or_annotation = self.from_alias_or_annotation
+    }};
+    return node;
   }
 };
 
@@ -211,6 +334,12 @@ pub const AliasNode = struct {
     aliasee.from_alias_or_annotation = true;
     return @This() {.alias = alias, .aliasee = aliasee, .typ = alias.typ};
   }
+
+  pub fn clone(self: *@This(), node: *AstNode, al: std.mem.Allocator) *AstNode {
+    _ = al;
+    _ = self;
+    return node;
+  }
 };
 
 /// null dereference: expr.?
@@ -223,6 +352,16 @@ pub const DerefNode = struct {
   pub fn init(expr: *AstNode, token: Token) @This() {
     return @This() {.expr = expr, .token = token};
   }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var drf = DerefNode.init(self.expr.clone(al), self.token);
+    if (self.narrowed) |narrowed| {
+      drf.narrowed = &narrowed.clone(al).AstVar;
+    }
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstDeref = drf};
+    return new;
+  }
 };
 
 pub const ConditionNode = struct {
@@ -231,6 +370,12 @@ pub const ConditionNode = struct {
   pub fn init(cond: *AstNode) @This() {
     return @This() {.cond = cond};
   }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    _ = al;
+    _ = self;
+    unreachable;
+  }
 };
 
 pub const EmptyNode = struct {
@@ -238,6 +383,12 @@ pub const EmptyNode = struct {
 
   pub fn init(token: Token) @This() {
     return @This() {.token = token};
+  }
+
+  pub fn clone(self: *@This(), node: *AstNode, al: std.mem.Allocator) *AstNode {
+    _ = al;
+    _ = self;
+    return node;
   }
 };
 
@@ -251,6 +402,13 @@ pub const CastNode = struct {
 
   pub inline fn line(self: *@This()) usize {
     return self.typn.token.line;
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var cn = CastNode.init(self.expr.clone(al), &self.typn.clone(al).AstNType);
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstCast = cn};
+    return new;
   }
 };
 
@@ -269,6 +427,13 @@ pub const ElifNode = struct {
       BlockNode.newEmptyBlock(alloc, self.cond),
     );
   }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var el = ElifNode.init(self.cond.clone(al), self.then.clone(al));
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstElif = el};
+    return new;
+  }
 };
 
 pub const IfNode = struct {
@@ -280,6 +445,18 @@ pub const IfNode = struct {
   pub fn init(cond: *AstNode, then: *AstNode, elifs: AstNodeList, els: *AstNode) @This() {
     return @This() {.cond = cond, .then = then, .elifs = elifs, .els = els};
   }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var el = IfNode.init(
+      self.cond.clone(al),
+      self.then.clone(al),
+      cloneNodeList(&self.elifs, al),
+      self.els.clone(al)
+    );
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstIf = el};
+    return new;
+  }
 };
 
 pub const SimpleIfNode = struct {
@@ -290,6 +467,12 @@ pub const SimpleIfNode = struct {
   pub fn init(cond: *AstNode, then: *AstNode, els: *AstNode) @This() {
     return @This() {.cond = cond, .then = then, .els = els};
   }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    _ = al;
+    _ = self;
+    unreachable;
+  }
 };
 
 pub const WhileNode = struct {
@@ -298,6 +481,13 @@ pub const WhileNode = struct {
 
   pub fn init(cond: *AstNode, then: *AstNode) @This() {
     return @This() {.cond = cond, .then = then};
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var wh = WhileNode.init(self.cond.clone(al), self.then.clone(al));
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstWhile = wh};
+    return new;
   }
 };
 
@@ -317,6 +507,13 @@ pub const ControlNode = struct {
   pub fn isContinue(self: ControlNode) bool {
     return self.token.ty == .TkContinue;
   }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var cn = ControlNode.init(self.token);
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstControl = cn};
+    return new;
+  }
 };
 
 pub const CallNode = struct {
@@ -331,6 +528,17 @@ pub const CallNode = struct {
 
   pub inline fn isGeneric(self: *@This()) bool {
     return self.targs != null;
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var targs: ?*AstNodeList = null;
+    if (self.targs) |list| {
+      targs = util.box(AstNodeList, cloneNodeList(list, al), al);
+    }
+    var call = CallNode.init(self.expr.clone(al), cloneNodeList(&self.args, al), targs);
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstCall = call};
+    return new;
   }
 };
 
@@ -356,6 +564,29 @@ pub const FunNode = struct {
   pub inline fn getName(self: *@This()) ?[]const u8 {
     return if (self.name) |name| name.token.value else null;
   }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var params = VarDeclList.init(al);
+    for (self.params.items()) |*param| {
+      params.append(
+        @as(VarDeclNode, .{
+          .ident = &param.ident.clone(al).AstVar,
+          .value = if (!param.is_param) param.value.clone(al) else param.value,
+          .is_param = param.is_param
+        })
+      );
+    }
+    var ret: ?*AstNode = null;
+    if (self.ret) |expr| {
+      ret = expr.clone(al);
+    }
+    // don't clone tparams, they're always substituted.
+    // don't clone name, it'll be updated.
+    var fun = FunNode.init(params, self.body.clone(al), self.name, ret, self.tparams);
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstFun = fun};
+    return new;
+  }
 };
 
 pub const RetNode = struct {
@@ -366,6 +597,17 @@ pub const RetNode = struct {
   pub fn init(expr: ?*AstNode, token: Token) @This() {
     return @This() {.expr = expr, .token = token};
   }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var expr: ?*AstNode = null;
+    if (self.expr) |exp| {
+      expr = exp.clone(al);
+    }
+    var ret = RetNode.init(expr, self.token);
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstRet = ret};
+    return new;
+  }
 };
 
 // TODO: refactor to BlockNode if no other useful info needs to be added.
@@ -374,6 +616,12 @@ pub const ProgramNode = struct {
 
   pub fn init(allocator: std.mem.Allocator) @This() {
     return @This() {.decls = AstNodeList.init(allocator)};
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    _ = al;
+    _ = self;
+    unreachable;
   }
 };
 
@@ -516,17 +764,20 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn eql(self: *@This(), other: *@This()) bool {
+    return self == other;
+  }
+
   pub fn getType(self: *@This()) ?*Type {
     return switch (self.*) {
       .AstNumber, .AstString, .AstBool, .AstNil => |lit| lit.typ,
-      .AstBinary => |bin| bin.typ,
+      .AstBinary, .AstAssign => |bin| bin.typ,
       .AstUnary => |una| una.typ,
       .AstList, .AstTuple => |col| col.typ,
       .AstMap => |map| map.typ,
       .AstExprStmt => |stmt| stmt.expr.getType(),
       .AstVarDecl => |decl| decl.ident.typ,
       .AstVar => |id| id.typ,
-      .AstAssign => |asi| asi.typ,
       .AstNType => |*typn| typn.typ,
       .AstAlias => |ali| ali.typ,
       .AstCast => |*cst| cst.typn.typ,
@@ -540,6 +791,26 @@ pub const AstNode = union(AstType) {
       .AstWhile, .AstControl => null,
       else => unreachable,
     };
+  }
+
+  pub fn setType(self: *@This(), typ: *Type) void {
+    switch (self.*) {
+      .AstUnary => |*una| una.typ = typ,
+      .AstVar => |*id| id.typ = typ,
+      .AstCast => |*cst| cst.typn.typ = typ,
+      .AstSubscript => |*sub| {
+        if (sub.narrowed) |nrw| nrw.typ = typ
+        else sub.typ = typ;
+      },
+      .AstDeref => |*der| {
+        if (der.narrowed) |nrw| nrw.typ = typ
+        else der.typ = typ;
+      },
+      .AstCall => |*call| call.typ = typ,
+      else => {
+        std.log.info("Attempt to set type on node: {}\n", .{self});
+      },
+    }
   }
 
   pub fn getToken(self: *@This()) Token {
@@ -567,10 +838,10 @@ pub const AstNode = union(AstType) {
           return name.token;
         }
         if (fun.params.len() > 0) {
-          return fun.params.items()[0].ident.token;
+          return fun.params.itemAt(0).ident.token;
         }
         if (fun.body.AstBlock.nodes.len() > 0) {
-          return fun.body.AstBlock.nodes.items()[0].getToken();
+          return fun.body.AstBlock.nodes.itemAt(0).getToken();
         }
         // std.debug.print("Could not obtain token from node: {}", .{self});
         return Token.getDefault();
@@ -579,22 +850,22 @@ pub const AstNode = union(AstType) {
         switch (self.*) {
           .AstList, .AstTuple => |*col| {
             if (col.elems.len() > 0) {
-              return col.elems.items()[0].getToken();
+              return col.elems.itemAt(0).getToken();
             }
           },
           .AstMap => |*map| {
             if (map.pairs.len() > 0) {
-              return map.pairs.items()[0].key.getToken();
+              return map.pairs.itemAt(0).key.getToken();
             }
           },
           .AstBlock => |*blk| {
             if (blk.nodes.len() > 0) {
-              return blk.nodes.items()[0].getToken();
+              return blk.nodes.itemAt(0).getToken();
             }
           },
           .AstProgram => |*prog| {
             if (prog.decls.len() > 0) {
-              return prog.decls.items()[0].getToken();
+              return prog.decls.itemAt(0).getToken();
             }
           },
           else => {}
@@ -602,6 +873,36 @@ pub const AstNode = union(AstType) {
         // std.debug.print("Could not obtain token from node: {}", .{self});
         return Token.getDefault();
       },
+    };
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *@This() {
+    return switch (self.*) {
+      .AstNumber, .AstString, .AstBool, .AstNil => |*lit| lit.clone(self, al),
+      .AstBinary, .AstAssign => |*bin| bin.clone(self, al),
+      .AstUnary => |*una| una.clone(al),
+      .AstSubscript => |*sub| sub.clone(al),
+      .AstList, .AstTuple => |*lst| lst.clone(self, al),
+      .AstVar => |*vr| vr.clone(al),
+      .AstBlock => |*bl| bl.clone(al),
+      .AstNType => |*tn| tn.clone(al),
+      .AstAlias => self,
+      .AstCast => |*cst| cst.clone(al),
+      .AstDeref => |*der| der.clone(al),
+      .AstCondition => unreachable,
+      .AstWhile => |*wh| wh.clone(al),
+      .AstMap => |*nd| nd.clone(al),
+      .AstExprStmt => |*nd| nd.clone(al),
+      .AstVarDecl => |*nd| nd.clone(al),
+      .AstControl => |*ctr| ctr.clone(al),
+      .AstEmpty => self,
+      .AstIf => |*if_| if_.clone(al),
+      .AstElif => |*elif| elif.clone(al),
+      .AstSimpleIf => unreachable,
+      .AstRet => |*ret| ret.clone(al),
+      .AstCall => |*call| call.clone(al),
+      .AstFun => |*fun| fun.clone(al),
+      .AstProgram => unreachable,
     };
   }
 };

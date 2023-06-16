@@ -253,7 +253,7 @@ pub const CFGBuilder = struct {
         continue;
       } else if (item.isWhile()) {
         if (i + 1 < nodes.len()) {
-          self.after_while = nodes.items()[i + 1];
+          self.after_while = nodes.itemAt(i + 1);
         }
       }
       _prev = self.link(item, _prev, edge);
@@ -361,8 +361,11 @@ pub const CFGBuilder = struct {
     // this is just a placeholder node to complete the link
     // between functions and non-functions in the flow graph
     var flow_list = self.linkAtomic(node, prev, edge, .CfgOther);
-    var fun = &node.AstFun;
+    // skip generic functions
+    if (node.AstFun.isGeneric()) return flow_list;
     // build the cfg of fun
+    var fun = &node.AstFun;
+    // TODO: cache builder
     var builder = CFGBuilder.init(self.alloc());
     var synth = ast.BlockNode.init(self.alloc(), fun.body.AstBlock.cond);
     synth.nodes.ensureTotalCapacity(fun.params.len() + fun.body.AstBlock.nodes.len());
@@ -373,10 +376,10 @@ pub const CFGBuilder = struct {
     }
     synth.nodes.extend(&fun.body.AstBlock.nodes);
     var body = @as(Node, .{.AstBlock = synth});
-    var program = builder.buildBlock(self.cfg, &body);
+    var flo = builder.buildBlock(self.cfg, &body);
     // save node for future lookup()s
-    program.entry.node = node;
-    self.cfg.putFunc(program);
+    flo.entry.node = node;
+    self.cfg.putFunc(flo);
     return flow_list;
   }
 
@@ -400,6 +403,11 @@ pub const CFGBuilder = struct {
       .AstFun => self.linkFun(node, prev, edge),
       else => unreachable,
     };
+  }
+
+  pub fn buildFun(self: *Self, cfg: *CFG, node: *Node) void {
+    self.cfg = cfg;
+    _ = self.linkFun(node, self.entry.toList(self.alloc()), .ESequential);
   }
 
   pub fn buildBlock(self: *Self, cfg: *CFG, ast_node: *Node) FlowMeta {

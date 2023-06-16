@@ -231,7 +231,7 @@ pub const Generic = struct {
         if (gen.tparams_len() == 0) return true;
         if (this.tparams_len() != gen.tparams_len()) return false;
         for (this.tparams.items(), 0..) |tparam, i| {
-          var param = gen.tparams.items()[i];
+          var param = gen.tparams.itemAt(i);
           if (!tparam.isRelatedTo(param, .RCTypeParams, A)) {
             return false;
           }
@@ -467,12 +467,12 @@ pub const Type = struct {
     return Self.init(.{.Recursive = Recursive.init(base)});
   }
 
-  pub fn newNever(allocator: std.mem.Allocator) Self {
+  pub fn newNever(allocator: std.mem.Allocator) *Self {
     var ty = newVariable(allocator);
     var nvr = Token.getDefault();
     nvr.value = "never";
     ty.variable().append(nvr);
-    return ty;
+    return ty.box(allocator);
   }
 
   pub fn newVoid() Self {
@@ -1121,6 +1121,11 @@ pub const Type = struct {
     return self._typename(allocator, &depth) catch "";
   }
 
+  pub fn typenameNoAlias(self: *Self, allocator: std.mem.Allocator) []const u8 {
+    var depth: usize = 0;
+    return self._typename(allocator, &depth) catch "";
+  }
+
   /// combine types in typeset as much as possible
   pub fn compressTypes(typeset: *TypeHashSet, uni: ?*Type) *Type {
     var allocator = typeset.allocator();
@@ -1172,7 +1177,7 @@ pub const Type = struct {
         typ = Type.newUnion(allocator).box(allocator);
         typ.union_().addAll(&final);
       } else {
-        typ = final.items()[0];
+        typ = final.itemAt(0);
       }
       if (nil_ty) |nil| {
         typ = Type.newNullable(typ, allocator, nil);

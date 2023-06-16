@@ -601,7 +601,7 @@ pub const Parser = struct {
       // `param` and `typ` have Variable.tokens equal to size 1.
       var token = param.variable().tokens.getLast();
       if (std.mem.eql(u8, typ.variable().tokens.getLast().value, token.value)) {
-        return self.err(token, "redefinition of alias type parameter");
+        return self.err(token, "redefinition of type parameter");
       }
     }
   }
@@ -891,13 +891,13 @@ pub const Parser = struct {
     return try self._parse(.Assignment);
   }
 
-  fn blockStmt(self: *Self, skip_do: bool, skip_nl: bool) !*Node {
+  fn blockStmt(self: *Self, skip_do: bool, skip_nl: bool) anyerror!*Node {
     if (!skip_do) try self.consume(.TkDo);
     try self.consume(.TkNewline);
     var node = self.newNode();
     node.* = .{.AstBlock = ast.BlockNode.init(self.allocator, null)};
     while (!self.check(.TkEof) and !self.check(.TkEnd)) {
-      node.AstBlock.nodes.append(try self.statement());
+      try self.addStatement(&node.AstBlock.nodes);
     }
     try self.consume(.TkEnd);
     // eat newline if present
@@ -924,14 +924,14 @@ pub const Parser = struct {
     return decl;
   }
 
-  fn ifStmt(self: *Self) !*Node {
+  fn ifStmt(self: *Self) anyerror!*Node {
     // if expr then? nl body (elif expr then? nl body)* else nl body end
     const cond = try self.parseExpr();
     _ = self.match(.TkThen);
     try self.consume(.TkNewline);
     var then = ast.BlockNode.init(self.allocator, cond);
     while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
-      then.nodes.append(try self.statement());
+      try self.addStatement(&then.nodes);
     }
     var elifs = NodeList.init(self.allocator);
     while (self.match(.TkElif)) {
@@ -940,7 +940,7 @@ pub const Parser = struct {
       try self.consume(.TkNewline);
       var elif_then = ast.BlockNode.init(self.allocator, elif_cond);
       while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
-        elif_then.nodes.append(try self.statement());
+        try self.addStatement(&elif_then.nodes);
       }
       var elif_then_node = self.newNode();
       var elif_node = self.newNode();
@@ -952,7 +952,7 @@ pub const Parser = struct {
     if (self.match(.TkElse)) {
       try self.consume(.TkNewline);
       while (!self.check(.TkEof) and !self.check(.TkEnd)) {
-        els.nodes.append(try self.statement());
+        try self.addStatement(&els.nodes);
       }
     }
     try self.consume(.TkEnd);
@@ -1085,6 +1085,16 @@ pub const Parser = struct {
     }
   }
 
+  fn addStatement(self: *Self, list: *NodeList) !void {
+    var stmt = self.statement() catch |e| {
+      if (e != error.EmptyStatement) {
+        return e;
+      }
+      return;
+    };
+    list.append(stmt);
+  }
+
   fn statement(self: *Self) !*Node {
     if (self.match(.TkLet)) {
       return try self.varDecl();
@@ -1093,7 +1103,7 @@ pub const Parser = struct {
     } else if (self.check(.TkDo)) {
       return try self.blockStmt(false, false);
     } else if (self.match(.TkNewline)) {
-      return self.emptyStmt();
+      return error.EmptyStatement;
     } else if (self.match(.TkIf)) {
       return try self.ifStmt();
     } else if (self.match(.TkWhile)) {
@@ -1113,11 +1123,7 @@ pub const Parser = struct {
     var program = self.newNode();
     program.* = .{.AstProgram = ast.ProgramNode.init(self.allocator)};
     while (!self.match(.TkEof)) {
-      var stmt = self.statement() catch blk: {
-        self.recover();
-        break :blk self.emptyStmt();
-      };
-      program.AstProgram.decls.append(stmt);
+      self.addStatement(&program.AstProgram.decls) catch self.recover();
     }
     if (self.diag.hasAny()) {
       self.diag.display();

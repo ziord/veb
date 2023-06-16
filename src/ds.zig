@@ -15,6 +15,10 @@ pub fn ArrayList(comptime T: type) type {
       return self.list.items;
     }
 
+    pub inline fn itemAt(self: *@This(), pos: usize) T {
+      return self.list.items[pos];
+    }
+
     pub inline fn append(self: *@This(), item: T) void {
       self.list.append(item) catch |e| {
         std.debug.print("error: {}", .{e});

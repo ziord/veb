@@ -6,6 +6,7 @@ const util = @import("util.zig");
 const ds = @import("ds.zig");
 const CnAllocator = @import("allocator.zig");
 const diagnostics = @import("diagnostics.zig");
+const check = @import("check.zig");
 const Disassembler = @import("debug.zig").Disassembler;
 const OpCode = @import("opcode.zig").OpCode;
 const VM = @import("vm.zig").VM;
@@ -17,6 +18,9 @@ const Inst = value.Inst;
 const ObjFn = value.ObjFn;
 const TypeKind = parse.TypeKind;
 const Diagnostic = diagnostics.Diagnostic;
+const FnInfo = check.TypeChecker.FnInfo;
+const FnInfoList = ds.ArrayList(FnInfo);
+const TypeList = check.TypeList;
 
 const VRegister = struct {
   regs: std.MultiArrayList(Reg),
@@ -162,6 +166,7 @@ pub const Compiler = struct {
   scope: i32 = GLOBAL_SCOPE, // defaults to global scope
   rk_bx: RkBxPair = RkBxPair{},
   diag: *Diagnostic,
+  generics: *FnInfoList,
   
   const Self = @This();
 
@@ -183,7 +188,7 @@ pub const Compiler = struct {
   };
   const CompileError = error{CompileError};
 
-  pub fn init(diag: *Diagnostic, vm: *VM, fun: *ObjFn, allocator: *CnAllocator) Self {
+  pub fn init(diag: *Diagnostic, vm: *VM, fun: *ObjFn, info: *FnInfoList, allocator: *CnAllocator) Self {
     var al = allocator.getArenaAllocator();
     var gsyms = std.MultiArrayList(GSymVar){};
     var locals = std.MultiArrayList(LocalVar){};
@@ -202,12 +207,17 @@ pub const Compiler = struct {
       .vreg = VRegister.init(al),
       .vm = vm,
       .diag = diag,
+      .generics = info,
     };
   }
 
   fn compileError(self: *Self, token: Token, comptime fmt: []const u8, msg: anytype) CompileError {
     self.diag.addDiagnostics(.DiagError, token, "CompileError: " ++ fmt ++ "\n", msg);
     return error.CompileError;
+  }
+
+  inline fn alloc(self: *Self) std.mem.Allocator {
+    return self.allocator.getArenaAllocator();
   }
 
   fn lastLine(self: *Self) u32 {
@@ -239,11 +249,11 @@ pub const Compiler = struct {
     };
   }
 
-  inline fn isGlobal(self: *Self) bool {
+  inline fn inGlobalScope(self: *Self) bool {
     return self.scope == GLOBAL_SCOPE;
   }
 
-  inline fn isLocal(self: *Self) bool {
+  inline fn inLocalScope(self: *Self) bool {
     return self.scope > GLOBAL_SCOPE;
   }
 
@@ -298,7 +308,7 @@ pub const Compiler = struct {
     }
     var reg = try self.getReg(node.token);
     self.locals.append(
-      self.allocator.getArenaAllocator(),
+      self.alloc(),
       LocalVar.init(self.scope, &node.token.value, reg, @intCast(u32, self.locals.len))
     ) catch {};
     return reg;
@@ -323,7 +333,7 @@ pub const Compiler = struct {
       }
     }
     var ret = @intCast(u32, self.upvalues.len);
-    self.upvalues.append(self.allocator.getArenaAllocator(), Upvalue.init(index, is_local)) catch |e| {
+    self.upvalues.append(self.alloc(), Upvalue.init(index, is_local)) catch |e| {
       std.debug.print("error: {}\n", .{e});
       return error.CompileError;
     };
@@ -343,7 +353,7 @@ pub const Compiler = struct {
     }
     var idx = @intCast(u32, self.gsyms.len);
     self.gsyms.append(
-      self.allocator.getArenaAllocator(),
+      self.alloc(),
       GSymVar {.name = &node.token.value}
     ) catch {};
     return .{.pos = idx, .isGSym = true};
@@ -355,7 +365,7 @@ pub const Compiler = struct {
       .mempos = self.storeVar(node),
       .index = @intCast(u32, self.globals.len),
     };
-    self.globals.append(self.allocator.getArenaAllocator(), gvar) catch {};
+    self.globals.append(self.alloc(), gvar) catch {};
     return gvar.mempos;
   }
 
@@ -454,15 +464,25 @@ pub const Compiler = struct {
   /// preallocate all globals in `gsyms` or `globals`
   fn preallocateGlobals(self: *Self, toplevels: *ast.AstNodeList) void {
     // TODO: update
-    if (self.scope > GLOBAL_SCOPE) return;
+    if (self.inLocalScope()) return;
     for (toplevels.items()) |decl| {
       switch (decl.*) {
         .AstVarDecl => |vd| {
           _ = self.addGSymVar(vd.ident);
         },
         .AstFun => |*fun| {
-          if (fun.name) |ident| {
-            _ = self.addGSymVar(ident);
+          if (fun.isGeneric()) {
+            for (self.generics.items()) |itm| {
+              if (itm.origin == decl) {
+                var nfun = &itm.instance.AstFun;
+                nfun.name = itm.synth_name;
+                _ = self.addGSymVar(itm.synth_name);
+              }
+            }
+          } else {
+            if (fun.name) |ident| {
+              _ = self.addGSymVar(ident);
+            }
           }
         },
         else => {},
@@ -717,6 +737,9 @@ pub const Compiler = struct {
       const inst: OpCode = if(info.isGSym) .Ggsym else .Gglb;
       self.fun.code.write2ArgsInst(inst, dst, info.pos, node.line(), self.vm);
       return dst;
+    } else if (node.typ != null and node.typ.?.isFunction()) {
+      var fun = &node.typ.?.function().node.AstFun;
+      return try self.cVar(fun.name.?, dst);
     } else {
       return self.compileError(node.token, "use of undefined variable '{s}'", .{node.token.value});
     }
@@ -801,7 +824,7 @@ pub const Compiler = struct {
       .right = node.value,
       .op = undefined, .typ = node.ident.typ
     };
-    if (self.scope > GLOBAL_SCOPE) {
+    if (self.inLocalScope()) {
       // local
       var dst = try self.addLocal(node.ident);
       var lvar_pos = self.locals.len - 1;
@@ -919,7 +942,7 @@ pub const Compiler = struct {
     if (node.elifs.len() > 0) {
       // first, patch cond_to_elif_or_else here
       self.fun.code.patch2ArgsJmp(cond_to_elif_or_else);
-      elifs_then_to_end = ds.ArrayList(usize).init(self.allocator.getArenaAllocator());
+      elifs_then_to_end = ds.ArrayList(usize).init(self.alloc());
       var last_patch: ?JmpPatch = null;
       for (node.elifs.items()) |elif| {
         if (last_patch) |pch| {
@@ -1012,10 +1035,11 @@ pub const Compiler = struct {
   }
 
   fn cFun(self: *Self, node: *ast.FunNode, ast_node: *Node, _reg: u32) !u32 {
+    if (node.isGeneric()) return self.cFunGeneric(ast_node, _reg);
     var reg: u32 = undefined;
     var token = ast_node.getToken();
     var new_fn = value.createFn(self.vm, @intCast(u8, node.params.len()));
-    var is_global = self.isGlobal();
+    var is_global = self.inGlobalScope();
     if (node.name) |ident| {
       if (is_global) {
         var info = try self.patchGlobal(ident);
@@ -1031,7 +1055,7 @@ pub const Compiler = struct {
         new_fn.name = @constCast(value.createString(self.vm, &self.vm.strings, ident.token.value, false));
       }
     }
-    var compiler = Compiler.init(self.diag, self.vm, new_fn, self.allocator);
+    var compiler = Compiler.init(self.diag, self.vm, new_fn, self.generics, self.allocator);
     compiler.enclosing = self;
     // localize params
     compiler.incScope();
@@ -1064,10 +1088,26 @@ pub const Compiler = struct {
       self.fun.code.write2ArgsInst(inst, reg, info.pos, self.lastLine(), self.vm);
     }
     if (util.getMode() == .Debug) {
+      std.debug.print("\n", .{});
       Disassembler.disCode(&new_fn.code, new_fn.getName());
     }
     if (is_global) self.vreg.releaseReg(reg);
     return _reg;
+  }
+
+  fn cFunGeneric(self: *Self, node: *Node, reg: u32) CompileError!u32 {
+    for (self.generics.items()) |itm| {
+      if (itm.origin == node) {
+        var fun = &itm.instance.AstFun;
+        // only attach names in the local scope since if we're in the global scope,
+        // the name has already been attached in preallocateGlobals()
+        if (self.inLocalScope()) {
+          fun.name = itm.synth_name;
+        }
+        _ = try self.cFun(fun, itm.instance, reg);
+      }
+    }
+    return reg;
   }
 
   fn cCall(self: *Self, node: *ast.CallNode, reg: u32) !u32 {
@@ -1082,7 +1122,7 @@ pub const Compiler = struct {
     var win = try self.getRegWindow(reg, n, token);
     // we need the function to be in a specific position in the register window, along with its args
     if (fun_dst != reg) {
-      std.debug.assert(self.isLocal());
+      std.debug.assert(self.inLocalScope());
       self.fun.code.write3ArgsInst(.Mov, reg, fun_dst, 0, self.lastLine(), self.vm);
     }
     // don't optimize this call's arguments
@@ -1092,7 +1132,7 @@ pub const Compiler = struct {
       var tmp = try self.c(arg, dst);
       // we need the args to be positioned in line with the function in the register window
       if (tmp != dst) {
-        std.debug.assert(self.isLocal());
+        std.debug.assert(self.inLocalScope());
         self.fun.code.write3ArgsInst(.Mov, dst, tmp, 0, self.lastLine(), self.vm);
       }
     }

@@ -378,7 +378,7 @@ pub const Token = struct {
     };
   }
 
-  pub fn tokenFrom(token: *Token) Token {
+  pub fn tokenFrom(token: *const Token) Token {
     var new: Token = undefined;
     new = token.*;
     return new;

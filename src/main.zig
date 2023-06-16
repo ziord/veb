@@ -23,12 +23,12 @@ fn doTest(src: []const u8) !value.Value {
   const node = try parser.parse();
   // std.debug.print("node: {}\n", .{node});
 
-  var tych = check.TypeChecker.init(cna.getArenaAllocator(), &@as([]const u8, "test.nova"), @constCast(&src));
+  var tych = check.TypeChecker.init(cna.getArenaAllocator(), &parser.diag);
   try tych.typecheck(node);
   var cpu = vm.VM.init(&cna);
   defer cpu.deinit();
   var fun = value.createFn(&cpu, 0);
-  var compiler = compile.Compiler.init(&tych.diag, &cpu, fun, &cna);
+  var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna);
   try compiler.compile(node);
   debug.Disassembler.disCode(&fun.code, "test");
   var start = std.time.milliTimestamp();
@@ -43,6 +43,24 @@ fn doTest(src: []const u8) !value.Value {
   return cpu.fiber.fp.stack[0]; // !!invalidated!!
   // return 0;
 }
+
+fn doTest2(src: []const u8) !value.Value {
+  var cna = CnAllocator.init(std.heap.ArenaAllocator.init(std.heap.page_allocator));
+  defer cna.deinit();
+  const filename = @as([]const u8, "test.cn");
+  var parser = parse.Parser.init(@constCast(&src), &filename, &cna);
+  const node = try parser.parse();
+  var tych = check.TypeChecker.init(cna.getArenaAllocator(), &parser.diag);
+  try tych.typecheck(node);
+  var cpu = vm.VM.init(&cna);
+  defer cpu.deinit();
+  var fun = value.createFn(&cpu, 0);
+  var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna);
+  try compiler.compile(node);
+  debug.Disassembler.disCode(&fun.code, "test");
+  return 0;
+}
+
 
 test "arithmetic ops" {
   const srcs = [_][]const u8{
@@ -1043,7 +1061,7 @@ test "while loop" {
   \\     end
   \\     x += j
   \\     continue
-  \\     x += 5
+  \\     # x += 5
   \\    end
   \\    x
   \\ end
@@ -1056,7 +1074,7 @@ test "while loop" {
   \\  end
   \\  x += j
   \\  break
-  \\  x += 5
+  \\  # x += 5
   \\ end
   \\ x
   ;
@@ -1071,7 +1089,7 @@ test "while loop" {
   \\  end
   \\  x += j
   \\  break
-  \\  x += 5
+  \\  # x += 5
   \\ end
   \\ x == 10
   ;
@@ -1103,7 +1121,7 @@ test "while loop" {
   _ = try doTest(src3);
 }
 
-test "functions" {
+test "regular-functions" {
   var src =
   \\ type T = num
   \\ fn j(a: T): T
@@ -1148,4 +1166,103 @@ test "functions" {
   \\ q[j] == 2064
   ;
   _ = try doTest(src4);
+}
+
+test "generic-functions" {
+  var src = 
+  \\ fn funny
+  \\    fn foo{T}(a: T): T
+  \\     return a
+  \\    end
+  \\    let j = foo{str}('5')
+  \\    let k = foo(10)
+  \\    let p = foo(56)
+  \\    k += 5
+  \\    return (j, k, p)
+  \\ end
+  \\ funny()
+  ;
+  _ = try doTest(src);
+  var src2 =
+  \\ fn fancy{T}(x: T)
+  \\  let j: T = x
+  \\  return j
+  \\ end
+  \\ fn id{T}(val: T): T
+  \\  return val
+  \\ end
+  \\ [fancy(5), fancy('oops'), fancy(true), id([1, 2, {'a': 'fox'}])]
+  ;
+  _ = try doTest(src2);
+  var src3 =
+  \\ fn funny2{U}(x: U)
+  \\    fn foo{T}(a: T, b: U): T
+  \\     return a * (b - 2)
+  \\    end
+  \\    let k = foo(10, x)
+  \\    let p = foo(56, x)
+  \\    k += 5
+  \\    return (k, p)
+  \\ end
+  \\ funny2(123)
+  \\ fn funny2{U}
+  \\    fn foo{T}(a: T, b: U): T
+  \\     return a * (b - 2)
+  \\    end
+  \\    let x: U = 123
+  \\    let k = foo(10, x)
+  \\    let p = foo(56, x)
+  \\    k += 5
+  \\    return (k, p)
+  \\ end
+  \\ funny2{num}()
+  ;
+  _ = try doTest(src3);
+}
+
+test "generic-functions-2" {
+  var src =
+  \\ # mutually recursive
+  \\ fn mutA{U}(x: U)
+  \\  return mutB(x)
+  \\ end
+  \\
+  \\ fn mutB{T}(y: T)
+  \\  return mutA(y)
+  \\ end
+  \\ 
+  \\ mutA(10)
+  \\ mutB('b')
+  \\
+  \\ fn mutA(x: num)
+  \\  if x > 2
+  \\    return mutB(x)
+  \\  else
+  \\    return x
+  \\  end
+  \\ end
+  \\
+  \\ fn mutB(y: num)
+  \\  if y > 2
+  \\    return mutA(y)
+  \\  else
+  \\    return y
+  \\  end
+  \\ end
+  \\ mutA(10) + mutB(7)
+  \\
+  \\ # recursive
+  \\ fn mutMe(x: str)
+  \\  return mutMe('5')
+  \\ end
+  \\ mutMe('fox')
+  \\
+  \\ type J =  list{num | str}
+  \\ fn fox{A, B}(x: A, y: B)
+  \\  let p: J = [13 as num | str, 4]
+  \\  return fox(x, y)
+  \\ end
+  \\ fox('a', nil)
+  ;
+  _ = try doTest2(src);
 }

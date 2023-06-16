@@ -1124,7 +1124,7 @@ test "while loop" {
 test "regular-functions" {
   var src =
   \\ type T = num
-  \\ fn j(a: T): T
+  \\ def j(a: T): T
   \\  return (a * 2)
   \\ end
   \\ j(5) + 9 == 19
@@ -1132,8 +1132,8 @@ test "regular-functions" {
   _ = try doTest(src);
   var src2 =
   \\ do
-  \\ fn fox(a: num)
-  \\  fn foo(b: num)
+  \\ def fox(a: num)
+  \\  def foo(b: num)
   \\    return a + b
   \\  end
   \\  return foo
@@ -1145,7 +1145,7 @@ test "regular-functions" {
   ;
   _ = try doTest(src2);
   var src3 =
-  \\ fn fib(n: num): num
+  \\ def fib(n: num): num
   \\  if n <= 1 then
   \\    return n
   \\  end
@@ -1156,7 +1156,7 @@ test "regular-functions" {
   _ = try doTest(src3);
   var src4 =
   \\ type T = num
-  \\ fn foo(a: T): T
+  \\ def foo(a: T): T
   \\  let j = 12
   \\  return a * 5 + j
   \\ end
@@ -1170,8 +1170,8 @@ test "regular-functions" {
 
 test "generic-functions" {
   var src = 
-  \\ fn funny
-  \\    fn foo{T}(a: T): T
+  \\ def funny
+  \\    def foo{T}(a: T): T
   \\     return a
   \\    end
   \\    let j = foo{str}('5')
@@ -1184,19 +1184,19 @@ test "generic-functions" {
   ;
   _ = try doTest(src);
   var src2 =
-  \\ fn fancy{T}(x: T)
+  \\ def fancy{T}(x: T)
   \\  let j: T = x
   \\  return j
   \\ end
-  \\ fn id{T}(val: T): T
+  \\ def id{T}(val: T): T
   \\  return val
   \\ end
   \\ [fancy(5), fancy('oops'), fancy(true), id([1, 2, {'a': 'fox'}])]
   ;
   _ = try doTest(src2);
   var src3 =
-  \\ fn funny2{U}(x: U)
-  \\    fn foo{T}(a: T, b: U): T
+  \\ def funny2{U}(x: U)
+  \\    def foo{T}(a: T, b: U): T
   \\     return a * (b - 2)
   \\    end
   \\    let k = foo(10, x)
@@ -1205,8 +1205,8 @@ test "generic-functions" {
   \\    return (k, p)
   \\ end
   \\ funny2(123)
-  \\ fn funny2{U}
-  \\    fn foo{T}(a: T, b: U): T
+  \\ def funny2{U}
+  \\    def foo{T}(a: T, b: U): T
   \\     return a * (b - 2)
   \\    end
   \\    let x: U = 123
@@ -1223,18 +1223,18 @@ test "generic-functions" {
 test "generic-functions-2" {
   var src =
   \\ # mutually recursive
-  \\ fn mutA{U}(x: U)
+  \\ def mutA{U}(x: U)
   \\  return mutB(x)
   \\ end
   \\
-  \\ fn mutB{T}(y: T)
+  \\ def mutB{T}(y: T)
   \\  return mutA(y)
   \\ end
   \\ 
   \\ mutA(10)
   \\ mutB('b')
   \\
-  \\ fn mutA(x: num)
+  \\ def mutA(x: num)
   \\  if x > 2
   \\    return mutB(x)
   \\  else
@@ -1242,7 +1242,7 @@ test "generic-functions-2" {
   \\  end
   \\ end
   \\
-  \\ fn mutB(y: num)
+  \\ def mutB(y: num)
   \\  if y > 2
   \\    return mutA(y)
   \\  else
@@ -1252,13 +1252,13 @@ test "generic-functions-2" {
   \\ mutA(10) + mutB(7)
   \\
   \\ # recursive
-  \\ fn mutMe(x: str)
+  \\ def mutMe(x: str)
   \\  return mutMe('5')
   \\ end
   \\ mutMe('fox')
   \\
   \\ type J =  list{num | str}
-  \\ fn fox{A, B}(x: A, y: B)
+  \\ def fox{A, B}(x: A, y: B)
   \\  let p: J = [13 as num | str, 4]
   \\  return fox(x, y)
   \\ end

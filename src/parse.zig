@@ -104,6 +104,7 @@ pub const Parser = struct {
     .{.bp = .Or, .prefix = null, .infix = Self.binary},                 // TkOr
     .{.bp = .None, .prefix = null, .infix = null},                      // TkFor
     .{.bp = .And, .prefix = null, .infix = Self.binary},                // TkAnd
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkDef
     .{.bp = .None, .prefix = null, .infix = null},                      // TkEnd
     .{.bp = .None, .prefix = null, .infix = null},                      // TkNot
     .{.bp = .None, .prefix = null, .infix = null},                      // TkLet
@@ -1018,8 +1019,9 @@ pub const Parser = struct {
   }
 
   fn funStmt(self: *Self, skip_name: bool) !*Node {
-    // FunDecl     :=  "fn" TypeParams? Params? ReturnSig? NL Body End
-    try self.consume(.TkFn);
+    // FunDecl     :=  "def" | "fn" TypeParams? Params? ReturnSig? NL Body End
+    if (!skip_name) try self.consume(.TkDef)
+    else try self.consume(.TkFn);
     self.incFun();
     var ident: ?*ast.VarNode = null;
     if (!skip_name) {
@@ -1110,7 +1112,7 @@ pub const Parser = struct {
       return try self.whileStmt();
     } else if (self.check(.TkBreak) or self.check(.TkContinue)) {
       return try self.controlStmt();
-    } else if (self.check(.TkFn)) {
+    } else if (self.check(.TkDef)) {
       return try self.funStmt(false);
     } else if (self.match(.TkReturn)) {
       return try self.returnStmt();

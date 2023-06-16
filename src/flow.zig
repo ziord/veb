@@ -231,6 +231,16 @@ pub const CFGBuilder = struct {
     return ifn;
   }
 
+  fn hasReturnNode(self: *Self, nodes: *FlowList) bool {
+    _ = self;
+    for (nodes.items()) |itm| {
+      if (itm.node.isRet()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   fn linkAtomic(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge, tag: FlowTag) FlowList {
     var flow = self.getFlowNode(node, tag);
     self.connectVerticesWithEdgeInfo(prev, flow, edge);
@@ -277,6 +287,10 @@ pub const CFGBuilder = struct {
     // cond->else, and to if-exit
     var els = self.link(node.els, flow_list, .EFalse);
     ret.extend(&els);
+    // if we return from both branches of the if condition, then whatever follows the if is dead
+    if (self.hasReturnNode(&if_then) and self.hasReturnNode(&els)) {
+      ret.append(self.dead);
+    }
     return ret;
   }
 
@@ -352,9 +366,9 @@ pub const CFGBuilder = struct {
     var flow_list = self.linkAtomic(node, prev, edge, .CfgOther);
     self.connectVerticesWithEdgeInfo(flow_list, self.exit, edge);
     if (!is_last) {
-      flow_list.append(self.dead);
+      return self.dead.toList(self.alloc());
     }
-    return flow_list;
+    return FlowList.init(self.alloc());
   }
 
   fn linkFun(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge) FlowList {

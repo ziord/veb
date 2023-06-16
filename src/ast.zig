@@ -833,6 +833,7 @@ pub const AstNode = union(AstType) {
       .AstWhile => |whi| whi.cond.getToken(),
       .AstRet => |ret| ret.token,
       .AstCall => |call| call.expr.getToken(),
+      .AstEmpty => |emp| emp.token,
       .AstFun => |*fun| {
         if (fun.name) |name| {
           return name.token;

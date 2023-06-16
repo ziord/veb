@@ -221,7 +221,7 @@ pub const TypeChecker = struct {
   var func_id: u32 = 0;
   const Self = @This();
   const MAX_STRING_SYNTH_LEN = 0xc;
-  pub const TypeCheckError = error{TypeCheckError, TypeLinkError};
+  const TypeCheckError = error{CheckError, TypeLinkError, SynthFailure, SynthTooLarge, DeadCode};
 
   pub fn init(allocator: std.mem.Allocator, diag: *Diagnostic) @This() {
     return Self {
@@ -236,7 +236,7 @@ pub const TypeChecker = struct {
 
   fn error_(self: *Self, emit: bool, token: Token, comptime fmt: []const u8, args: anytype) TypeCheckError {
     if (emit) self.diag.addDiagnostics(.DiagError, token, "TypeError: " ++ fmt, args);
-    return error.TypeCheckError;
+    return error.CheckError;
   }
 
   inline fn warn(self: *Self, emit: bool, token: Token, comptime fmt: []const u8, args: anytype) void {
@@ -390,9 +390,8 @@ pub const TypeChecker = struct {
   //***********************************************************//
   //***********  narrowing  ***********************************//
   //***********************************************************//
-  const NarrowError = error{TypeCheckError, TypeLinkError, SynthFailure, SynthTooLarge};
 
-  fn synthesizeVar(self: *Self, vr: *ast.VarNode, other: ?*Node, env: *TypeEnv) NarrowError!*ast.VarNode {
+  fn synthesizeVar(self: *Self, vr: *ast.VarNode, other: ?*Node, env: *TypeEnv) TypeCheckError!*ast.VarNode {
     if (vr.typ == null) _ = try self.inferVar(vr, false);
     if (other == null) return vr;
     switch (other.?.*) {
@@ -419,7 +418,7 @@ pub const TypeChecker = struct {
     }
   }
 
-  fn synthesizeSubscript(self: *Self, node: *ast.SubscriptNode, env: *TypeEnv, assume_true: bool) NarrowError!*ast.VarNode {
+  fn synthesizeSubscript(self: *Self, node: *ast.SubscriptNode, env: *TypeEnv, assume_true: bool) TypeCheckError!*ast.VarNode {
     // synthesize node.expr with node.index
     try self.narrow(node.expr, env, assume_true);
     // if this node has been narrowed before, we don't want to reset its type,
@@ -444,7 +443,7 @@ pub const TypeChecker = struct {
     return narrowed;
   }
   
-  fn synthesizeDeref(self: *Self, node: *ast.DerefNode, env: *TypeEnv, assume_true: bool) NarrowError!*ast.VarNode {
+  fn synthesizeDeref(self: *Self, node: *ast.DerefNode, env: *TypeEnv, assume_true: bool) TypeCheckError!*ast.VarNode {
     // synthesize node.expr
     try self.narrow(node.expr, env, assume_true);
     // similar to what inferSubscript() does here.
@@ -466,7 +465,7 @@ pub const TypeChecker = struct {
     return narrowed;
   }
 
-  fn synthesize(self: *Self, node: *Node, env: *TypeEnv, assume_true: bool) NarrowError!*ast.VarNode {
+  fn synthesize(self: *Self, node: *Node, env: *TypeEnv, assume_true: bool) TypeCheckError!*ast.VarNode {
     return switch (node.*) {
       .AstVar => |*vr| try self.synthesizeVar(vr, null, env),
       .AstSubscript => |*sub| try self.synthesizeSubscript(sub, env, assume_true),
@@ -673,7 +672,7 @@ pub const TypeChecker = struct {
     }
   }
 
-  fn narrow(self: *Self, node: *Node, env: *TypeEnv, assume_true: bool) NarrowError!void {
+  fn narrow(self: *Self, node: *Node, env: *TypeEnv, assume_true: bool) TypeCheckError!void {
     return switch (node.*) {
       .AstVar => |*vr| try self.narrowVariable(vr, env),
       .AstBinary => |*bin| try self.narrowBinary(bin, env, assume_true),
@@ -740,7 +739,7 @@ pub const TypeChecker = struct {
     // on the condition expression.
     var env = TypeEnv.init(self.ctx.allocator(), null);
     env.global.pushScope();
-    self.narrow(node.node.AstCondition.cond, &env, true) catch return error.TypeCheckError;
+    self.narrow(node.node.AstCondition.cond, &env, true) catch |e| return e;
     // TODO: rework token extraction for better error reporting
     try self.checkCondition(node.node.getType().?, node.node.AstCondition.cond.getToken());
     // get all nodes on the true edges & flowInfer with env
@@ -766,6 +765,33 @@ pub const TypeChecker = struct {
       try self.flowInfer(nd, false);
     }
     node.res = .Resolved;
+    // when type checking conditions along the false path, check the first sequential node
+    // after the nodes on the false path. If that node has only one incoming edge,
+    // then don’t pop the type information gathered on the false path
+    if (out_nodes.len() == 0) {
+      var edges: usize = 0;
+      for (node.prev_next.items()) |itm| {
+        // get the first sequential node after the nodes on the false path
+        if (itm.next and itm.flo.edge == .ESequential) {
+          // track the number of incoming edges from this node
+          for (itm.flo.prev_next.items()) |fd| {
+            if (fd.prev) {
+              edges += 1;
+            }
+          }
+          break;
+        }
+      }
+      if (edges == 1) {
+        // set all type information gathered to the current varScope
+        var scope = self.ctx.varScope.decls.pop();
+        var itr = scope.map.iterator();
+        while (itr.next()) |entry| {
+          self.insertVar(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        return;
+      }
+    }
     self.ctx.varScope.popScope();
   }
 
@@ -1072,7 +1098,7 @@ pub const TypeChecker = struct {
     if (node.narrowed == null and self.canNarrowSubscript(node)) {
       var env = TypeEnv.init(self.ctx.allocator(), null);
       env.global.pushScope();
-      node.narrowed = self.synthesizeSubscript(node, &env, true) catch return error.TypeCheckError;
+      node.narrowed = self.synthesizeSubscript(node, &env, true) catch |e| return e;
       if (node.narrowed) |narrowed| {
         node.typ = self.inferVar(narrowed, false) catch null;
         if (node.typ) |ty| {
@@ -1100,7 +1126,7 @@ pub const TypeChecker = struct {
     if (node.narrowed == null and self.canNarrowDeref(node)) {
       var env = TypeEnv.init(self.ctx.allocator(), null);
       env.global.pushScope();
-      node.narrowed = self.synthesizeDeref(node, &env, true) catch return error.TypeCheckError;
+      node.narrowed = self.synthesizeDeref(node, &env, true) catch return error.CheckError;
       if (node.narrowed) |narrowed| {
         node.typ = self.inferVar(narrowed, false) catch null;
         if (node.typ) |ty| {
@@ -1183,6 +1209,7 @@ pub const TypeChecker = struct {
     // generic is infer-by-need - performed on call/reference.
     if (!fun.isGeneric()) {
       var flo = self.cfg.lookup(node);
+      try self.analyzer.analyzeDeadCode(flo.dead);
       self.cycles.append(node);
       try self.flowInfer(flo.entry, true);
       _ = self.cycles.pop();
@@ -1219,6 +1246,10 @@ pub const TypeChecker = struct {
     var has_rec = false;
     var has_non_void = false;
     for (prev_nodes.items()) |nd| {
+      // skip dead node, since it's most likely at exit
+      if (nd.isDeadNode()) {
+        continue;
+      }
       if (!nd.node.isRet() or nd.node.getType() == null) {
         has_void = true;
       } else if (nd.node.getType()) |ty| {
@@ -1238,6 +1269,10 @@ pub const TypeChecker = struct {
     var void_ty: *Type = if (has_void) Type.newVoid().box(self.ctx.allocator()) else undefined;
     var nvr_ty: *Type = if (has_rec) Type.newNever(self.ctx.allocator()) else undefined;
     for (prev_nodes.items()) |nd| {
+      // skip dead node, since it's most likely at exit
+      if (nd.isDeadNode()) {
+        continue;
+      }
       var typ = if (!nd.node.isRet()) void_ty else nd.node.getType() orelse void_ty;
       if (has_rec) {
         if (has_non_void) {
@@ -1638,23 +1673,21 @@ pub const TypeChecker = struct {
   pub fn buildFunFlow(self: *Self, node: *Node) !void {
     self.builder.buildFun(&self.cfg, node);
     var flo = self.cfg.lookup(node);
-    if (self.analyzer.analyzeDeadCode(flo.dead)) {
-      return error.TypeCheckError;
-    }
+    try self.analyzer.analyzeDeadCode(flo.dead);
   }
 
   fn buildProgramFlow(self: *Self, root: *Node) !void {
     self.cfg = self.builder.build(root);
-    if (self.analyzer.analyzeDeadCode(self.cfg.program.dead)) {
+    self.analyzer.analyzeDeadCode(self.cfg.program.dead) catch |e| {
       self.diag.display();
-      return error.TypeCheckError;
-    }
+      return e;
+    };
   }
 
   pub fn typecheck(self: *Self, node: *Node) TypeCheckError!void {
     var linker = link.TypeLinker.init(self.ctx.allocator(), self.diag);
-    linker.linkTypes(node) catch {
-      return error.TypeCheckError;
+    linker.linkTypes(node) catch |e| {
+      return e;
     };
     self.linker = &linker;
     self.ctx.typScope = linker.ctx.typScope;
@@ -1668,7 +1701,7 @@ pub const TypeChecker = struct {
     };
     if (self.diag.hasAny()) {
       self.diag.display();
-      return error.TypeCheckError;
+      return error.CheckError;
     }
   }
 };

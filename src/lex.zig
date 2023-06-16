@@ -377,7 +377,7 @@ pub const Token = struct {
       .ty = TokenType.TkEof,
       .value = "",
       .line = 0,
-      .offset = 0,
+      .offset = 1,
     };
   }
 

@@ -18,11 +18,11 @@ pub const Analysis = struct {
   }
 
   /// node is .CfgDead
-  pub fn analyzeDeadCode(self: *Self, node: *FlowNode) bool {
+  pub fn analyzeDeadCode(self: *Self, node: *FlowNode) !void {
     std.debug.assert(node.isDeadNode());
     var start = self.diag.count();
     for (node.prev_next.items()) |itm| {
-      if (itm.next) {
+      if (itm.next and !itm.flo.isExitNode()) {
         self.diag.addDiagnostics(
           .DiagError,
           itm.flo.node.getToken(),
@@ -30,6 +30,8 @@ pub const Analysis = struct {
         );
       }
     }
-    return self.diag.count() > start;
+    if (self.diag.count() > start) {
+      return error.DeadCode;
+    }
   }
 };

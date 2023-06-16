@@ -1006,6 +1006,30 @@ test "narrowing-20" {
   _ = try doTest(src3);
 }
 
+test "narrowing-21" {
+  var src = 
+   \\ def fun(n: num | str)
+  \\  if n is str
+  \\    return n
+  \\  end
+  \\  if n is num
+  \\    return n + 5
+  \\  end
+  \\  n # never
+  \\ end
+  \\ fun('fancy')
+  \\
+  \\ def fun(n: num | str)
+  \\  if n is str
+  \\    return n
+  \\  end
+  \\  return n + 5
+  \\ end
+  \\ fun(12)
+  ;
+  _ = try doTest(src);
+}
+
 test "constant types" {
   var src =
   \\ type Animal = "cat" | "dog" | "fox"

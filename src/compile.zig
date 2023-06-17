@@ -172,7 +172,6 @@ pub const Compiler = struct {
 
   const GLOBAL_SCOPE = 0;
   const MAX_LOCALS = VM.MAX_LOCAL_ITEMS;
-  const MAX_UPVALUES = VM.MAX_UPVALUE_ITEMS;
   const MAX_GSYMS = VM.MAX_GSYM_ITEMS;
   const GlobalVarInfo = struct {
     pos: u32,
@@ -194,8 +193,8 @@ pub const Compiler = struct {
     var locals = std.MultiArrayList(LocalVar){};
     var upvalues = std.MultiArrayList(Upvalue){};
     var globals = std.MultiArrayList(GlobalVar){};
-    gsyms.ensureTotalCapacity(al, VM.MAX_GSYM_ITEMS) catch {};
-    locals.ensureTotalCapacity(al, VM.MAX_LOCAL_ITEMS) catch {};
+    gsyms.ensureTotalCapacity(al, MAX_GSYMS) catch {};
+    locals.ensureTotalCapacity(al, MAX_LOCALS) catch {};
     return Self {
       .fun = fun,
       .allocator = allocator,
@@ -726,7 +725,16 @@ pub const Compiler = struct {
   }
 
   fn cVar(self: *Self, node: *ast.VarNode, dst: u32) !u32 {
-    if (self.findLocalVar(node)) |lvar| {
+    // Sometimes, the lookup of generic and non-generic function calls may collide
+    // based on how such calls were made.
+    // To handle such an edge case, we *first* check if this node is a function type.
+    // Since the type checker guarantees that the node embedded in the function type is the
+    // function being called, we can safely use the function's name for lookup
+    // which if generic, should already be synthesized.
+    if (node.typ != null and node.typ.?.isFunction()) {
+      var fun = &node.typ.?.function().node.AstFun;
+      return try self.cVar(fun.name.?, dst);
+    } else if (self.findLocalVar(node)) |lvar| {
       try self.validateLocalVarUse(lvar.index, node);
       return lvar.reg;
     } else if (self.findUpvalue(node)) |upv| {
@@ -737,9 +745,6 @@ pub const Compiler = struct {
       const inst: OpCode = if(info.isGSym) .Ggsym else .Gglb;
       self.fun.code.write2ArgsInst(inst, dst, info.pos, node.line(), self.vm);
       return dst;
-    } else if (node.typ != null and node.typ.?.isFunction()) {
-      var fun = &node.typ.?.function().node.AstFun;
-      return try self.cVar(fun.name.?, dst);
     } else {
       return self.compileError(node.token, "use of undefined variable '{s}'", .{node.token.value});
     }

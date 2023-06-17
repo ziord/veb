@@ -28,8 +28,9 @@ pub const VM = struct {
   const STACK_MAX = 0xfff;
   pub const MAX_GSYM_ITEMS = vl.MAX_REGISTERS << 1;
   pub const MAX_LOCAL_ITEMS = vl.MAX_REGISTERS;
-  pub const MAX_UPVALUE_ITEMS = vl.MAX_REGISTERS;
-  pub const MAX_FRAMES = 0xffff;
+  pub const MAX_LOCAL_ITEMS_BYTES = MAX_LOCAL_ITEMS * @sizeOf(Value);
+  pub const MAX_FRAMES = 0x63ff;
+  pub const MAX_STACK_ITEMS = 0xffff;
   const RuntimeError = error{RuntimeError};
   const TypeTag2CheckFunc = [_]*const fn(Value) bool {
     vl.isBoolNoInline, vl.isNumberNoInline, vl.isStringNoInline,
@@ -116,7 +117,50 @@ pub const VM = struct {
     return if (x < vl.MAX_REGISTERS) fp.stack[x] else fp.closure.fun.code.values.items[x - vl.MAX_REGISTERS];
   }
 
+  fn ensureStackCapacity(self: *Self) !void {
+    if (
+      (@divExact(
+        @ptrToInt(self.fiber.stack + self.fiber.stack_cap)
+        - @ptrToInt(self.fiber.fp.stack), @sizeOf(Value)
+      ) > MAX_LOCAL_ITEMS)
+    ) return;
+    if (self.fiber.stack_cap >= MAX_STACK_ITEMS) {
+      // TODO: unwind
+      return self.runtimeError("Stack overflow: too many stack items", .{});
+    }
+    var old_stack = self.fiber.stack;
+    const cap = Mem.alignTo(Mem.growCapacity(self.fiber.stack_cap), MAX_LOCAL_ITEMS);
+    self.fiber.stack = self.mem.resizeBuf(
+      Value, self,
+      self.fiber.stack[0..self.fiber.stack_cap],
+      self.fiber.stack_cap,
+      cap
+    ).ptr;
+    self.fiber.stack_cap = cap;
+    // reset the stack pointer for each call frame.
+    if (self.fiber.stack != old_stack) {
+      var i: usize = 0;
+      while (i < self.fiber.frame_len) : (i += 1) {
+        var frame = &self.fiber.frames[i];
+        frame.stack = (
+          self.fiber.stack
+          + @divExact(@ptrToInt(frame.stack) - @ptrToInt(old_stack), @sizeOf(Value))
+        );
+      }
+      // reset the stack pointer for each open upvalue.
+      var upvalues = self.fiber.open_upvalues;
+      while (upvalues) |upvalue| {
+        upvalue.loc = (
+          &(self.fiber.stack
+          + (@divExact(@ptrToInt(upvalue.loc) - @ptrToInt(old_stack), @sizeOf(Value))))[0]
+        );
+        upvalues = upvalue.next;
+      }
+    }
+  }
+
   fn ensureFrameCapacity(self: *Self, fp: **CallFrame, fiber: **ObjFiber) !void {
+    try self.ensureStackCapacity();
     if (self.fiber.frame_len + 1 < self.fiber.frame_cap) return;
     if (self.fiber.frame_cap >= MAX_FRAMES) {
       // TODO: unwind

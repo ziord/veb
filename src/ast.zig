@@ -225,12 +225,12 @@ pub const VarNode = struct {
   }
 
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
-    // var typ: ?*Type = null;
-    // if (self.typ) |ty| {
-    //   typ = ty.clone(al);
-    // }
+    var typ: ?*Type = null;
+    if (self.typ) |ty| {
+      typ = ty.clone(al);
+    }
     var new = util.alloc(AstNode, al);
-    new.* = .{.AstVar = @This() {.token = self.token, .typ = self.typ}};
+    new.* = .{.AstVar = @This() {.token = self.token, .typ = typ}};
     return new;
   }
 };

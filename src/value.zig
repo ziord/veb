@@ -574,18 +574,20 @@ pub fn printObject(val: Value) void {
       asMap(val).meta.display();
     },
     .objclosure => {
-      util.print("fn${s}", .{asClosure(val).fun.getName()});
+      util.print("{{fn {s}}}", .{asClosure(val).fun.getName()});
     },
     .objupvalue => {
-      util.print("<upvalue>", .{});
+      util.print("{{upvalue}}", .{});
     },
     .objzfn => {
-      util.print("builtin_fn${s}", .{asZFn(val).getName()});
+      util.print("{{b.fn {s}}}", .{asZFn(val).getName()});
     },
     .objfiber => {
-      util.print("<fiber>", .{});
+      util.print("{{fiber}}", .{});
     },
-    .objfn => unreachable,
+    .objfn => {
+      util.print("{{fn {s}}}", .{asFn(val).getName()});
+    },
   }
 }
 

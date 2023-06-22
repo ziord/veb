@@ -94,7 +94,7 @@ pub const Disassembler = struct {
         var tmp = if (bx >= value.MAX_REGISTERS) bx - value.MAX_REGISTERS 
                   else Code.readBX(code.words.items[idx - 1]); // read the index off the prev inst
         var envlen = value.asFn(code.values.items[tmp]).envlen;
-        var i = idx;
+        var i = if (envlen > 0) idx + 1 else idx;
         while (envlen > 0): (envlen -= 1) {
           var inst = code.words.items[i];
           var is_local = Code.readRX(inst);

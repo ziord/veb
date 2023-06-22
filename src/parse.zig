@@ -32,7 +32,7 @@ pub const Parser = struct {
   diag: Diagnostic,
   cna: *CnAllocator,
   allow_nl: usize = 0,
-  funcs: u32 = 0,
+  funcs: ?*Node = null,
   in_cast: u32 = 0,
   loops: u32 = 0,
 
@@ -90,6 +90,7 @@ pub const Parser = struct {
     .{.bp = .Access, .prefix = null, .infix = Self.dotderef},            // TkDot
     .{.bp = .None, .prefix = null, .infix = null},                      // TkQMark
     .{.bp = .None, .prefix = null, .infix = null},                      // TkNewline
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkEqGrt
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},         // TkLeq
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},         // TkGeq
     .{.bp = .Equality, .prefix = null, .infix = Self.binary},           // Tk2Eq
@@ -98,13 +99,13 @@ pub const Parser = struct {
     .{.bp = .Shift, .prefix = null, .infix = Self.binary},              // Tk2Rthan
     .{.bp = .Access, .prefix = null, .infix = Self.casting},            // TkAs
     .{.bp = .None, .prefix = null, .infix = null},                      // TkDo
-    .{.bp = .None, .prefix = Self.funExpr, .infix = null},              // TkFn
+    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkFn
     .{.bp = .Equality, .prefix = null, .infix = Self.binIs},            // TkIs
     .{.bp = .None, .prefix = null, .infix = null},                      // TkIf
     .{.bp = .Or, .prefix = null, .infix = Self.binary},                 // TkOr
     .{.bp = .None, .prefix = null, .infix = null},                      // TkFor
     .{.bp = .And, .prefix = null, .infix = Self.binary},                // TkAnd
-    .{.bp = .None, .prefix = null, .infix = null},                      // TkDef
+    .{.bp = .None, .prefix = Self.funExpr, .infix = null},              // TkDef
     .{.bp = .None, .prefix = null, .infix = null},                      // TkEnd
     .{.bp = .None, .prefix = null, .infix = null},                      // TkNot
     .{.bp = .None, .prefix = null, .infix = null},                      // TkLet
@@ -216,16 +217,8 @@ pub const Parser = struct {
     return self.loops > 0;
   }
 
-  inline fn incFun(self: *Self) void {
-    self.funcs += 1;
-  }
-
-  inline fn decFun(self: *Self) void {
-    self.funcs -= 1;
-  }
-
   inline fn inFun(self: *Self) bool {
-    return self.funcs > 0;
+    return self.funcs != null;
   }
 
   inline fn consumeNlOrEof(self: *Self) !void {
@@ -1018,18 +1011,25 @@ pub const Parser = struct {
     return try self.typing(false);
   }
 
-  fn funStmt(self: *Self, skip_name: bool) !*Node {
+  fn funStmt(self: *Self, lambda: bool) !*Node {
     // FunDecl     :=  "def" | "fn" TypeParams? Params? ReturnSig? NL Body End
-    if (!skip_name) try self.consume(.TkDef)
-    else try self.consume(.TkFn);
-    self.incFun();
+    try self.consume(.TkDef);
+    var prev_func = self.funcs;
+    var func = self.newNode();
+    self.funcs = func;
     var ident: ?*ast.VarNode = null;
-    if (!skip_name) {
+    if (!lambda) {
       try self.consume(.TkIdent);
       ident = ast.VarNode.init(self.previous_tok).box(self.allocator);
     }
+    func.* = .{.AstFun = ast.FunNode {
+      .params = undefined, .body = undefined,
+      .name = ident, .ret = undefined,
+      .tparams = undefined
+    }};
     var tparams: ?*TypeList = null;
     if (self.check(.TkLCurly)) {
+      if (lambda) return self.err(self.current_tok, "generic lambdas are unsupported");
       var tmp = try self.abstractTypeParams(undefined);
       tparams = util.box(TypeList, tmp.generic().tparams, self.allocator);
     }
@@ -1038,9 +1038,28 @@ pub const Parser = struct {
     if (self.check(.TkColon)) {
       ret = try self.returnSig();
     }
-    var body = try self.blockStmt(true, skip_name);
-    self.decFun();
-    var func = self.newNode();
+    var body = blk: {
+      if (!lambda) break :blk try self.blockStmt(true, lambda);
+      if (self.match(.TkEqGrt)) {
+        var expr = try self.parseExpr();
+        var block = self.newNode();
+        block.* = .{.AstBlock = ast.BlockNode.init(self.allocator, null)};
+        var rexp = self.newNode();
+        rexp.* = .{.AstRet = ast.RetNode.init(expr, self.previous_tok)};
+        block.AstBlock.nodes.append(rexp);
+        break :blk block;
+      } else {
+        _ = self.match(.TkNewline);
+        var block = self.newNode();
+        block.* = .{.AstBlock = ast.BlockNode.init(self.allocator, null)};
+        while (!self.check(.TkEof) and !self.check(.TkEnd)) {
+          try self.addStatement(&block.AstBlock.nodes);
+        }
+        try self.consume(.TkEnd);
+        break :blk block;
+      }
+    };
+    self.funcs = prev_func;
     body.AstBlock.cond = func;
     func.* = .{.AstFun = ast.FunNode.init(params, body, ident, ret, tparams)};
     return func;
@@ -1061,7 +1080,12 @@ pub const Parser = struct {
       expr = try self.parseExpr();
     }
     node.* = .{.AstRet = ast.RetNode.init(expr, self.previous_tok)};
-    try self.consumeNlOrEof();
+    var funcs = self.funcs.?;
+    if (!funcs.AstFun.isAnonymous()) {
+      try self.consumeNlOrEof();
+    } else if (self.check(.TkNewline) or self.check(.TkEof)) {
+      try self.consumeNlOrEof();
+    }
     return node;
   }
 
@@ -1087,7 +1111,7 @@ pub const Parser = struct {
     }
   }
 
-  fn addStatement(self: *Self, list: *NodeList) !void {
+  fn addStatement(self: *Self, list: *NodeList) anyerror!void {
     var stmt = self.statement() catch |e| {
       if (e != error.EmptyStatement) {
         return e;

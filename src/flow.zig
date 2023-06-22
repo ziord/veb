@@ -78,11 +78,12 @@ pub const FlowNode = struct {
   }
 
   fn outgoingNodes(node: *@This(), visited: *std.AutoArrayHashMap(*FlowNode, u32), edge: FlowEdge) void {
-    if (visited.get(node)) |_| return;
+    visited.put(node, 0) catch {};
     for (node.prev_next.items()) |nd| {
       if (nd.next and nd.flo.edge == edge) {
-        visited.put(nd.flo, 0) catch {};
-        outgoingNodes(nd.flo, visited, edge);
+        if (visited.get(nd.flo) == null) {
+          outgoingNodes(nd.flo, visited, edge);
+        }
       }
     }
   }
@@ -92,6 +93,7 @@ pub const FlowNode = struct {
     var visited = std.AutoArrayHashMap(*FlowNode, u32).init(allocator);
     outgoingNodes(node, &visited, edge);
     nodes.list.items = visited.keys();
+    nodes.list.items = nodes.list.items[1..];
     return nodes;
   }
 
@@ -135,13 +137,13 @@ pub const CFG = struct {
     self.funcs.append(info);
   }
 
-  pub fn lookup(self: *@This(), node: *Node) FlowMeta {
+  pub fn lookup(self: *@This(), node: *Node) ?FlowMeta {
     for (self.funcs.items()) |itm| {
       if (itm.entry.node == node) {
         return itm;
       }
     }
-    unreachable;
+    return null;
   }
 };
 
@@ -231,14 +233,17 @@ pub const CFGBuilder = struct {
     return ifn;
   }
 
-  fn hasReturnNode(self: *Self, nodes: *FlowList) bool {
+  fn hasReturnNode(self: *Self, nodes: *FlowList, node: *Node) bool {
     _ = self;
-    for (nodes.items()) |itm| {
-      if (itm.node.isRet()) {
-        return true;
-      }
-    }
-    return false;
+    // AstBlock (`node`) has a return node if there's at least 1 node in the block
+    // and `nodes` is empty (since RetNode produces an empty flowlist)
+    // This is the same as doing:
+    //     for (node.AstBlock.nodes.items()) |itm| {
+    //       if (itm.isRet()) return true;
+    //     }
+    //     return false;
+    // but we manage to eliminate the need for iteration
+    return nodes.len() == 0 and node.AstBlock.nodes.len() > 0;
   }
 
   fn linkAtomic(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge, tag: FlowTag) FlowList {
@@ -288,7 +293,7 @@ pub const CFGBuilder = struct {
     var els = self.link(node.els, flow_list, .EFalse);
     ret.extend(&els);
     // if we return from both branches of the if condition, then whatever follows the if is dead
-    if (self.hasReturnNode(&if_then) and self.hasReturnNode(&els)) {
+    if (self.hasReturnNode(&if_then, node.then) and self.hasReturnNode(&els, node.els)) {
       ret.append(self.dead);
     }
     return ret;

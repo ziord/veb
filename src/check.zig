@@ -193,7 +193,7 @@ pub const TypeChecker = struct {
   ctx: TContext,
   cfg: CFG = undefined,
   diag: *Diagnostic,
-  generics: ds.ArrayList(FnInfo),
+  generics: ds.ArrayHashMap(*Node, *ds.ArrayList(FnInfo)),
   linker: *TypeLinker = undefined,
   cycles: NodeList,
   builder: CFGBuilder,
@@ -213,12 +213,10 @@ pub const TypeChecker = struct {
     var TyTy: Type = Type.init(.{.Concrete = tyty});
   };
   pub const FnInfo = struct {
-    origin: *Node,
     instance: *Node,
     synth_name: *ast.VarNode,
     typ: *Type,
   };
-  var func_id: u32 = 0;
   const Self = @This();
   const MAX_STRING_SYNTH_LEN = 0xc;
   const TypeCheckError = error{CheckError, TypeLinkError, SynthFailure, SynthTooLarge, DeadCode};
@@ -227,7 +225,7 @@ pub const TypeChecker = struct {
     return Self {
       .ctx = TContext.init(allocator),
       .diag = diag,
-      .generics = ds.ArrayList(FnInfo).init(allocator),
+      .generics = ds.ArrayHashMap(*Node, *ds.ArrayList(FnInfo)).init(allocator),
       .builder = CFGBuilder.init(allocator),
       .cycles = NodeList.init(allocator),
       .analyzer = Analysis.init(diag),
@@ -243,15 +241,17 @@ pub const TypeChecker = struct {
     if (emit) self.diag.addDiagnostics(.DiagWarn, token, "TypeWarning: " ++ fmt, args);
   }
 
-  fn genName(self: *Self) []const u8 {
-    var name = std.fmt.allocPrint(self.ctx.allocator(), "${}", .{func_id}) catch "";
-    func_id += 1;
+  fn genName(self: *Self, l1: usize, l2: usize) []const u8 {
+    var name = std.fmt.allocPrint(self.ctx.allocator(), "${}.{}", .{l1, l2}) catch "";
     return name;
   }
 
   fn createSynthName(self: *Self, fun: *ast.FunNode, args: *TypeList, targs: ?*NodeList) []const u8 {
     // FIXME: this is unhygienically inefficient.
-    var start = if (fun.name) |nm| nm.token.value else self.genName();
+    var start = if (fun.name) |nm| nm.token.value else self.genName(
+      if (targs) |ta| ta.len() else 0,
+      args.len()
+    );
     var al = self.ctx.allocator();
     var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
     _ = writer.write(start) catch undefined;
@@ -278,21 +278,30 @@ pub const TypeChecker = struct {
   }
 
   fn addFnInfo(self: *Self, origin: *Node, instance: *Node, synth_name: *ast.VarNode, typ: *Type) void {
-    self.generics.append(@as(FnInfo, .{
-      .origin = origin,
+    var data = @as(FnInfo, .{
       .instance = instance,
       .synth_name = synth_name,
       .typ = typ,
-    }));
+    });
+    if (self.generics.get(origin)) |list| {
+      list.append(data);
+    } else {
+      var list = util.box(
+        ds.ArrayList(FnInfo),
+        ds.ArrayList(FnInfo).init(self.ctx.allocator()),
+        self.ctx.allocator()
+      );
+      list.append(data);
+      self.generics.set(origin, list);
+    }
   }
 
   fn findFnInfo(self: *Self, origin: *Node, synth_name: []const u8) ?FnInfo {
-    for (self.generics.items()) |info| {
-      if (
-        info.origin == origin 
-        and (std.mem.eql(u8, info.synth_name.token.value, synth_name))
-      ) {
-        return info;
+    if (self.generics.get(origin)) |list| {
+      for (list.items()) |info| {
+        if (std.mem.eql(u8, info.synth_name.token.value, synth_name)) {
+          return info;
+        }
       }
     }
     return null;
@@ -312,7 +321,7 @@ pub const TypeChecker = struct {
   fn findName(self: *Self, name: []const u8) ?*Type {
     if (self.ctx.varScope.lookup(name)) |ty| {
       return switch (ty.kind) {
-        .Concrete, .Variable => ty,
+        .Concrete, .Variable, .Function => ty,
         else => self.ctx.copyType(ty),
       };
     }
@@ -715,6 +724,7 @@ pub const TypeChecker = struct {
   }
 
   fn flowInferMeta(self: *Self, node: *FlowNode) !void {
+    if (node.res.isResolved()) return;
     if (node.tag == .CfgEntry) {
       return try self.flowInferEntry(node);
     }
@@ -725,14 +735,17 @@ pub const TypeChecker = struct {
   }
 
   fn flowInferNode(self: *Self, node: *FlowNode) !void {
+    if (node.res.isResolved()) return;
     _ = try self.infer(node.node);
     node.res = .Resolved;
   }
 
   fn flowInferCondition(self: *Self, node: *FlowNode) !void {
+    if (node.res.isResolved()) return;
     node.res = .Processing;
     // TODO: is there a need to explicitly merge types from incoming edges?
     self.ctx.varScope.pushScope();
+    errdefer self.ctx.varScope.popScope();
     // This is a branch point and a meet point. 
     // As a meet point, all types on the incoming edges are merged.
     // As a branch point, types are narrowed along outgoing edges based 
@@ -796,7 +809,6 @@ pub const TypeChecker = struct {
   }
 
   fn flowInfer(self: *Self, node: *FlowNode, inferNext: bool) TypeCheckError!void {
-    if (node.res.isResolved()) return;
     for (node.prev_next.items()) |item| {
       // we can only proceed to resolve this node when all 
       // incoming edges have been resolved or when we're resolving 
@@ -827,6 +839,9 @@ pub const TypeChecker = struct {
     if (!inferNext) return;
     for (node.prev_next.items()) |item| {
       if (item.next) {
+        // FIXME: this is just a hack, don't know how to fix this yet.
+        //        temporarily fixes cycles arising from while loops
+        if (item.flo.node.isCondition() and item.flo.res.isResolved()) continue;
         try self.flowInfer(item.flo, inferNext);
       }
     }
@@ -992,7 +1007,7 @@ pub const TypeChecker = struct {
     }
     // at this point, rhs is a TypeNode
     var ty = node.right.AstNType.typ;
-    if ((ty.isGeneric() and ty.generic().tparams_len() != 0) or ty.isUnion() or ty.isVariable()) {
+    if ((ty.isGeneric() and ty.generic().tparams_len() != 0) or ty.isUnion() or ty.isVariable() or ty.isFunction()) {
       return self.error_(
         true, node.op.token,
         "Expected a concrete or class type in the rhs of the `is` operator but found '{s}'",
@@ -1208,7 +1223,13 @@ pub const TypeChecker = struct {
     );
     // generic is infer-by-need - performed on call/reference.
     if (!fun.isGeneric()) {
-      var flo = self.cfg.lookup(node);
+      var flo = blk: {
+        if (self.cfg.lookup(node)) |fm| break :blk fm;
+        std.debug.assert(!node.AstFun.isGeneric());
+        try self.linker.linkFun(fun, true);
+        try self.buildFunFlow(node);
+        break :blk self.cfg.lookup(node).?;
+      };
       try self.analyzer.analyzeDeadCode(flo.dead);
       self.cycles.append(node);
       try self.flowInfer(flo.entry, true);
@@ -1320,8 +1341,9 @@ pub const TypeChecker = struct {
           .{self.getTypename(ret_ty), self.getTypename(inf_ret_ty)}
         );
       }
-      return ret_ty;
     }
+    // prefer inferred type for function types, since function types need to have extra
+    // meta-data (`node`) which would not be present if the type was created by a user
     return inf_ret_ty;
   }
   
@@ -1363,10 +1385,15 @@ pub const TypeChecker = struct {
             .{self.getTypename(p_ty), self.getTypename(arg_ty)}
           );
         }
+        // set extra 'node' metadata for this arg type, which would be undefined if
+        // arg type was created by a user
+        if (p_ty.isFunction() and arg.isFun()) {
+          p_ty.function().node = arg;
+        }
       }
       // [N*]: check if we're currently resolving this type, i.e. if it's recursive
       if (is_cyclic) {
-        if (self.inferFunReturnTypePartial(self.cfg.lookup(fun_ty.node))) |typ| {
+        if (self.inferFunReturnTypePartial(self.cfg.lookup(fun_ty.node).?)) |typ| {
           return typ;
         }
         return ty.newRecursive().box(self.ctx.allocator());
@@ -1384,6 +1411,7 @@ pub const TypeChecker = struct {
       }
     }
     self.ctx.enterScope();
+    errdefer self.ctx.leaveScope();
     // generic, so monomorphize.
     var args_inf = TypeList.init(self.ctx.allocator());
     for (node.args.items()) |arg| {
@@ -1446,11 +1474,30 @@ pub const TypeChecker = struct {
     var fun = &new_fun_node.AstFun;
     // keep tparams to ban use as alias in types contained in fun, as much as possible
     try self.linker.linkFun(fun, true);
+    // for some reason, `self.ctx.typScope` sometimes becomes invalidated after linking fun, so reassign again 
+    self.ctx.typScope = self.linker.ctx.typScope;
     // make fun non-generic to allow building of the cfg
     fun.tparams = null;
     try self.buildFunFlow(new_fun_node);
     self.ctx.varScope.pushScope();
+    errdefer self.ctx.varScope.popScope();
     var new_fun_ty = try self.inferFunPartial(new_fun_node);
+    for (new_fun_ty.function().params.items(), 0..) |typ, ppos| {
+      if (typ.isFunction() and node.args.itemAt(ppos).isFun()) {
+        typ.function().node = node.args.itemAt(ppos);
+      }
+    }
+    // validate monomorphized function params
+    for (new_fun_ty.function().params.items(), node.args.items()) |p_ty, arg| {
+      var arg_ty = try self.infer(arg);
+      if (!p_ty.isRelatedTo(arg_ty, .RCAny, self.ctx.allocator())) {
+        return self.error_(
+          true, arg.getToken(),
+          "Argument mismatch. Expected type '{s}' but found '{s}'",
+          .{self.getTypename(p_ty), self.getTypename(arg_ty)}
+        );
+      }
+    }
     var typ = try self.inferFun(new_fun_node, new_fun_ty);
     node.typ = typ.function().ret;
     node.expr.setType(new_fun_ty);
@@ -1672,7 +1719,7 @@ pub const TypeChecker = struct {
 
   pub fn buildFunFlow(self: *Self, node: *Node) !void {
     self.builder.buildFun(&self.cfg, node);
-    var flo = self.cfg.lookup(node);
+    var flo = self.cfg.lookup(node).?;
     try self.analyzer.analyzeDeadCode(flo.dead);
   }
 

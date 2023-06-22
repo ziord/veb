@@ -19,7 +19,7 @@ const ObjFn = value.ObjFn;
 const TypeKind = parse.TypeKind;
 const Diagnostic = diagnostics.Diagnostic;
 const FnInfo = check.TypeChecker.FnInfo;
-const FnInfoList = ds.ArrayList(FnInfo);
+const FnInfoMap = ds.ArrayHashMap(*Node, *ds.ArrayList(FnInfo));
 const TypeList = check.TypeList;
 
 const VRegister = struct {
@@ -68,18 +68,53 @@ const VRegister = struct {
     var vals = slice.items(.val);
     var curr = reg;
     var j: usize = 0;
-    for (frees, 0..) |free, i| {
-      if (!free or vals[i] == curr) continue;
-      if ((vals[i] - curr) != 1) return error.RegistersNonSequenceable;
+    var i: usize = reg + 1;
+    for (frees[i..], vals[i..]) |free, val| {
+      if (!free) continue;
+      if ((val - curr) != 1) return error.RegistersNonSequenceable;
       frees[i] = false;
-      curr = vals[i];
+      curr = val;
       j += 1;
+      i += 1;
       if (j == n) break;
     }
     std.debug.assert(j == n);
     return reg + 1;
   }
 
+  /// like getRegWindow(), but can choose a register sequence (window) 
+  /// from any register above `reg` that sequences.
+  pub fn getAnyRegWindow(self: *Self, reg: u32, n: usize) u32 {
+    if (n == 0) return reg;
+    var slice = self.regs.slice();
+    var frees = slice.items(.free);
+    var vals = slice.items(.val);
+    var curr = reg;
+    var start = reg + 1;
+    var j: usize = 0;
+    var i: usize = undefined;
+    main: while (true) {
+      i = start;
+      for (frees[start..], vals[start..]) |free, val| {
+        if (!free) {
+          continue;
+        }
+        if ((val - curr) != 1) {
+          start = val;
+          curr = val - 1;
+          j = 0;
+          break;
+        }
+        frees[i] = false;
+        curr = val;
+        j += 1;
+        i += 1;
+        if (j == n) break :main;
+      }
+    }
+    std.debug.assert(j == n);
+    return start;
+  }
 
   /// release all registers in this register window, starting from the first
   pub fn releaseRegWindow(self: *Self, reg: u32, n: usize) void {
@@ -89,10 +124,10 @@ const VRegister = struct {
     var vals = slice.items(.val);
     var frees = slice.items(.free);
     var r = reg;
-    for (vals, 0..) |val, i| {
+    for (vals, frees, 0..) |val, free, i| {
       if (j == 0) break;
       if (val == r) {
-        std.debug.assert(!frees[i]);
+        std.debug.assert(!free);
         frees[i] = true;
         r += 1;
         j -= 1;
@@ -166,7 +201,7 @@ pub const Compiler = struct {
   scope: i32 = GLOBAL_SCOPE, // defaults to global scope
   rk_bx: RkBxPair = RkBxPair{},
   diag: *Diagnostic,
-  generics: *FnInfoList,
+  generics: *FnInfoMap,
   
   const Self = @This();
 
@@ -187,7 +222,7 @@ pub const Compiler = struct {
   };
   const CompileError = error{CompileError};
 
-  pub fn init(diag: *Diagnostic, vm: *VM, fun: *ObjFn, info: *FnInfoList, allocator: *CnAllocator) Self {
+  pub fn init(diag: *Diagnostic, vm: *VM, fun: *ObjFn, info: *FnInfoMap, allocator: *CnAllocator) Self {
     var al = allocator.getArenaAllocator();
     var gsyms = std.MultiArrayList(GSymVar){};
     var locals = std.MultiArrayList(LocalVar){};
@@ -368,6 +403,12 @@ pub const Compiler = struct {
     return gvar.mempos;
   }
 
+  inline fn addPatchInitGlobalVar(self: *Self, node: *ast.VarNode) void {
+     _ = self.addGSymVar(node);
+    var info = self.patchGlobal(node) catch return;
+    self.initializeGlobal(info);
+  }
+
   fn findLocalVar(self: *Self, node: *ast.VarNode) ?LocalVar {
     if (self.locals.len == 0) return null;
     var i = self.locals.len;
@@ -466,13 +507,14 @@ pub const Compiler = struct {
     if (self.inLocalScope()) return;
     for (toplevels.items()) |decl| {
       switch (decl.*) {
-        .AstVarDecl => |vd| {
+        .AstVarDecl => |*vd| {
           _ = self.addGSymVar(vd.ident);
         },
         .AstFun => |*fun| {
           if (fun.isGeneric()) {
-            for (self.generics.items()) |itm| {
-              if (itm.origin == decl) {
+            if (fun.name) |ident| self.addPatchInitGlobalVar(ident);
+            if (self.generics.get(decl)) |list| {
+              for (list.items()) |itm| {
                 var nfun = &itm.instance.AstFun;
                 nfun.name = itm.synth_name;
                 _ = self.addGSymVar(itm.synth_name);
@@ -616,7 +658,7 @@ pub const Compiler = struct {
     // turn off const optimizations
     self.enterJmp();
     var rx = try self.c(node.left, reg);
-    const end_jmp = self.fun.code.write2ArgsJmp(node.op.optype.toInstOp(), rx, self.lastLine(), self.vm);
+    const end_jmp = self.fun.code.write2ArgsJmp(node.op.optype.toInstOp(), rx, node.line(), self.vm);
     rx = try self.c(node.right, reg);
     self.fun.code.patch2ArgsJmp(end_jmp);
     // restore const optimizations
@@ -733,8 +775,13 @@ pub const Compiler = struct {
     // which if generic, should already be synthesized.
     if (node.typ != null and node.typ.?.isFunction()) {
       var fun = &node.typ.?.function().node.AstFun;
-      return try self.cVar(fun.name.?, dst);
-    } else if (self.findLocalVar(node)) |lvar| {
+      if (fun.isGeneric()) {
+        return self.cConst(dst, value.numberVal(@intToFloat(f64, node.typ.?.typeid())), node.token.line);
+      } else if (fun.name) |ident| {
+        return try self.cVar(ident, dst);
+      }
+    }
+    if (self.findLocalVar(node)) |lvar| {
       try self.validateLocalVarUse(lvar.index, node);
       return lvar.reg;
     } else if (self.findUpvalue(node)) |upv| {
@@ -1045,8 +1092,11 @@ pub const Compiler = struct {
     var token = ast_node.getToken();
     var new_fn = value.createFn(self.vm, @intCast(u8, node.params.len()));
     var is_global = self.inGlobalScope();
-    if (node.name) |ident| {
-      if (is_global) {
+    var is_lambda = node.name == null;
+    if (is_global) {
+      // global
+      if (!is_lambda) {
+        var ident = node.name.?;
         var info = try self.patchGlobal(ident);
         self.initializeGlobal(info);
         reg = try self.getReg(token);
@@ -1055,10 +1105,15 @@ pub const Compiler = struct {
         } else {
           new_fn.name = @constCast(value.createString(self.vm, &self.vm.strings, ident.token.value, false));
         }
-      } else {
-        reg = try self.initLocal(ident);
-        new_fn.name = @constCast(value.createString(self.vm, &self.vm.strings, ident.token.value, false));
-      }
+      } else reg = _reg;
+    } else if (node.name) |ident| {
+      // local (named)
+      reg = try self.initLocal(ident);
+      new_fn.name = @constCast(value.createString(self.vm, &self.vm.strings, ident.token.value, false));
+    } else {
+      // local (lambda)
+      std.debug.assert(_reg != VRegister.DummyReg);
+      reg = _reg;
     }
     var compiler = Compiler.init(self.diag, self.vm, new_fn, self.generics, self.allocator);
     compiler.enclosing = self;
@@ -1070,12 +1125,16 @@ pub const Compiler = struct {
     // compile function body using cBlockNoPops() since no need to pop locals,
     // - return does this automatically
     _ = try compiler.cBlockNoPops(&node.body.AstBlock, _reg);
+    // append return inst as last
+    if (!node.body.AstBlock.nodes.getLast().isRet()) {
+      compiler.fun.code.write2ArgsInst(.Ret, 0, 0, compiler.lastLine(), compiler.vm);
+    }
     compiler.decScope();
     new_fn.envlen = compiler.upvalues.len;
     self.optimizeConstBX();
     var tmp = try self.getReg(token);
-    var dst = self.cConst(tmp, value.objVal(new_fn), self.lastLine());
-    self.fun.code.write2ArgsInst(.Bclo, reg, dst, self.lastLine(), self.vm);
+    var dst = self.cConst(tmp, value.objVal(new_fn), token.line);
+    self.fun.code.write2ArgsInst(.Bclo, reg, dst, token.line, self.vm);
     self.vreg.releaseReg(tmp);
     self.deoptimizeConstBX();
     // set upvalues
@@ -1086,23 +1145,25 @@ pub const Compiler = struct {
       // use .Bclo as a placeholder
       self.fun.code.write2ArgsInst(.Bclo, @boolToInt(loc), idx, self.lastLine(), self.vm);
     }
-    if (is_global and node.name != null) {
-      var ident = node.name.?;
-      var info = self.findGlobal(ident).?;
-      const inst: OpCode = if (info.isGSym) .Sgsym else .Sglb;
-      self.fun.code.write2ArgsInst(inst, reg, info.pos, self.lastLine(), self.vm);
+    if (is_global) {
+      if (node.name) |ident| {
+        var info = self.findGlobal(ident).?;
+        const inst: OpCode = if (info.isGSym) .Sgsym else .Sglb;
+        self.fun.code.write2ArgsInst(inst, reg, info.pos, self.lastLine(), self.vm);
+      }
     }
     if (util.getMode() == .Debug) {
       std.debug.print("\n", .{});
       Disassembler.disCode(&new_fn.code, new_fn.getName());
     }
+    if (is_lambda) return reg;
     if (is_global) self.vreg.releaseReg(reg);
     return _reg;
   }
 
   fn cFunGeneric(self: *Self, node: *Node, reg: u32) CompileError!u32 {
-    for (self.generics.items()) |itm| {
-      if (itm.origin == node) {
+    if (self.generics.get(node)) |list| {
+      for (list.items()) |itm| {
         var fun = &itm.instance.AstFun;
         // only attach names in the local scope since if we're in the global scope,
         // the name has already been attached in preallocateGlobals()
@@ -1122,13 +1183,20 @@ pub const Compiler = struct {
     // - generate the instruction: call r(func), b(argc)
     var token = node.expr.getToken();
     var fun_dst = try self.c(node.expr, reg);
-    // obtain the number of args
+    var _dst = reg;
     var n = @intCast(u32, node.args.len());
-    var win = try self.getRegWindow(reg, n, token);
+    var do_move = false;
+    var win = blk: {
+      break :blk self.vreg.getRegWindow(reg, n) catch {
+        do_move = true;
+        break :blk self.vreg.getAnyRegWindow(reg, n + 1);
+      };
+    };
+    if (do_move) {_dst = win; win += 1;}
     // we need the function to be in a specific position in the register window, along with its args
-    if (fun_dst != reg) {
+    if (fun_dst != _dst) {
       std.debug.assert(self.inLocalScope());
-      self.fun.code.write3ArgsInst(.Mov, reg, fun_dst, 0, self.lastLine(), self.vm);
+      self.fun.code.write3ArgsInst(.Mov, _dst, fun_dst, 0, token.line, self.vm);
     }
     // don't optimize this call's arguments
     self.enterJmp();
@@ -1142,12 +1210,18 @@ pub const Compiler = struct {
       }
     }
     self.leaveJmp();
-    self.fun.code.write2ArgsInst(.Call, reg, n, self.lastLine(), self.vm);
-    self.vreg.releaseRegWindow(win, n);
+    self.fun.code.write2ArgsInst(.Call, _dst, n, token.line, self.vm);
+    if (do_move) {
+      self.fun.code.write3ArgsInst(.Mov, reg, _dst, 0, token.line, self.vm);
+      self.vreg.releaseRegWindow(_dst, n + 1);
+    } else {
+      self.vreg.releaseRegWindow(win, n);
+    }
     return reg;
   }
 
   fn cRet(self: *Self, node: *ast.RetNode, reg: u32) !u32 {
+    _ = reg;
     // TODO: return nil when expr is null?
     var dst: u32 = 0;
     if (node.expr) |expr| {
@@ -1156,7 +1230,7 @@ pub const Compiler = struct {
       self.vreg.releaseReg(rg);
     }
     self.fun.code.write2ArgsInst(.Ret, dst, 0, node.token.line, self.vm);
-    return reg;
+    return dst;
   }
 
   fn cProgram(self: *Self, node: *ast.ProgramNode, start: u32) !u32 {

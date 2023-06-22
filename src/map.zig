@@ -4,9 +4,9 @@ const util = @import("util.zig");
 const VM = @import("vm.zig").VM;
 const vl = @import("value.zig");
 
-const LOAD_FACTOR = vl.LOAD_FACTOR / 100;
 const TOMB_VAL = @as(vl.Value, vl.TRUE_VAL | vl.NOTHING_VAL);
 const StringType = *const vl.ObjString;
+const LOAD_FACTOR: f64 = @as(f64, vl.LOAD_FACTOR) / @as(f64, 100);
 
 pub fn Map(comptime K: type, comptime V: type) type {
   const KVEntry = struct {key: K, value: V};
@@ -66,7 +66,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
     };
 
     fn resizeMap(self: *Self, vm: *VM, ensure: usize) void {
-      const new_capacity = Mem.growCapacity(self.capacity) + ensure;
+      const new_capacity = Mem.growCapacity(self.capacity + ensure);
       var tmp = vm.mem.allocBuf(KVEntry, new_capacity, vm);
       std.debug.assert(new_capacity == tmp.len);
       for (tmp) |*entry| {
@@ -123,7 +123,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
     }
 
     pub fn put(self: *Self, key: K, value: V, vm: *VM) bool {
-      if (self.len >= (self.capacity * LOAD_FACTOR)) {
+      if (self.len >= @floatToInt(usize, @intToFloat(f64, self.capacity) * LOAD_FACTOR)) {
         self.resizeMap(vm, 0);
       }
       var entry = self.findEntry(self.entries, self.capacity, key);

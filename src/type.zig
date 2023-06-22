@@ -397,7 +397,26 @@ pub const Type = struct {
 
   pub fn clone(self: *Self, A: std.mem.Allocator) *Self {
     switch (self.kind) {
-      .Constant, .Concrete, .Variable, .Recursive, .Function => return self,
+      .Constant, .Concrete, .Variable, .Recursive => return self,
+      .Function => |*fun| {
+        var new = Function.init(A, fun.ret.clone(A));
+        new.params.ensureTotalCapacity(fun.params.capacity());
+        if (fun.tparams) |tparams| {
+          var new_tparams = util.box(TypeList, TypeList.init(A), A);
+          new_tparams.ensureTotalCapacity(tparams.capacity());
+          for (tparams.items()) |ty| {
+            new_tparams.append(ty.clone(A));
+          }
+          new.tparams = new_tparams;
+        }
+        for (fun.params.items()) |ty| {
+          new.params.append(ty.clone(A));
+        }
+        new.node = fun.node;
+        var ret = Type.init(.{.Function = new}).box(A);
+        ret.setRestFields(self);
+        return ret;
+      },
       .Generic => |*gen| {
         var new = Generic.init(A, gen.base.clone(A));
         new.tparams.ensureTotalCapacity(gen.tparams.capacity());
@@ -1106,8 +1125,10 @@ pub const Type = struct {
           }
         }
         _ = try writer.write(")");
-        _ = try writer.write(": ");
-        _ = try writer.write(try fun.ret._typename(allocator, depth));
+        if (!fun.ret.isVariable() or fun.ret.variable().tokens.itemAt(0).ty != .TkEof) {
+          _ = try writer.write(": ");
+          _ = try writer.write(try fun.ret._typename(allocator, depth));
+        }
         return writer.context.items;
       },
       .Variable => |*vr| try writeName(allocator, &vr.tokens),

@@ -382,7 +382,7 @@ pub const TypeLinker = struct {
 
   fn resolveType(self: *Self, typ: *Type, debug: Token) TypeLinkError!*Type {
     try self.assertMaxSubStepsNotExceeded(false, debug);
-    if (typ.isSimple() or typ.isRecursive()) {
+    if (typ.isSimple() or typ.isConstant() or typ.isRecursive()) {
       return typ;
     }
     if (typ.isGeneric()) {
@@ -443,6 +443,17 @@ pub const TypeLinker = struct {
         }
         return typ;
       }
+    }
+    if (typ.isFunction() and !typ.function().isGeneric()) {
+      var fun = typ.function();
+      for (fun.params.items(), 0..) |param, i| {
+        fun.params.items()[i] = try self.resolveType(param, debug);
+      }
+      var count = self.diag.count();
+      fun.ret = self.resolveType(fun.ret, debug) catch {
+        self.diag.popUntil(count);
+        return typ;
+      };
     }
     if (typ.isUnion()) {
       // TODO: need to figure out how to do this in-place

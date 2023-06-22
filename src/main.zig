@@ -1145,7 +1145,7 @@ test "while loop" {
   _ = try doTest(src3);
 }
 
-test "regular-functions" {
+test "functions-0" {
   var src =
   \\ type T = num
   \\ def j(a: T): T
@@ -1192,7 +1192,7 @@ test "regular-functions" {
   _ = try doTest(src4);
 }
 
-test "generic-functions" {
+test "functions-1" {
   var src = 
   \\ def funny
   \\    def foo{T}(a: T): T
@@ -1244,7 +1244,7 @@ test "generic-functions" {
   _ = try doTest(src3);
 }
 
-test "generic-functions-2" {
+test "functions-2" {
   var src =
   \\ # mutually recursive
   \\ def mutA{U}(x: U)
@@ -1289,4 +1289,320 @@ test "generic-functions-2" {
   \\ fox('a', nil)
   ;
   _ = try doTest2(src);
+}
+
+test "functions-3" {
+  var src =
+  \\ def add{T} (k: T, t: num)
+  \\    return (k, t)
+  \\ end
+  \\ add(3, 4)
+  \\ let p = add
+  \\ p('fox', 12)
+  \\ def add5{T}(a: T)
+  \\  return a + 5
+  \\ end
+  \\ let j = add5
+  \\ j(12)
+  \\ def add5(a: num)
+  \\  return a + 5 * 2
+  \\ end
+  \\ let j = add5
+  \\ j(12)
+  \\ let minus = [def (a: num, b: num) => a - b][0]
+  \\ minus(132, 12)
+  \\ let p = minus
+  \\ p(12, 4)
+  ;
+  _ = try doTest(src);
+}
+
+test "functions-4" {
+  var src =
+  \\ do
+  \\ def add {T} (k: T, t: num)
+  \\    return (k, t)
+  \\ end
+  \\ add(3, 4)
+  \\ let p = add
+  \\ p('fox', 12)
+  \\ def add5{T}(a: T)
+  \\  return a + 5
+  \\ end
+  \\ let j = add5
+  \\ j(12)
+  \\ def add5(a: num)
+  \\  return a + 5 * 2
+  \\ end
+  \\ let j = add5
+  \\ j(12)
+  \\ let minus = [def (a: num, b: num): num
+  \\  return a - b
+  \\ end][0]
+  \\ minus(132, 12)
+  \\ let p = minus
+  \\ p(12, 4)
+  \\ end
+  \\ let j = def => 5
+  \\ j()
+  ;
+  _ = try doTest(src);
+}
+
+test "functions-5" {
+  var src =
+  \\ let j = [89, def(x: num) => x * 2, def(y: num) => y + 5]
+  \\ if j[1] is not num
+  \\  if j[0] is num
+  \\    j[0] += j[1](16)
+  \\  end
+  \\ end
+  \\ j
+  \\
+  \\ do
+  \\  def higher{T, J}(x: num): fn(J): T
+  \\   return def (y: num): T => x * y
+  \\  end
+  \\  let mul = higher{num, num}(5)
+  \\  mul(6) == 30
+  \\ end
+  \\
+  \\ def higher{T, J}(x: num): fn(J): T
+  \\  return def (y: num): T => x * y
+  \\ end
+  \\ let mul = higher{num, num}(5)
+  \\ mul(12) == 60
+  ;
+  _ = try doTest(src);
+}
+
+test "functions-6" {
+  var src =
+  \\ do
+  \\  (def (x: str) 
+  \\   return x
+  \\  end)('ppp') == "ppp"
+  \\ end
+  \\
+  \\ let j = 12
+  \\ (def => j * 3)() == 36
+  \\ [(def => j * 3)][0]() + 12 == 48
+  \\
+  \\ do
+  \\  let j = 12
+  \\  (def => j * 3)() == 36
+  \\  [(def => j * 3)][0]() + 12 == 48
+  \\  (def => [(def => j * 3)][0]() + 12 == 48)()
+  \\ end
+  \\ let j = 6
+  \\ (def => [(def => j * 3)][0]() + 6 == 24)()
+  ;
+  _ = try doTest(src);
+}
+
+test "functions-7" {
+  var src =
+  \\ do
+  \\  do
+  \\    def fun
+  \\     def read{T}(x: T): list{T}
+  \\       return [x,]
+  \\     end
+  \\     read(5)
+  \\     read('fox')
+  \\     read(fun)
+  \\    end
+  \\    fun()
+  \\  end
+  \\ end
+  \\ def apply{T}(x: fn(T):T, param: T): T
+  \\  return x(param)
+  \\ end
+  \\ apply(def (x: num) => x * x, 5)
+  \\ apply(def (x: str) => x, 'fox')
+  \\ do
+  \\  def apply{T}(x: fn(T):T, param: T): T
+  \\   return param
+  \\  end
+  \\  apply(def (x: num) => x * x, 5)
+  \\  apply(def (x: str) => x, 'fox')
+  \\ end
+  \\ def fun
+  \\  def read{T}(x: T): list{T}
+  \\    return [x,]
+  \\  end
+  \\  read(5)
+  \\  read('fox')
+  \\  read(fun)
+  \\ end
+  \\ fun()
+  ;
+  _ = try doTest(src);
+}
+
+test "functions-8" {
+    var src =
+  \\ do
+  \\  do
+  \\    def fun
+  \\     def read{T}(x: T): list{T}
+  \\       return [x,]
+  \\     end
+  \\     read(5)
+  \\     read('fox')
+  \\     read(fun)
+  \\    end
+  \\    fun()
+  \\  end
+  \\ end
+  \\ def apply{T}(x: fn(T):T, param: T): T
+  \\  return x(param)
+  \\ end
+  \\ apply(def (x: num) => x * x, 5)
+  \\ apply(def (x: str) => x, 'fox')
+  \\ do
+  \\  def apply{T}(x: fn(T):T, param: T): T
+  \\   return param
+  \\  end
+  \\  apply(def (x: num) => x * x, 5)
+  \\  apply(def (x: str) => x, 'fox')
+  \\ end
+  \\ def fun
+  \\  def read{T}(x: T): list{T}
+  \\    return [x,]
+  \\  end
+  \\  read(5)
+  \\  read('fox')
+  \\  read(fun)
+  \\ end
+  \\ fun()
+  \\ do
+  \\  (def (x: str) 
+  \\   return x
+  \\  end)('ppp') == "ppp"
+  \\ end
+  \\
+  \\ let j = 12
+  \\ (def => j * 3)() == 36
+  \\ [(def => j * 3)][0]() + 12 == 48
+  \\
+  \\ do
+  \\  let j = 12
+  \\  (def => j * 3)() == 36
+  \\  [(def => j * 3)][0]() + 12 == 48
+  \\  (def => [(def => j * 3)][0]() + 12 == 48)()
+  \\ end
+  \\ let j = 6
+  \\ (def => [(def => j * 3)][0]() + 6 == 24)()
+    \\ let j = [89, def(x: num) => x * 2, def(y: num) => y + 5]
+  \\ if j[1] is not num
+  \\  if j[0] is num
+  \\    j[0] += j[1](16)
+  \\  end
+  \\ end
+  \\ j
+  \\
+  \\ do
+  \\  def higher{T, J}(x: num): fn(J): T
+  \\   return def (y: num): T => x * y
+  \\  end
+  \\  let mul = higher{num, num}(5)
+  \\  mul(6) == 30
+  \\ end
+  \\
+  \\ def higher{T, J}(x: num): fn(J): T
+  \\  return def (y: num): T => x * y
+  \\ end
+  \\ let mul = higher{num, num}(5)
+  \\ mul(12) == 60
+    \\ do
+  \\ def add {T} (k: T, t: num)
+  \\    return (k, t)
+  \\ end
+  \\ add(3, 4)
+  \\ let p = add
+  \\ p('fox', 12)
+  \\ def add5{T}(a: T)
+  \\  return a + 5
+  \\ end
+  \\ let j = add5
+  \\ j(12)
+  \\ def add5(a: num)
+  \\  return a + 5 * 2
+  \\ end
+  \\ let j = add5
+  \\ j(12)
+  \\ let minus = [def (a: num, b: num): num
+  \\  return a - b
+  \\ end][0]
+  \\ minus(132, 12)
+  \\ let p = minus
+  \\ p(12, 4)
+  \\ end
+  \\ let j = def => 5
+  \\ j()
+  \\
+  \\ def add{T} (k: T, t: num)
+  \\    return (k, t)
+  \\ end
+  \\ add(3, 4)
+  \\ let p = add
+  \\ p('fox', 12)
+  \\ def add5{T}(a: T)
+  \\  return a + 5
+  \\ end
+  \\ let j = add5
+  \\ j(12)
+  \\ def add5(a: num)
+  \\  return a + 5 * 2
+  \\ end
+  \\ let j = add5
+  \\ j(12)
+  \\ let minus = [def (a: num, b: num) => a - b][0]
+  \\ minus(132, 12)
+  \\ let p = minus
+  \\ p(12, 4)
+  \\
+  \\ def funny2{U}(x: U)
+  \\    def foo{T}(a: T, b: U): T
+  \\     return a * (b - 2)
+  \\    end
+  \\    let k = foo(10, x)
+  \\    let p = foo(56, x)
+  \\    k += 5
+  \\    return (k, p)
+  \\ end
+  \\ funny2(123)
+  \\ def funny2{U}
+  \\    def foo{T}(a: T, b: U): T
+  \\     return a * (b - 2)
+  \\    end
+  \\    let x: U = 123
+  \\    let k = foo(10, x)
+  \\    let p = foo(56, x)
+  \\    k += 5
+  \\    return (k, p)
+  \\ end
+  \\ funny2{num}()
+    \\ def funny
+  \\    def foo{T}(a: T): T
+  \\     return a
+  \\    end
+  \\    let j = foo{str}('5')
+  \\    let k = foo(10)
+  \\    let p = foo(56)
+  \\    k += 5
+  \\    return (j, k, p)
+  \\ end
+  \\ funny()
+  \\ def fancy{T}(x: T)
+  \\  let j: T = x
+  \\  return j
+  \\ end
+  \\ def id{T}(val: T): T
+  \\  return val
+  \\ end
+  \\ [fancy(5), fancy('oops'), fancy(true), id([1, 2, {'a': 'fox'}])]
+  ;
+  _ = try doTest(src);
 }

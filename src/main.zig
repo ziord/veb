@@ -1606,3 +1606,34 @@ test "functions-8" {
   ;
   _ = try doTest(src);
 }
+
+test "functions-9" {
+  var src =
+  \\ def ret3(n: num): num | str | bool 
+  \\  if n < 5
+  \\    return 3
+  \\  end
+  \\  if n < 12
+  \\    return 'hey'
+  \\  end
+  \\  if n > 15
+  \\    return true
+  \\  end
+  \\  return 'oops'
+  \\ end
+  \\
+  \\ def ret(n: num | str | bool): num | str | bool
+  \\  if n is str
+  \\    return n
+  \\  end
+  \\  if n is bool
+  \\    return n
+  \\  end
+  \\  return n + 12
+  \\ end
+  \\
+  \\ ret3(7)
+  \\ ret(7)
+  ;
+  _ = try doTest(src);
+}

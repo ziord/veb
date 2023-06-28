@@ -37,6 +37,7 @@ pub const Parser = struct {
   loops: u32 = 0,
 
   const Self = @This();
+  var name_id: u32 = 0;
 
   const BindingPower = enum (u32) {
     None,        // other
@@ -113,6 +114,8 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkMap
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkStr
     .{.bp = .None, .prefix = Self.nullable, .infix = null},             // TkNil
+    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkErr
+    .{.bp = .Unary, .prefix = Self.tryExpr, .infix = null},             // TkTry
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkBool
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkList
     .{.bp = .None, .prefix = null, .infix = null},                      // TkThen
@@ -125,13 +128,14 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkFalse
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkTuple
     .{.bp = .None, .prefix = null, .infix = null},                      // TkWhile
+    .{.bp = .Term, .prefix = null, .infix = Self.orElseExpr},           // TkOrElse
     .{.bp = .None, .prefix = null, .infix = null},                      // TkReturn
     .{.bp = .None, .prefix = null, .infix = null},                      // TkContinue
     .{.bp = .None, .prefix = Self.number, .infix = null},               // TkNumber
     .{.bp = .None, .prefix = Self.string, .infix = null},               // TkString
     .{.bp = .None, .prefix = Self.string, .infix = null},               // TkAllocString
     .{.bp = .None, .prefix = Self.variable, .infix = null},             // TkIdent
-    .{.bp = .None, .prefix = null, .infix = null},                      // TkErr
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkError
     .{.bp = .None, .prefix = null, .infix = null},                      // TkEof
   };
 
@@ -219,6 +223,14 @@ pub const Parser = struct {
 
   inline fn inFun(self: *Self) bool {
     return self.funcs != null;
+  }
+
+  fn genName(self: *Self, start: []const u8) []const u8 {
+    var name = std.fmt.allocPrint(
+      self.allocator, "$.{s}.{}", .{start, Self.name_id}
+    ) catch return "";
+    Self.name_id += 1;
+    return name;
   }
 
   inline fn consumeNlOrEof(self: *Self) !void {
@@ -369,6 +381,11 @@ pub const Parser = struct {
     }
     self.decNl();
     try self.consume(.TkRBracket);
+    if (self.match(.TkExMark)) {
+      var er = self.newNode();
+      er.* = .{.AstError = ast.ErrorNode.init(node)};
+      return er;
+    }
     return node;
   }
 
@@ -501,6 +518,66 @@ pub const Parser = struct {
     return node;
   }
 
+  fn blockExpr(self: *Self) !*Node {
+     _ = self.match(.TkNewline);
+    var block = self.newNode();
+    block.* = .{.AstBlock = ast.BlockNode.init(self.allocator, null)};
+    while (!self.check(.TkEof) and !self.check(.TkEnd)) {
+      try self.addStatement(&block.AstBlock.nodes);
+    }
+    try self.consume(.TkEnd);
+    return block;
+  }
+
+  fn tryExpr(self: *Self, assignable: bool) !*Node {
+    _ = assignable;
+    if (self.funcs == null) {
+      return self.err(
+        self.current_tok,
+        "use of 'try' expression in top-level code. Consider using 'orelse' instead."
+      );
+    }
+    try self.consume(.TkTry);
+    var ok = try self._parse(ptable[@enumToInt(self.previous_tok.ty)].bp);
+    var token = lex.Token.tokenFrom(&self.previous_tok);
+    token.ty = .TkAllocString;
+    token.value = self.genName("e");
+    var evar = self.newNode();
+    evar.* = .{.AstVar = ast.VarNode.init(token)};
+    var err_ = self.newNode();
+    err_.* = .{.AstRet = ast.RetNode.init(evar, token)};
+    var node = self.newNode();
+    node.* = .{.AstOrElse = ast.OrElseNode.init(ok, err_, &evar.AstVar)};
+    node.AstOrElse.from_try = true;
+    return node;
+  }
+
+  fn orElseExpr(self: *Self, left: *Node, assignable: bool) !*Node {
+    // expr orelse |e|? expr | (do .. end)
+    _ = assignable;
+    if (left.isOrElse()) {
+      return self.err(
+        self.previous_tok,
+        "try/orelse expression should not be used in an 'orelse' expression"
+      );
+    }
+    try self.consume(.TkOrElse);
+    var evar: ?*ast.VarNode = null;
+    if (self.match(.TkPipe)) {
+      evar = &(try self.variable(false)).AstVar;
+      try self.consume(.TkPipe);
+    }
+    var err_: *Node = undefined;
+    if (self.match(.TkDo)) {
+      err_ = try self.blockExpr();
+    } else {
+      err_ = try self.parseExpr();
+    }
+    var node = self.newNode();
+    node.* = .{.AstOrElse = ast.OrElseNode.init(left, err_, evar)};
+    return node;
+  }
+
   fn handleAugAssign(self: *Self, left: *Node, assignable: bool) !*Node {
     // assignments are not expressions, but statements
     if (!assignable) return left;
@@ -581,6 +658,7 @@ pub const Parser = struct {
         if (typ.isListTy()) 1
         else if (typ.isMapTy()) 2
         else if (typ.isTupleTy()) 1
+        else if (typ.isErrorTy()) 1
         else return
       );
       if (gen.tparams_len() != exp) {
@@ -677,10 +755,14 @@ pub const Parser = struct {
   fn builtinOrRefType(self: *Self) !Type {
     if (self.check(.TkIdent)) {
       return try self.refType();
-    } else if (self.check(.TkList) or self.check(.TkMap) or self.check(.TkTuple)) {
-      return try self.builtinType();
     } else {
-      return self.err(self.current_tok, "invalid type");
+      return switch (self.current_tok.ty) {
+        .TkList,
+        .TkMap,
+        .TkTuple,
+        .TkErr => try self.builtinType(),
+        else => self.err(self.current_tok, "invalid type")
+      };
     }
   }
 
@@ -737,7 +819,7 @@ pub const Parser = struct {
     var typ: Type = undefined;
     switch (self.current_tok.ty) {
       // Generic
-      .TkIdent, .TkList, .TkMap, .TkTuple => {
+      .TkIdent, .TkList, .TkMap, .TkTuple, .TkErr => {
         typ = try self.tGeneric();
       },
       .TkFn => {
@@ -1049,14 +1131,7 @@ pub const Parser = struct {
         block.AstBlock.nodes.append(rexp);
         break :blk block;
       } else {
-        _ = self.match(.TkNewline);
-        var block = self.newNode();
-        block.* = .{.AstBlock = ast.BlockNode.init(self.allocator, null)};
-        while (!self.check(.TkEof) and !self.check(.TkEnd)) {
-          try self.addStatement(&block.AstBlock.nodes);
-        }
-        try self.consume(.TkEnd);
-        break :blk block;
+        break :blk try self.blockExpr();
       }
     };
     self.funcs = prev_func;

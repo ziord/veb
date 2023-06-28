@@ -84,6 +84,7 @@ pub const Disassembler = struct {
       .Sgsym => _2ArgsInst("sgsym", word),
       .Bcst => _2ArgsInst("bcst", word),
       .Call => _2ArgsInst("call", word),
+      .Nerr => _2ArgsInst("nerr", word),
       .Ret => _2ArgsInst("ret", word),
       .Gupv => _2ArgsInst("gupv", word),
       .Supv => _2ArgsInst("supv", word),

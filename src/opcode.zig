@@ -94,6 +94,10 @@ pub const OpCode = enum (u8) {
   // [6] [8] [18]
   Not,
 
+  // nerr rx, val
+  // [6] [8] [18]
+  Nerr,
+
   // nlst rx, size
   // [6] [8] [18]
   Nlst,

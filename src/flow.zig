@@ -170,6 +170,16 @@ pub const CFGBuilder = struct {
     };
   }
 
+  pub fn initWithExit(allocator: std.mem.Allocator, exit: *FlowNode) Self {
+    var empty = createEmptyNode(allocator);
+    return Self {
+      .entry = FlowNode.init(.CfgEntry, empty, allocator),
+      .exit = exit,
+      .dead = FlowNode.init(.CfgDead, empty, allocator),
+      .nodes = std.AutoHashMap(*Node, *FlowNode).init(allocator),
+    };
+  }
+
   inline fn alloc(self: *Self) std.mem.Allocator {
     return self.nodes.allocator;
   }
@@ -420,8 +430,24 @@ pub const CFGBuilder = struct {
       .AstWhile => self.linkWhile(node, prev, edge),
       .AstControl => self.linkControl(node, prev, edge, false),
       .AstFun => self.linkFun(node, prev, edge),
-      else => unreachable,
+      else => |nd| {
+        std.log.debug("trying to link node: {}\n", .{nd});
+        return self.linkAtomic(node, prev, edge, .CfgOther);
+      },
     };
+  }
+
+  pub fn buildOrElse(self: *Self, cfg: *CFG, node: *Node) FlowMeta {
+    self.cfg = cfg;
+    var err = node.AstOrElse.err;
+    if (!err.isBlock()) {
+      err = util.alloc(Node, self.alloc());
+      var block = ast.BlockNode.init(self.alloc(), node.AstOrElse.ok);
+      block.nodes.append(node.AstOrElse.err);
+      err.* = .{.AstBlock = block};
+    }
+    _ = self.link(err, self.entry.toList(self.alloc()), .ESequential);
+    return FlowMeta.init(self.entry, self.exit, self.dead);
   }
 
   pub fn buildFun(self: *Self, cfg: *CFG, node: *Node) void {

@@ -678,6 +678,15 @@ pub const TypeLinker = struct {
     }
   }
 
+  fn linkError(self: *Self, node: *ast.ErrorNode) !void {
+    try self.link(node.expr);
+  }
+
+  fn linkOrElse(self: *Self, node: *ast.OrElseNode) !void {
+    try self.link(node.ok);
+    try self.link(node.err);
+  }
+
   fn linkProgram(self: *Self, node: *ast.ProgramNode) !void {
     self.ctx.enterScope();
     for (node.decls.items()) |item| {
@@ -715,6 +724,8 @@ pub const TypeLinker = struct {
       .AstCall => |*nd| try self.linkCall(nd),
       .AstFun => |*nd| try self.linkFun(nd, false),
       .AstRet => |*nd| try self.linkRet(nd),
+      .AstError => |*nd| try self.linkError(nd),
+      .AstOrElse => |*nd| try self.linkOrElse(nd),
       .AstProgram => |*nd| try self.linkProgram(nd),
       .AstSimpleIf, .AstCondition, .AstEmpty => unreachable,
     }

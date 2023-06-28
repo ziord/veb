@@ -35,8 +35,8 @@ pub const VM = struct {
   const TypeTag2CheckFunc = [_]*const fn(Value) bool {
     vl.isBoolNoInline, vl.isNumberNoInline, vl.isStringNoInline,
     vl.isNilNoInline, vl.isVoidNoInline, vl.isListNoInline, vl.isMapNoInline,
-    vl.isTupleNoInline, vl.isFnNoInline, vl.isClosureNoInline, vl.isUpvalueNoInline,
-    vl.isZFnNoInline, vl.isFiberNoInline
+    vl.isTupleNoInline, vl.isErrorNoInline, vl.isFnNoInline, vl.isClosureNoInline,
+    vl.isUpvalueNoInline, vl.isZFnNoInline, vl.isFiberNoInline
   };
   pub const ZFnNames = [_][]const u8 {
     "",
@@ -498,9 +498,8 @@ pub const VM = struct {
           // is rx, rk(x), rk(x)
           var rx: u32 = undefined;
           var rk1: u32 = undefined;
-          var rk2: u32 = undefined;
-          self.read3Args(inst, &rx, &rk1, &rk2);
-          const ty_tag = vl.asIntNumber(usize, self.RK(rk2, fp));
+          var ty_tag: u32 = undefined;
+          self.read3Args(inst, &rx, &rk1, &ty_tag);
           @setRuntimeSafety(false);
           fp.stack[rx] = vl.boolVal(TypeTag2CheckFunc[ty_tag](self.RK(rk1, fp)));
           continue;
@@ -600,6 +599,15 @@ pub const VM = struct {
           self.read2Args(inst, &rx, &rk);
           @setRuntimeSafety(false);
           fp.stack[rx] = vl.boolVal(vl.valueFalsy(self.RK(rk, fp)));
+          continue;
+        },
+        .Nerr => {
+          // nerr rx, val
+          var rx: u32 = undefined;
+          var rk: u32 = undefined;
+          self.read2Args(inst, &rx, &rk);
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.objVal(vl.createError(self, self.RK(rk, fp)));
           continue;
         },
         .Nlst => {

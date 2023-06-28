@@ -25,13 +25,16 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"map", .TkMap},
   .{"str", .TkStr},
   .{"nil", .TkNil},
+  .{"try", .TkTry},
   .{"bool", .TkBool},
   .{"list", .TkList},
+  .{"err", .TkErr},
   .{"type", .TkType},
   .{"tuple", .TkTuple},
   .{"then", .TkThen},
   .{"break", .TkBreak},
   .{"void", .TkVoid},
+  .{"orelse", .TkOrElse},
   .{"continue", .TkContinue},
 });
 
@@ -84,6 +87,8 @@ pub const TokenType = enum (u8) {
   TkMap,            // map
   TkStr,            // str
   TkNil,            // nil
+  TkErr,            // err
+  TkTry,            // try
   TkBool,           // bool
   TkList,           // list
   TkThen,           // then
@@ -96,13 +101,14 @@ pub const TokenType = enum (u8) {
   TkFalse,          // false
   TkTuple,          // tuple
   TkWhile,          // while
+  TkOrElse,         // orelse
   TkReturn,         // return
   TkContinue,       // continue
   TkNumber,         // <number>
   TkString,         // <string>
   TkAllocString,    // <string>
   TkIdent,          // <identifier>
-  TkErr,            // <error>
+  TkError,          // <error>
   TkEof,            // <eof>
 
 
@@ -201,6 +207,8 @@ pub const TokenType = enum (u8) {
       .TkMap => "map",
       .TkStr => "str",
       .TkNil => "nil",
+      .TkErr => "err",
+      .TkTry => "try",
       .TkBool => "bool",
       .TkList => "list",
       .TkThen => "then",
@@ -213,12 +221,13 @@ pub const TokenType = enum (u8) {
       .TkFalse => "false",
       .TkTuple => "tuple",
       .TkWhile => "while",
+      .TkOrElse => "orelse",
       .TkReturn => "return",
       .TkContinue => "continue",
       .TkNumber => "<number>",
       .TkString, .TkAllocString => "<string>",
       .TkIdent => "<identifier>",
-      .TkErr => "<error>",
+      .TkError => "<error>",
       .TkEof => "<eof>",
     };
   }
@@ -319,7 +328,7 @@ pub const Token = struct {
   }
 
   pub fn isErr(self: @This()) bool {
-    return self.is(.TkErr);
+    return self.is(.TkError);
   }
 
   pub fn parseNum(self: @This()) !f64 {
@@ -472,7 +481,7 @@ pub const Lexer = struct {
   }
 
   fn errToken(self: *Self, cause: ?[]const u8) Token {
-    var token = self.newToken(.TkErr);
+    var token = self.newToken(.TkError);
     token.value = cause orelse "Illegal token";
     return token;
   }

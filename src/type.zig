@@ -155,6 +155,15 @@ pub const Union = struct {
     return false;
   }
 
+  pub inline fn isErrorUnion(self: *@This()) bool {
+    // TODO: figure out if this is a good idea.
+    if (self.isNullable()) return false;
+    for (self.variants.values()) |ty| {
+      if (ty.isErrorTy()) return true;
+    }
+    return false;
+  }
+
   pub fn addAll(self: *@This(), types: *TypeList) void {
     for (types.items()) |ty| {
       self.set(ty);
@@ -551,6 +560,14 @@ pub const Type = struct {
     };
   }
 
+  /// an error union type
+  pub inline fn isErrorUnion(self: *Self) bool {
+    return switch (self.kind) {
+      .Union => |*uni| uni.isErrorUnion(),
+      else => false,
+    };
+  }
+
   /// a union type
   pub inline fn isUnion(self: *Self) bool {
     return switch (self.kind) {
@@ -667,6 +684,10 @@ pub const Type = struct {
 
   pub fn isTupleTy(self: *Self) bool {
     return self.isXClassTy("tuple");
+  }
+
+  pub fn isErrorTy(self: *Self) bool {
+    return self.isXClassTy("err");
   }
 
   /// extract the appropriate typeinfo of this type

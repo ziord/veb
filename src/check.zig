@@ -172,7 +172,7 @@ const TypeEnv = struct {
       var t1 = self.global.lookup(name).?;
       var neg = blk: {
         break :blk t1.negate(t2, allocator) catch {
-          // TODO: log this
+          std.log.debug("negate with t1 exactly equal to t2 results in the 'never' type\n", .{});
           break :blk (
             if (t1.typeidEql(t2)) Type.newNever(allocator)
             else t1
@@ -195,6 +195,8 @@ pub const TypeChecker = struct {
   diag: *Diagnostic,
   generics: ds.ArrayHashMap(*Node, *ds.ArrayList(FnInfo)),
   linker: *TypeLinker = undefined,
+  current_fn: ?*FlowMeta = null,
+  void_ty: *Type,
   cycles: NodeList,
   builder: CFGBuilder,
   analyzer: Analysis,
@@ -229,6 +231,7 @@ pub const TypeChecker = struct {
       .builder = CFGBuilder.init(allocator),
       .cycles = NodeList.init(allocator),
       .analyzer = Analysis.init(diag),
+      .void_ty = Type.newVoid().box(allocator),
     };
   }
 
@@ -996,7 +999,7 @@ pub const TypeChecker = struct {
     } else if (!rhsTy.isTypeTy()) {
       var help = (
         if (rhsTy.isLikeConstant())
-          "\nHelp: For constant types, consider using '==' or '!=' operator instead."
+          "\n\tHelp: For constant types, consider using '==' or '!=' operator instead."
         else ""
       );
       return self.error_(
@@ -1161,8 +1164,7 @@ pub const TypeChecker = struct {
     }
     self.ctx.leaveScope();
     node.checked = true;
-    // crash and burn
-    return undefined;
+    return self.void_ty;
   }
 
   fn inferWhile(self: *Self, node: *ast.WhileNode) !*Type {
@@ -1232,7 +1234,10 @@ pub const TypeChecker = struct {
       };
       try self.analyzer.analyzeDeadCode(flo.dead);
       self.cycles.append(node);
+      var prev_fn = self.current_fn;
+      self.current_fn = &flo;
       try self.flowInfer(flo.entry, true);
+      self.current_fn = prev_fn;
       _ = self.cycles.pop();
       ty.function().ret = try self.inferFunReturnType(node, flo);
       fun.body.AstBlock.checked = true;
@@ -1287,7 +1292,7 @@ pub const TypeChecker = struct {
     // - if we find a recursive type, and a non-void type, use the non-void type as the function's return type
     // - if we find a recursive type, and a void type or only a recursive type, then use the type 'never'
     var uni = Union.init(self.ctx.allocator());
-    var void_ty: *Type = if (has_void) Type.newVoid().box(self.ctx.allocator()) else undefined;
+    var void_ty: *Type = if (has_void) self.void_ty else undefined;
     var nvr_ty: *Type = if (has_rec) Type.newNever(self.ctx.allocator()) else undefined;
     for (prev_nodes.items()) |nd| {
       // skip dead node, since it's most likely at exit
@@ -1516,9 +1521,37 @@ pub const TypeChecker = struct {
     if (node.expr) |expr| {
       node.typ = try self.infer(expr);
     } else {
-      node.typ = Type.newVoid().box(self.ctx.allocator());
+      node.typ = self.void_ty;
     }
     return node.typ.?;
+  }
+
+  fn inferError(self: *Self, node: *ast.ErrorNode) !*Type {
+    if (node.typ) |typ| {
+      return typ;
+    }
+    var ty = try self.infer(node.expr);
+    if (ty.isErrorTy()) {
+      return self.error_(
+        true, node.expr.getToken(),
+        "nested error types are unsupported: '{s}'", .{self.getTypename(ty)}
+      );
+    }
+    var al = self.ctx.allocator();
+    var base = Type.newConcrete(.TyClass, "err").box(al);
+    var typ = Type.newGeneric(al, base).box(al);
+    typ.generic().append(ty);
+    node.typ = typ;
+    return typ;
+  }
+
+  fn inferOrElse(self: *Self, node: *Node) !*Type {
+    // - build cfg of this node. 
+    var exit = if (self.current_fn) |curr| curr.exit else self.cfg.program.exit;
+    var builder = CFGBuilder.initWithExit(self.ctx.allocator(), exit);
+    var flo = builder.buildOrElse(&self.cfg, node);
+    var ok_ty = try self.infer(node.AstOrElse.ok);
+    return try self.checkOrElse(node, ok_ty, flo);
   }
 
   fn inferProgram(self: *Self, node: *ast.ProgramNode) !*Type {
@@ -1686,6 +1719,72 @@ pub const TypeChecker = struct {
     }
   }
 
+  fn excludeError(self: *Self, typ: *Type, debug: Token) !*Type {
+    var errors: usize = 0;
+    var uni = Union.init(self.ctx.allocator());
+    for (typ.union_().variants.values()) |ty| {
+      if (ty.isErrorTy()) {
+        errors += 1;
+      } else {
+        uni.set(ty);
+      }
+      if (errors > 1) {
+        return self.error_(
+          true, debug, "error unions with multiple error types are unsupported: '{s}'",
+          .{self.getTypename(typ)}
+        );
+      }
+    }
+    return uni.toType().box(self.ctx.allocator());
+  }
+
+  fn checkOrElse(self: *Self, node: *Node, ok_ty: *Type, flo: FlowMeta) !*Type {
+    // - check that try is used with an error union type
+    // - check that the type on `ok` and `err` are related
+    var oe = &node.AstOrElse;
+    var debug = oe.ok.getToken();
+    if (!ok_ty.isErrorUnion()) {
+      var help = (
+        if (ok_ty.isNullable())
+          "\n\tHelp: nullable types take precedence over error types"
+        else ""
+      ); 
+      return self.error_(
+        true, debug,
+        "Expected error union type in 'try' expression. Type '{s}' is not an error union{s}",
+        .{self.getTypename(ok_ty), help}
+      );
+    }
+    var typ = try self.excludeError(ok_ty, debug);
+    // if excludeError() doesn't err, it's safe to say this type has only one error type
+    self.ctx.varScope.pushScope();
+    errdefer self.ctx.varScope.popScope();
+    if (oe.evar) |evar| {
+      for (ok_ty.union_().variants.values()) |ty| {
+        if (ty.isErrorTy()) {
+          evar.typ = ty;
+          self.insertVar(evar.token.value, ty);
+          break;
+        }
+      }
+    }
+    try self.flowInfer(flo.entry, true);
+    var err_ty = if (oe.err.isBlock()) self.void_ty else oe.err.getType().?;
+    if (oe.from_try and oe.err.isRet()) {
+      // TODO
+    } else if (!typ.isRelatedTo(err_ty, .RCAny, self.ctx.allocator())) {
+      return self.error_(
+        true, debug,
+        "type on both sides of 'orelse' must be related.\n\t"
+        ++ "'{s}' is not related to '{s}'",
+        .{self.getTypename(typ), self.getTypename(err_ty)}
+      );
+    }
+    self.ctx.varScope.popScope();
+    oe.typ = typ;
+    return typ;
+  }
+
   fn infer(self: *Self, node: *Node) TypeCheckError!*Type {
     return switch (node.*) {
       .AstNumber => |*nd| try self.inferNumber(nd),
@@ -1711,6 +1810,8 @@ pub const TypeChecker = struct {
       .AstCall => |*nd| try self.inferCall(nd),
       .AstRet => |*nd| try self.inferRet(nd),
       .AstFun => try self.inferFun(node, null),
+      .AstError => |*nd| try self.inferError(nd),
+      .AstOrElse => try self.inferOrElse(node),
       .AstProgram => |*nd| try self.inferProgram(nd),
       .AstIf, .AstElif, .AstSimpleIf,
       .AstCondition, .AstEmpty, .AstControl => return undefined,
@@ -1743,7 +1844,8 @@ pub const TypeChecker = struct {
       // just stack up as much errors as we can from here.
       var nodes = self.cfg.program.entry.getOutgoingNodes(.ESequential, self.ctx.allocator());
       for (nodes.items()) |flo| {
-       self.flowInfer(flo, false) catch {}; 
+        if (flo.res.isResolved()) continue;
+        self.flowInfer(flo, false) catch {};
       }
     };
     if (self.diag.hasAny()) {

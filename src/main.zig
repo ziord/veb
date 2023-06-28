@@ -1631,9 +1631,166 @@ test "functions-9" {
   \\  end
   \\  return n + 12
   \\ end
+  \\ 
+  \\ (def (x: num) => x * x)(12)
+  \\ (def (x: num)
+  \\  return x * x
+  \\ end)(12)
   \\
   \\ ret3(7)
   \\ ret(7)
+  ;
+  _ = try doTest(src);
+}
+
+test "errors-1" {
+  var src =
+  \\ do
+  \\  def fun(x: num)
+  \\   if x > 2
+  \\     return
+  \\   end
+  \\   return ('foo')!
+  \\  end
+  \\  let j = fun(1) orelse |e| do
+  \\   [e]
+  \\  end
+  \\ end
+  \\
+  \\ def fun(x: num)
+  \\  if x > 2
+  \\    return
+  \\  end
+  \\  return ('foo')!
+  \\ end
+  \\ let j = fun(1) orelse |e| do
+  \\  [e]
+  \\ end
+  ;
+  _ = try doTest(src);
+}
+
+test "errors-2" {
+  var src =
+  \\ def fun(x: num)
+  \\  if x > 5
+  \\    return x
+  \\  else
+  \\    return ('bad')!
+  \\  end
+  \\ end
+  \\
+  \\ def test()
+  \\  let k = fun(12) orelse |e| 15
+  \\  return k
+  \\ end
+  \\ let p = test()
+  \\ p += 2
+  \\ p
+  ;
+  _ = try doTest(src);
+}
+
+test "errors-3" {
+  var src =
+  \\ def fun(x: num)
+  \\  if x > 5
+  \\    return
+  \\  else
+  \\    return ('bad')!
+  \\  end
+  \\ end
+  \\ fun(2) orelse |e| do
+  \\  [e, 'oops']
+  \\  def hehe(p: err{str})
+  \\    return [p]
+  \\  end
+  \\  hehe(e)
+  \\ end
+  ;
+  _ = try doTest(src);
+}
+
+test "errors-4" {
+  var src =
+  \\ do
+  \\  def fun(x: num)
+  \\   if x > 5
+  \\     return 12
+  \\   else
+  \\     return ('bad')!
+  \\   end
+  \\  end
+  \\  
+  \\  def fancy()
+  \\   let j = fun(2) orelse 4
+  \\   return j + 5
+  \\  end
+  \\  let k = fancy()
+  \\  if k is num
+  \\   k += 10
+  \\  end
+  \\  k
+  \\ end
+  ;
+  _ = try doTest(src);
+  var src2 =
+  \\ def fun(x: num)
+  \\  if x > 5
+  \\    return 12
+  \\  else
+  \\    return ('bad')!
+  \\  end
+  \\ end
+  \\
+  \\ def fancy()
+  \\  let j = fun(2) orelse 4
+  \\  return j + 5
+  \\ end
+  \\ let k = fancy()
+  \\ if k is num
+  \\  k += 10
+  \\ end
+  \\ k
+  ;
+  _ = try doTest(src2);
+}
+
+test "errors-5" {
+  var src =
+  \\ do
+  \\  def fun(x: num)
+  \\   if x > 5
+  \\     return x | 3
+  \\   else
+  \\     return ('bad')!
+  \\   end
+  \\  end
+  \\  
+  \\  def fancy{T}(x: T)
+  \\   let j = try fun(x)
+  \\   return j + 5
+  \\  end
+  \\  let k = fancy(12) orelse 0
+  \\  k += 5
+  \\  k
+  \\ end
+  \\
+  \\ def fun(x: num)
+  \\  if x > 5
+  \\    return x | 3
+  \\  else
+  \\    return ('bad')!
+  \\  end
+  \\ end
+  \\
+  \\ def fancy{T}(x: T)
+  \\  let j = try fun(x)
+  \\  return j + 5
+  \\ end
+  \\ let k = fancy(12) orelse 0
+  \\ k += 5
+  \\ k
   ;
   _ = try doTest(src);
 }

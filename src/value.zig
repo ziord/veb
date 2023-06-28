@@ -184,6 +184,7 @@ pub const ObjId = enum(u8) {
   objupvalue,
   objzfn,
   objfiber,
+  objerror,
 };
 
 pub const Obj = extern struct {
@@ -258,6 +259,11 @@ pub const ObjUpvalue = extern struct {
   value: Value = NOTHING_VAL,
   loc: *Value,
   next: ?*ObjUpvalue,
+};
+
+pub const ObjError = extern struct {
+  obj: Obj,
+  val: Value,
 };
 
 pub const ObjFiber = extern struct {
@@ -420,6 +426,10 @@ pub inline fn isFiber(val: Value) bool {
   return isObjType(val, .objfiber);
 }
 
+pub inline fn isError(val: Value) bool {
+  return isObjType(val, .objerror);
+}
+
 pub fn isStringNoInline(val: Value) bool {
   return isString(val);
 }
@@ -456,6 +466,10 @@ pub fn isFiberNoInline(val: Value) bool {
   return isFiber(val);
 }
 
+pub fn isErrorNoInline(val: Value) bool {
+  return isError(val);
+}
+
 pub inline fn asString(val: Value) *ObjString {
   return @ptrCast(*ObjString, asObj(val));
 }
@@ -490,6 +504,10 @@ pub inline fn asUpvalue(val: Value) *ObjUpvalue {
 
 pub inline fn asFiber(val: Value) *ObjFiber {
   return @ptrCast(*ObjFiber, asObj(val));
+}
+
+pub inline fn asError(val: Value) *ObjError {
+  return @ptrCast(*ObjError, asObj(val));
 }
 
 pub fn getZFnName(name: usize) []const u8 {
@@ -570,6 +588,12 @@ pub fn printObject(val: Value) void {
         util.print(")", .{});
       }
     },
+    .objerror => {
+      var err = asError(val);
+      util.print("(", .{});
+      @call(.always_inline, display, .{err.val});
+      util.print(")!", .{});
+    },
     .objvalmap => {
       asMap(val).meta.display();
     },
@@ -609,6 +633,10 @@ pub fn objectToString(val: Value, vm: *VM) Value {
       var buff: [20]u8 = undefined;
       var fmt = std.fmt.bufPrint(&buff, "@tuple[{}]", .{asTuple(val).len}) catch "";
       return createStringV(vm, &vm.strings, fmt, false);
+    },
+    .objerror => {
+      // TODO: val
+      return createStringV(vm, &vm.strings, "@error[]", false);
     },
     .objclosure => {
       var buff: [30]u8 = undefined;
@@ -778,6 +806,12 @@ pub fn createUpvalue(vm: *VM, loc: *Value) *ObjUpvalue {
   upv.next = null;
   upv.loc = loc;
   return upv;
+}
+
+pub fn createError(vm: *VM, val: Value) *ObjError {
+  var err = @call(.always_inline, createObject, .{vm, .objerror, ObjError});
+  err.val = val;
+  return err;
 }
 
 pub fn createFiber(vm: *VM, clo: ?*ObjClosure, origin: FiberOrigin, caller: ?*ObjFiber) *ObjFiber {

@@ -686,27 +686,22 @@ pub const Compiler = struct {
     self.optimizeConstRK();
     var rk1 = try self.c(node.left, dst);
     const dst2 = try self.getReg(node.left.getToken());
-    var rk2 = blk: {
+    var rk2 = tb: {
       var typ = node.right.getType().?;
-      var tag = tb: {
-        if (typ.isGeneric()) {
-          break :tb (
-            if (typ.isListTy()) @enumToInt(TypeKind.TyClass)
-            else if (typ.isMapTy()) @enumToInt(TypeKind.TyClass) + 1
-            else  @enumToInt(TypeKind.TyClass) + 2
-          );
-        } else {
-          break :tb @enumToInt(typ.concrete().tkind);
-        }
-      };
-      break :blk self.cConst(
-        // - 1 to properly exclude TyType
-        dst2, value.numberVal(@intToFloat(f64, tag - 1)),
-        node.op.token.line
-      );
+      if (typ.isGeneric()) {
+        break :tb (
+          if (typ.isListTy()) @enumToInt(TypeKind.TyClass)
+          else if (typ.isMapTy()) @enumToInt(TypeKind.TyClass) + 1
+          else if (typ.isTupleTy()) @enumToInt(TypeKind.TyClass) + 2
+          else if (typ.isErrorTy()) @enumToInt(TypeKind.TyClass) + 3
+          else unreachable
+        );
+      } else {
+        break :tb @enumToInt(typ.concrete().tkind);
+      }
     };
     self.vreg.releaseReg(dst2);
-    self.fun.code.write3ArgsInst(OpCode.Is, dst, rk1, rk2, @intCast(u32, node.line()), self.vm);
+    self.fun.code.write3ArgsInst(OpCode.Is, dst, rk1, (rk2 - 1), @intCast(u32, node.line()), self.vm);
     self.deoptimizeConstRK();
     return dst;
   }
@@ -1233,6 +1228,47 @@ pub const Compiler = struct {
     return dst;
   }
 
+  fn cError(self: *Self, node: *ast.ErrorNode, reg: u32) !u32 {
+    var tmp = try self.getReg(node.expr.getToken());
+    var dst = try self.c(node.expr, tmp);
+    self.vreg.releaseReg(tmp);
+    self.fun.code.write2ArgsInst(.Nerr, reg, dst, self.lastLine(), self.vm);
+    return reg;
+  }
+
+  fn cOrElse(self: *Self, node: *ast.OrElseNode, reg: u32) !u32 {
+    // ok orelse e? alt
+    // c(ok)
+    // is reg, err ?
+    // jt alt
+    // jf alt-end
+    // alt:
+    // e? define-local
+    // alt-code
+    // alt-end:
+    var rx = try self.c(node.ok, reg);
+    var tmp = try self.getReg(node.ok.getToken());
+    var rk2 = ((@enumToInt(TypeKind.TyClass) + 3) - 1);
+    self.fun.code.write3ArgsInst(.Is, tmp, rx, rk2, self.lastLine(), self.vm);
+    var ok_to_alt = self.fun.code.write2ArgsJmp(.Jt, tmp, self.lastLine(), self.vm);
+    var ok_to_end = self.fun.code.write2ArgsJmp(.Jf, tmp, self.lastLine(), self.vm);
+    self.vreg.releaseReg(tmp);
+    self.fun.code.patch2ArgsJmp(ok_to_alt);
+    if (node.evar) |evar| {
+      self.incScope();
+      var dst = try self.initLocal(evar);
+      util.assert(rx < value.MAX_REGISTERS, "rx should be a register");
+      self.fun.code.write3ArgsInst(.Mov, dst, rx, 0, evar.token.line, self.vm);
+      _ = try self.c(node.err, reg);
+      self.decScope();
+      self.popLocalVars();
+    } else {
+      _ = try self.c(node.err, reg);
+    }
+    self.fun.code.patch2ArgsJmp(ok_to_end);
+    return rx;
+  }
+
   fn cProgram(self: *Self, node: *ast.ProgramNode, start: u32) !u32 {
     var reg = start;
     for (node.decls.items()) |nd| {
@@ -1268,6 +1304,8 @@ pub const Compiler = struct {
       .AstFun => |*nd| try self.cFun(nd, node, reg),
       .AstCall => |*nd| try self.cCall(nd, reg),
       .AstRet => |*nd| try self.cRet(nd, reg),
+      .AstError => |*nd| try self.cError(nd, reg),
+      .AstOrElse => |*nd| try self.cOrElse(nd, reg),
       .AstProgram, .AstSimpleIf, .AstElif, .AstCondition, .AstEmpty => unreachable,
     };
   }

@@ -84,6 +84,9 @@ pub fn freeObject(self: *Self, obj: *Obj, vm: *VM) void {
       vm.mem.freeBuf(*value.ObjUpvalue, vm, clo.env[0..clo.fun.envlen]);
       vm.mem.free(T, vm, clo);
     },
+    .objerror => {
+      vm.mem.free(value.ObjError, vm, @ptrCast(*value.ObjError, obj));
+    },
     .objupvalue => {
       vm.mem.free(value.ObjUpvalue, vm, @ptrCast(*value.ObjUpvalue, obj));
     },

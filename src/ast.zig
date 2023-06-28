@@ -41,6 +41,8 @@ pub const AstType = enum {
   AstFun,
   AstRet,
   AstCall,
+  AstError,
+  AstOrElse,
   AstProgram,
 };
 
@@ -542,6 +544,44 @@ pub const CallNode = struct {
   }
 };
 
+pub const ErrorNode = struct {
+  expr: *AstNode,
+  typ: ?*Type = null,
+
+  pub fn init(expr: *AstNode) @This() {
+    return @This() {.expr = expr};
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var er = ErrorNode.init(self.expr.clone(al));
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstError = er};
+    return new;
+  }
+};
+
+pub const OrElseNode = struct {
+  ok: *AstNode,
+  err: *AstNode,
+  evar: ?*VarNode,
+  from_try: bool = false,
+  typ: ?*Type = null,
+
+  pub fn init(ok: *AstNode, err: *AstNode, evar: ?*VarNode) @This() {
+    return @This() {.ok = ok, .err = err, .evar = evar};
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var evar: ?*VarNode = null;
+    if (self.evar) |ev| evar = &ev.clone(al).AstVar;
+    var oe = OrElseNode.init(self.ok.clone(al), self.err.clone(al), evar);
+    oe.from_try = self.from_try;
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstOrElse = oe};
+    return new;
+  }
+};
+
 pub const FunNode = struct {
   params: VarDeclList,
   tparams: ?*types.TypeList = null,
@@ -655,6 +695,8 @@ pub const AstNode = union(AstType) {
   AstFun: FunNode,
   AstRet: RetNode,
   AstCall: CallNode,
+  AstError: ErrorNode,
+  AstOrElse: OrElseNode,
   AstProgram: ProgramNode,
 
   pub inline fn isComptimeConst(self: *@This()) bool {
@@ -688,6 +730,20 @@ pub const AstNode = union(AstType) {
   pub inline fn isBinary(self: *@This()) bool {
     return switch (self.*) {
       .AstBinary => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isBlock(self: *@This()) bool {
+    return switch (self.*) {
+      .AstBlock => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isOrElse(self: *@This()) bool {
+    return switch (self.*) {
+      .AstOrElse => true,
       else => false,
     };
   }
@@ -787,6 +843,8 @@ pub const AstNode = union(AstType) {
       .AstFun => |fun| if (fun.ret) |ret| ret.AstNType.typ else null,
       .AstRet => |ret| ret.typ,
       .AstCall => |call| call.typ,
+      .AstError => |er| er.typ,
+      .AstOrElse => |oe| oe.typ,
       .AstBlock, .AstIf, .AstElif,
       .AstWhile, .AstControl => null,
       else => unreachable,
@@ -808,7 +866,7 @@ pub const AstNode = union(AstType) {
       },
       .AstCall => |*call| call.typ = typ,
       else => {
-        std.log.info("Attempt to set type on node: {}\n", .{self});
+        std.log.debug("Attempt to set type on node: {}\n", .{self});
       },
     }
   }
@@ -833,6 +891,8 @@ pub const AstNode = union(AstType) {
       .AstWhile => |whi| whi.cond.getToken(),
       .AstRet => |ret| ret.token,
       .AstCall => |call| call.expr.getToken(),
+      .AstError => |er| er.expr.getToken(),
+      .AstOrElse => |oe| oe.ok.getToken(),
       .AstEmpty => |emp| emp.token,
       .AstFun => |*fun| {
         if (fun.name) |name| {
@@ -902,6 +962,8 @@ pub const AstNode = union(AstType) {
       .AstSimpleIf => unreachable,
       .AstRet => |*ret| ret.clone(al),
       .AstCall => |*call| call.clone(al),
+      .AstError => |*er| er.clone(al),
+      .AstOrElse => |*oe| oe.clone(al),
       .AstFun => |*fun| fun.clone(al),
       .AstProgram => unreachable,
     };

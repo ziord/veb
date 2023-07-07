@@ -833,7 +833,11 @@ pub const TypeChecker = struct {
           // Some functions may be mutually recursive, or may depend on some other
           // functions not yet known at the time of inference of this current one.
           // So only partially infer this function. Full inference is done by need.
-          _ = try self.inferFunPartial(node.node);
+          if (!node.node.AstFun.isAnonymous()) {
+            _ = try self.inferFunPartial(node.node);
+          } else {
+            _ = try self.inferFun(node.node, null);
+          }
           node.res = .Resolved;
         }
       },
@@ -1035,10 +1039,11 @@ pub const TypeChecker = struct {
     if (typ.isFunction() and !typ.function().isGeneric()) {
       var fun_ty = typ.function();
       if (
-        !fun_ty.node.AstFun.body.AstBlock.checked
-        and !self.cycles.contains(fun_ty.node, Node.eql)
+        fun_ty.node != null
+        and !fun_ty.node.?.AstFun.body.AstBlock.checked
+        and !self.cycles.contains(fun_ty.node.?, Node.eql)
       ) {
-        _ = try self.inferFun(fun_ty.node, typ);
+        _ = try self.inferFun(fun_ty.node.?, typ);
       }
     }
     return typ;
@@ -1339,13 +1344,14 @@ pub const TypeChecker = struct {
           );
         }
       }
-      if (!inf_ret_ty.isRelatedTo(ret_ty, .RCAny, self.ctx.allocator())) {
+      if (!ret_ty.isRelatedTo(inf_ret_ty, .RCAny, self.ctx.allocator())) {
         return self.error_(
           true, node.getToken(),
           "Expected return type '{s}', but got '{s}'",
           .{self.getTypename(ret_ty), self.getTypename(inf_ret_ty)}
         );
       }
+      return ret_ty;
     }
     // prefer inferred type for function types, since function types need to have extra
     // meta-data (`node`) which would not be present if the type was created by a user
@@ -1377,9 +1383,12 @@ pub const TypeChecker = struct {
       );
     }
     if (!fun_ty.isGeneric()) {
-      var is_cyclic = self.cycles.contains(fun_ty.node, Node.eql);
-      if (!fun_ty.node.AstFun.body.AstBlock.checked and !is_cyclic) {
-        _ = try self.inferFun(fun_ty.node, ty);
+      var is_cyclic = false;
+      if (fun_ty.node) |fun_node| {
+        is_cyclic = self.cycles.contains(fun_node, Node.eql);
+        if (!fun_node.AstFun.body.AstBlock.checked and !is_cyclic) {
+          _ = try self.inferFun(fun_node, ty);
+        }
       }
       for (fun_ty.params.items(), node.args.items()) |p_ty, arg| {
         var arg_ty = try self.infer(arg);
@@ -1390,7 +1399,7 @@ pub const TypeChecker = struct {
             .{self.getTypename(p_ty), self.getTypename(arg_ty)}
           );
         }
-        // set extra 'node' metadata for this arg type, which would be undefined if
+        // set extra 'node' metadata for this arg type, which would be null if
         // arg type was created by a user
         if (p_ty.isFunction() and arg.isFun()) {
           p_ty.function().node = arg;
@@ -1398,7 +1407,7 @@ pub const TypeChecker = struct {
       }
       // [N*]: check if we're currently resolving this type, i.e. if it's recursive
       if (is_cyclic) {
-        if (self.inferFunReturnTypePartial(self.cfg.lookup(fun_ty.node).?)) |typ| {
+        if (self.inferFunReturnTypePartial(self.cfg.lookup(fun_ty.node.?).?)) |typ| {
           return typ;
         }
         return ty.newRecursive().box(self.ctx.allocator());
@@ -1422,10 +1431,11 @@ pub const TypeChecker = struct {
     for (node.args.items()) |arg| {
       args_inf.append(try self.infer(arg));
     }
+    var old_fun_node = fun_ty.node.?;
+    var fun = &old_fun_node.AstFun;
     // inferred type arguments must match the generic type params if specified
     // ex: foo{str, num}('a', 5)
     if (node.targs) |targs| {
-      var fun = &fun_ty.node.AstFun;
       for (fun.tparams.?.items(), 0..) |tvar, tpos| {
         for (fun.params.items(), 0..) |param, ppos| {
           var typ = param.ident.typ.?;
@@ -1444,7 +1454,6 @@ pub const TypeChecker = struct {
         self.insertType(tvar, nd.getType().?);
       }
     } else {
-      var fun = &fun_ty.node.AstFun;
       for (fun.tparams.?.items()) |tvar| {
         var resolved = false;
         for (fun.params.items(), 0..) |param, ppos| {
@@ -1469,20 +1478,20 @@ pub const TypeChecker = struct {
     // lookup node using inferred args.
     // - if found just return the ret type of the found node
     // - else, do the stuff below, and cache the node
-    var synth_name = self.createSynthName(&fun_ty.node.AstFun, &args_inf, node.targs);
-    if (self.findFnInfo(fun_ty.node, synth_name)) |info| {
+    var synth_name = self.createSynthName(fun, &args_inf, node.targs);
+    if (self.findFnInfo(old_fun_node, synth_name)) |info| {
       node.expr.setType(info.typ);
       self.ctx.leaveScope();
       return info.typ.function().ret;
     }
-    var new_fun_node = fun_ty.node.AstFun.clone(self.ctx.allocator());
-    var fun = &new_fun_node.AstFun;
+    var new_fun_node = fun.clone(self.ctx.allocator());
+    var newfun = &new_fun_node.AstFun;
     // keep tparams to ban use as alias in types contained in fun, as much as possible
-    try self.linker.linkFun(fun, true);
+    try self.linker.linkFun(newfun, true);
     // for some reason, `self.ctx.typScope` sometimes becomes invalidated after linking fun, so reassign again 
     self.ctx.typScope = self.linker.ctx.typScope;
     // make fun non-generic to allow building of the cfg
-    fun.tparams = null;
+    newfun.tparams = null;
     try self.buildFunFlow(new_fun_node);
     self.ctx.varScope.pushScope();
     errdefer self.ctx.varScope.popScope();
@@ -1509,9 +1518,9 @@ pub const TypeChecker = struct {
     self.ctx.varScope.popScope();
     self.ctx.leaveScope();
     self.addFnInfo(
-      fun_ty.node,
+      old_fun_node,
       new_fun_node,
-      self.boxSynthName(fun_ty.node.getToken(), synth_name),
+      self.boxSynthName(old_fun_node.getToken(), synth_name),
       typ
     );
     return node.typ.?;

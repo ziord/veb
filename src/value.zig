@@ -325,6 +325,7 @@ pub inline fn asNumber(val: Value) f64 {
 }
 
 pub inline fn asIntNumber(comptime T: type, val: Value) T {
+  @setRuntimeSafety(false);
   return @floatToInt(T, asNumber(val));
 }
 

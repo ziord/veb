@@ -769,11 +769,11 @@ pub const Compiler = struct {
     // function being called, we can safely use the function's name for lookup
     // which if generic, should already be synthesized.
     if (node.typ != null and node.typ.?.isFunction()) {
-      var fun = &node.typ.?.function().node.AstFun;
+      var fun = node.typ.?.function();
       if (fun.isGeneric()) {
         return self.cConst(dst, value.numberVal(@intToFloat(f64, node.typ.?.typeid())), node.token.line);
-      } else if (fun.name) |ident| {
-        return try self.cVar(ident, dst);
+      } else if (fun.node != null and fun.node.?.AstFun.name != null) {
+        return try self.cVar(fun.node.?.AstFun.name.?, dst);
       }
     }
     if (self.findLocalVar(node)) |lvar| {
@@ -1083,6 +1083,13 @@ pub const Compiler = struct {
 
   fn cFun(self: *Self, node: *ast.FunNode, ast_node: *Node, _reg: u32) !u32 {
     if (node.isGeneric()) return self.cFunGeneric(ast_node, _reg);
+    if (!node.body.AstBlock.checked) {
+      if (self.inGlobalScope() and node.name != null) {
+        _ = try self.patchGlobal(node.name.?);
+      }
+      std.log.debug("skipping compilation of unchecked function: {}", .{node});
+      return _reg;
+    }
     var reg: u32 = undefined;
     var token = ast_node.getToken();
     var new_fn = value.createFn(self.vm, @intCast(u8, node.params.len()));

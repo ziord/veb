@@ -1643,6 +1643,108 @@ test "functions-9" {
   _ = try doTest(src);
 }
 
+test "functions-10" {
+  var src = 
+  \\ def fox{T}(x: T): fn(T): num | str
+  \\  def fun(p: T): num | str
+  \\    return p * x
+  \\  end
+  \\  return fun
+  \\ end
+  \\ let x = fox
+  \\ let j = x(5)
+  \\ j(3) == 15
+  \\ let x = [[fox]][0][0]
+  \\ x(5)(3) == 15
+  ;
+  _ = try doTest(src);
+  var src2 =
+   \\ def fox(x: num): fn(num): num | str
+  \\  return def (p: num): num | str  => p * x
+  \\ end
+  \\
+  \\ let j = fox(5)
+  \\ j(4) == 20
+  ;
+  _ = try doTest(src2);
+  var src3 =
+  \\ def big: num | str
+  \\  return 5
+  \\ end
+  \\ let j = big()
+  \\ if j is num 
+  \\  j += 5
+  \\ end
+  \\ j == 10
+  ;
+  _ = try doTest(src3);
+  var src4 =
+  \\ type T = num
+  \\ type Fun = fn(T): T | str
+  \\
+  \\ def fox(x: T): Fun
+  \\  def fun(p: T): T | str
+  \\    return p * x
+  \\  end
+  \\  return fun
+  \\ end
+  \\
+  \\ fox(2)(3) == 6
+  ;
+  _ = try doTest(src4);
+}
+
+test "functions-11" {
+  var src =
+  \\ let j = [def (x: num) => x * x, def (y: num) => ~y]
+  \\ let t = 1
+  \\ let p = j[t]
+  \\ p(6) == -7
+  \\
+  \\ let j = [def (x: num) => x * x, def (y: num) => ~y]
+  \\ let t = 1 * 0
+  \\ let p = j[t]
+  \\ p(12) == 144
+  \\
+  \\ [def (x: num) => x * x, def (y: num) => ~y][-1](t + 7) == -8
+  \\
+  \\ let j = [def (x: num) => x * x, def (y: num) => !y]
+  \\ [def (x: num) => x * x, def (y: num) => ~y][t - 1](t + 7)
+  ;
+  _ = try doTest(src);
+}
+
+test "functions-12-user-defined-never" {
+  var src =
+  \\ type never = never
+  \\ def rec(): never
+  \\  return rec()
+  \\ end
+  \\
+  \\ rec()
+  \\
+  \\ def fun(x: num)
+  \\  if x > 5
+  \\    return 'ok'
+  \\  else
+  \\    return x - 3
+  \\  end
+  \\ end
+  \\
+  \\ let j = fun(5)
+  \\ let p: never = rec()
+  \\ if j is str
+  \\  [j]
+  \\ elif j is num
+  \\  j *= 9
+  \\ else
+  \\  p = j
+  \\ end
+  \\ p
+  ;
+  _ = try doTest2(src);
+}
+
 test "errors-1" {
   var src =
   \\ do

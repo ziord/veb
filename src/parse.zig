@@ -770,10 +770,11 @@ pub const Parser = struct {
     // Function    :=  "fn" AbsTypeParams "(" Params? ")" ReturnSig
     try self.consume(.TkFn);
     var tparams: ?*TypeList = null;
-    if (self.check(.TkLCurly)) {
-      var tmp = try self.abstractTypeParams(undefined);
-      tparams = util.box(TypeList, tmp.generic().tparams, self.allocator);
-    }
+    // Turn off support for user defined generic fn types (for now):
+      // if (self.check(.TkLCurly)) {
+      //   var tmp = try self.abstractTypeParams(undefined);
+      //   tparams = util.box(TypeList, tmp.generic().tparams, self.allocator);
+      // }
     try self.consume(.TkLBracket);
     var fun = Function.init(self.allocator, undefined);
     fun.tparams = tparams;

@@ -95,15 +95,17 @@ pub const Disassembler = struct {
         var tmp = if (bx >= value.MAX_REGISTERS) bx - value.MAX_REGISTERS 
                   else Code.readBX(code.words.items[idx - 1]); // read the index off the prev inst
         var envlen = value.asFn(code.values.items[tmp]).envlen;
-        var i = if (envlen > 0) idx + 1 else idx;
-        while (envlen > 0): (envlen -= 1) {
-          var inst = code.words.items[i];
-          var is_local = Code.readRX(inst);
-          var slot = Code.readBX(inst);
-          i += 1;
-          std.debug.print("   |\t{d:0>4}\tupvalue -> {{index: {}, is_local: {}}}\n", .{i, slot, is_local});
+        if (envlen > 0) {
+          var i = idx + 1;
+          while (envlen > 0): (envlen -= 1) {
+            var inst = code.words.items[i];
+            var is_local = Code.readRX(inst);
+            var slot = Code.readBX(inst);
+            i += 1;
+            std.debug.print("   |\t{d:0>4}\tupvalue -> {{index: {}, is_local: {}}}\n", .{i, slot, is_local});
+          }
+          index.* = i - 1;
         }
-        index.* = i;
       },
       .Mov => {
         // mov is a 2-arg inst using a 3-arg format.

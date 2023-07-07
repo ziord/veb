@@ -288,7 +288,7 @@ pub const Function = struct {
   params: TypeList,
   ret: *Type,
   tparams: ?*TypeList = null,
-  node: *@import("ast.zig").AstNode = undefined,
+  node: ?*@import("ast.zig").AstNode = null,
 
   pub fn init(allocator: std.mem.Allocator, ret: *Type) @This() {
     return Function {.params = TypeList.init(allocator), .ret = ret};
@@ -1117,7 +1117,13 @@ pub const Type = struct {
         var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
         var values = uni.variants.values();
         for (values, 0..) |typ, i| {
-          _ = try writer.write(try typ._typename(allocator, depth));
+          if (!typ.isFunction()) {
+            _ = try writer.write(try typ._typename(allocator, depth));
+          } else {
+            _ = try writer.write("(");
+            _ = try writer.write(try typ._typename(allocator, depth));
+            _ = try writer.write(")");
+          }
           if (i != values.len - 1) {
             _ = try writer.write(" | ");
           }

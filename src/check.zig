@@ -6,6 +6,9 @@ const diagnostics = @import("diagnostics.zig");
 const analysis = @import("analysis.zig");
 const flow = @import("flow.zig");
 const ds = @import("ds.zig");
+const parse = @import("parse.zig");
+const prelude = @import("prelude.zig");
+const VebAllocator = @import("allocator.zig");
 const NodeList = ast.AstNodeList;
 const TypeHashMap = std.StringHashMap(*Type);
 const FlowNode = flow.FlowNode;
@@ -197,6 +200,7 @@ pub const TypeChecker = struct {
   linker: *TypeLinker = undefined,
   current_fn: ?*FlowMeta = null,
   void_ty: *Type,
+  _prelude: *Node = undefined,
   cycles: NodeList,
   builder: CFGBuilder,
   analyzer: Analysis,
@@ -223,6 +227,8 @@ pub const TypeChecker = struct {
   const MAX_STRING_SYNTH_LEN = 0xc;
   const TypeCheckError = error{CheckError, TypeLinkError, SynthFailure, SynthTooLarge, DeadCode};
 
+  const _BuiltinsItf = prelude._BuiltinsItf;
+
   pub fn init(allocator: std.mem.Allocator, diag: *Diagnostic) @This() {
     return Self {
       .ctx = TContext.init(allocator),
@@ -233,6 +239,22 @@ pub const TypeChecker = struct {
       .analyzer = Analysis.init(diag),
       .void_ty = Type.newVoid().box(allocator),
     };
+  }
+
+  fn loadBuiltinsPrelude(self: *Self, linker: *TypeLinker, al: *VebAllocator) void {
+    const filename = @as([]const u8, "$builtins$");
+    var parser = parse.Parser.init(@constCast(&@as([]const u8, _BuiltinsItf)), &filename, al);
+    const node = try parser.parse();
+    linker.linkTypes(node) catch unreachable;
+    self.buildProgramFlow(node) catch unreachable;
+    self.flowInferEntry(self.cfg.program.entry) catch unreachable;
+    for (node.AstProgram.decls.items()) |itm| {
+      if (itm.isFun()) {
+        itm.AstFun.body.AstBlock.checked = true;
+        itm.AstFun.is_builtin = true;
+      }
+    }
+    self._prelude = node;
   }
 
   fn error_(self: *Self, emit: bool, token: Token, comptime fmt: []const u8, args: anytype) TypeCheckError {
@@ -251,6 +273,10 @@ pub const TypeChecker = struct {
 
   fn createSynthName(self: *Self, fun: *ast.FunNode, args: *TypeList, targs: ?*NodeList) []const u8 {
     // FIXME: this is unhygienically inefficient.
+    if (fun.is_builtin) {
+      // don't monomorphize builtin generic func names
+      return fun.name.?.token.value;
+    }
     var start = if (fun.name) |nm| nm.token.value else self.genName(
       if (targs) |ta| ta.len() else 0,
       args.len()
@@ -558,6 +584,14 @@ pub const TypeChecker = struct {
     }
   }
 
+  inline fn isNarrowableLiteral(self: *Self, node: *ast.BinaryNode) bool {
+    return (
+      (node.op.optype == .OpEqq or node.op.optype == .OpNeq)
+      and self.canNarrow(node.left)
+      and (node.right.isNilLiteral() or node.right.isConstLiteral())
+    );
+  }
+
   fn narrowBinary(self: *Self, node: *ast.BinaryNode, env: *TypeEnv, assume_true: bool) !void {
     if (node.op.optype == .OpIs) {
       if (node.left.isVariable()) {
@@ -588,6 +622,12 @@ pub const TypeChecker = struct {
           node.typ = synth.typ;
           return;
         }
+      }
+      if (node.right.getType().?.isConstant()) {
+        try self.narrow(node.left, env, assume_true);
+        try self.narrow(node.right, env, assume_true);
+        _ = try self.inferBinary(node);
+        return;
       }
       var lty = node.left.getType();
       var rty = node.right.getType();
@@ -641,32 +681,16 @@ pub const TypeChecker = struct {
         node.typ = Type.unionify(node.left.getType().?, node.right.getType().?, self.ctx.allocator());
       }
       return;
-    } else if (self.canNarrow(node.left) and node.right.isNilLiteral()) {
-      var token = node.right.AstNil.token;
-      var tmp = self.newAstNode();
-      tmp.* = .{.AstNType = ast.TypeNode.init(Type.newConcrete(.TyNil, null).box(self.ctx.allocator()), token)};
+    } else if (self.isNarrowableLiteral(node)) {
       var bin = b: {
-        if (node.op.optype == .OpEqq or node.op.optype == .OpNeq) {
-          var bin = node.*;
-          bin.op.optype = .OpIs;
-          bin.right = tmp;
-          break :b bin;
-        }
-        break :b undefined;
+        var bin = node.*;
+        bin.op.optype = .OpIs;
+        bin.right = node.right.toTypeNode(self.ctx.allocator());
+        break :b bin;
       };
-      if (node.op.optype == .OpEqq) {
-        try self.narrowBinary(&bin, env, assume_true);
-        node.typ = bin.typ;
-        return;
-      } else if (node.op.optype == .OpNeq) {
-        // rewrite to unary(binary(expr))
-        var op = ast.Token.tokenFrom(&node.op.token);
-        op.ty = .TkExMark;
-        var una = ast.UnaryNode.init(@constCast(&@as(Node, .{.AstBinary = bin})), op);
-        try self.narrowUnary(&una, env, assume_true);
-        node.typ = una.typ;
-        return;
-      }
+      try self.narrowBinary(&bin, env, if (node.op.optype == .OpEqq) assume_true else !assume_true);
+      node.typ = bin.typ;
+      return;
     }
     try self.narrow(node.left, env, assume_true);
     try self.narrow(node.right, env, assume_true);
@@ -1002,7 +1026,7 @@ pub const TypeChecker = struct {
       );
     } else if (!rhsTy.isTypeTy()) {
       var help = (
-        if (rhsTy.isLikeConstant())
+        if (node.right.isConstLiteral() or rhsTy.isLikeConstant())
           "\n\tHelp: For constant types, consider using '==' or '!=' operator instead."
         else ""
       );
@@ -1212,9 +1236,8 @@ pub const TypeChecker = struct {
 
   fn inferFunPartial(self: *Self, node: *Node) !*Type {
     var fun = &node.AstFun;
-    var ret: ?*Type = node.getType();
     // we need to infer this first to handle recursive functions
-    var ty = try self.createFunType(node, ret);
+    var ty = try self.createFunType(node,  node.getType());
     // set the function's name (if available) to it's full type
     if (fun.name) |ident| {
       self.insertVar(ident.token.value, ty);
@@ -1246,6 +1269,7 @@ pub const TypeChecker = struct {
       _ = self.cycles.pop();
       ty.function().ret = try self.inferFunReturnType(node, flo);
       fun.body.AstBlock.checked = true;
+      try self.analyzer.analyzeDeadCodeWithTypes(flo.entry);
     }
     return ty;
   }
@@ -1270,53 +1294,79 @@ pub const TypeChecker = struct {
   }
 
   fn inferFunReturnType(self: *Self, node: *Node, flo: FlowMeta) !*Type {
+    if (node.AstFun.is_builtin) {
+      // builtin function types are fully well-typed
+      return node.AstFun.ret.?.AstNType.typ;
+    }
     // TODO: improve error message token - nd.node.getToken()
     var prev_nodes = self.getExitPrevs(flo.exit);
-    // unionify all return types at exit
-    var has_void = false;
-    var has_rec = false;
-    var has_non_void = false;
+    var has_void_ty = false;
+    var has_rec_ty = false;
+    var has_non_void_ty = false;
+    var has_noreturn_ty = false;
+    var has_return_node = false;
     for (prev_nodes.items()) |nd| {
       // skip dead node, since it's most likely at exit
       if (nd.isDeadNode()) {
         continue;
       }
-      if (!nd.node.isRet() or nd.node.getType() == null) {
-        has_void = true;
-      } else if (nd.node.getType()) |ty| {
-        if (ty.isRecursive()) {
-          has_rec = true;
-        } else if (ty.isVoidTy()) {
-          has_void = true;
+      if (nd.node.isRet()) {
+        has_return_node = true;
+        if (nd.node.getType()) |ty| {
+          if (ty.isRecursive()) {
+            has_rec_ty = true;
+          } else if (ty.isVoidTy()) {
+            has_void_ty = true;
+          } else if (ty.isNoreturnTy()) {
+            has_noreturn_ty = true;
+          } else {
+            has_non_void_ty = true;
+          }
         } else {
-          has_non_void = true;
+          has_void_ty = true;
         }
+      } else if (nd.node.getType()) |ty| {
+        if (ty.isNoreturnTy()) {
+          has_noreturn_ty = true;
+        } else {
+          has_void_ty = true;
+        }
+      } else {
+        has_void_ty = true;
       }
     }
+    // if we find the function has type noreturn, and there's no return node in the function,
+    // simply turn off has_void_ty:
+    if (has_noreturn_ty and !has_return_node) has_void_ty = false;
     // When inferring a function's return type:
     // - if we find a recursive type, and a non-void type, use the non-void type as the function's return type
     // - if we find a recursive type, and a void type or only a recursive type, then use the type 'never'
     var uni = Union.init(self.ctx.allocator());
-    var void_ty: *Type = if (has_void) self.void_ty else undefined;
-    var nvr_ty: *Type = if (has_rec) Type.newNever(self.ctx.allocator()) else undefined;
+    var void_ty: *Type = self.void_ty;
+    var nvr_ty: *Type = if (has_rec_ty) Type.newNever(self.ctx.allocator()) else undefined;
+    // unionify all return types at exit
     for (prev_nodes.items()) |nd| {
       // skip dead node, since it's most likely at exit
       if (nd.isDeadNode()) {
         continue;
       }
       var typ = if (!nd.node.isRet()) void_ty else nd.node.getType() orelse void_ty;
-      if (has_rec) {
-        if (has_non_void) {
+      if (!has_void_ty and typ.isVoidTy()) {
+        continue;
+      }
+      if (has_rec_ty) {
+        if (has_non_void_ty) {
           if (typ.isRecursive()) {
             continue;
           }
-        } else if (has_void or typ.isRecursive()) {
+        } else if (has_void_ty or typ.isRecursive()) {
           typ = nvr_ty;
         }
       }
       uni.set(typ);
     }
-    var inf_ret_ty = uni.toType().box(self.ctx.allocator());
+    if (has_noreturn_ty) uni.set(Type.newConcrete(.TyNoReturn, null).box(self.ctx.allocator()));
+    var inf_ret_ty = uni.toType();
     if (node.AstFun.ret) |ret| {
       var ret_ty = ret.AstNType.typ;
       for (prev_nodes.items()) |nd| {
@@ -1334,7 +1384,7 @@ pub const TypeChecker = struct {
             }
           }
           // TODO: else { what happens here? }
-        } else if (!ret_ty.isLikeVoid()) {
+        } else if (!ret_ty.isLikeVoid() and !ret_ty.isNoreturnTy()) {
           // control reaches exit from this node (`nd`), although this node
           // doesn't return anything hence (void), but return type isn't void
           return self.error_(
@@ -1344,18 +1394,30 @@ pub const TypeChecker = struct {
           );
         }
       }
-      if (!ret_ty.isRelatedTo(inf_ret_ty, .RCAny, self.ctx.allocator())) {
-        return self.error_(
-          true, node.getToken(),
-          "Expected return type '{s}', but got '{s}'",
-          .{self.getTypename(ret_ty), self.getTypename(inf_ret_ty)}
-        );
+      if (!ret_ty.isRelatedTo(&inf_ret_ty, .RCAny, self.ctx.allocator())) {
+        if (!ret_ty.isNoreturnTy()) {
+          return self.error_(
+            true, node.getToken(),
+            "Expected return type '{s}', but got '{s}'",
+            .{self.getTypename(ret_ty), self.getTypename(&inf_ret_ty)}
+          );
+        } else {
+          var token = (
+            if (prev_nodes.len() > 0) prev_nodes.itemAt(0).node.getToken()
+            else node.getToken()
+          );
+          return self.error_(
+            true, token,
+            "Control flow reaches exit; function declared type 'noreturn' returns",
+            .{}
+          );
+        }
       }
       return ret_ty;
     }
     // prefer inferred type for function types, since function types need to have extra
     // meta-data (`node`) which would not be present if the type was created by a user
-    return inf_ret_ty;
+    return inf_ret_ty.box(self.ctx.allocator());
   }
   
   fn inferCall(self: *Self, node: *ast.CallNode) !*Type {
@@ -1841,8 +1903,9 @@ pub const TypeChecker = struct {
     };
   }
 
-  pub fn typecheck(self: *Self, node: *Node) TypeCheckError!void {
-    var linker = link.TypeLinker.init(self.ctx.allocator(), self.diag);
+  pub fn typecheck(self: *Self, node: *Node, va: *VebAllocator) TypeCheckError!void {
+    var linker = TypeLinker.init(self.ctx.allocator(), self.diag);
+    self.loadBuiltinsPrelude(&linker, va);
     linker.linkTypes(node) catch |e| {
       return e;
     };
@@ -1857,6 +1920,7 @@ pub const TypeChecker = struct {
         self.flowInfer(flo, false) catch {};
       }
     };
+    self.analyzer.analyzeDeadCodeWithTypes(self.cfg.program.entry) catch {};
     if (self.diag.hasAny()) {
       self.diag.display();
       return error.CheckError;

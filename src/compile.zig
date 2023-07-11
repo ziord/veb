@@ -202,6 +202,8 @@ pub const Compiler = struct {
   rk_bx: RkBxPair = RkBxPair{},
   diag: *Diagnostic,
   generics: *FnInfoMap,
+  _prelude: *Node,
+  skip_gsyms: bool = false,
   
   const Self = @This();
 
@@ -222,7 +224,7 @@ pub const Compiler = struct {
   };
   const CompileError = error{CompileError};
 
-  pub fn init(diag: *Diagnostic, vm: *VM, fun: *ObjFn, info: *FnInfoMap, allocator: *CnAllocator) Self {
+  pub fn init(diag: *Diagnostic, vm: *VM, fun: *ObjFn, info: *FnInfoMap, allocator: *CnAllocator, prel: *Node) Self {
     var al = allocator.getArenaAllocator();
     var gsyms = std.MultiArrayList(GSymVar){};
     var locals = std.MultiArrayList(LocalVar){};
@@ -230,7 +232,7 @@ pub const Compiler = struct {
     var globals = std.MultiArrayList(GlobalVar){};
     gsyms.ensureTotalCapacity(al, MAX_GSYMS) catch {};
     locals.ensureTotalCapacity(al, MAX_LOCALS) catch {};
-    return Self {
+    var self = Self {
       .fun = fun,
       .allocator = allocator,
       .gsyms = gsyms,
@@ -242,7 +244,10 @@ pub const Compiler = struct {
       .vm = vm,
       .diag = diag,
       .generics = info,
+      ._prelude = prel,
     };
+    self.loadBuiltinsPrelude();
+    return self;
   }
 
   fn compileError(self: *Self, token: Token, comptime fmt: []const u8, msg: anytype) CompileError {
@@ -381,8 +386,8 @@ pub const Compiler = struct {
     if (self.findGlobal(node)) |info| {
       return .{.pos = info.pos, .isGSym = info.isGSym};
     }
-    if (self.gsyms.len >= MAX_GSYMS) {
-      std.log.debug("Gsyms exceeded..using globals list\n", .{});
+    if (self.gsyms.len >= MAX_GSYMS or self.skip_gsyms) {
+      std.log.debug("Gsyms {s}..using globals list\n", .{if (self.skip_gsyms) "elided" else "exceeded"});
       return .{.pos = self.addGlobalVar(node), .isGSym = false};
     }
     var idx = @intCast(u32, self.gsyms.len);
@@ -498,6 +503,22 @@ pub const Compiler = struct {
     }
     if (close) |reg| {
       self.fun.code.write2ArgsInst(.Cupv, reg, 0, self.lastLine(), self.vm);
+    }
+  }
+
+  /// load prelude
+  fn loadBuiltinsPrelude(self: *Self) void {
+    var glb_len = self.globals.len;
+    self.skip_gsyms = true;
+    self.preallocateGlobals(&self._prelude.AstProgram.decls);
+    self.skip_gsyms = false;
+    var slice = self.globals.slice();
+    var patchs = slice.items(.patched);
+    var inits = slice.items(.initialized);
+    // patch and initialize all builtin globals:
+    for (glb_len..patchs.len) |i| {
+      patchs[i] = true;
+      inits[i] = true;
     }
   }
 
@@ -1117,7 +1138,7 @@ pub const Compiler = struct {
       std.debug.assert(_reg != VRegister.DummyReg);
       reg = _reg;
     }
-    var compiler = Compiler.init(self.diag, self.vm, new_fn, self.generics, self.allocator);
+    var compiler = Compiler.init(self.diag, self.vm, new_fn, self.generics, self.allocator, self._prelude);
     compiler.enclosing = self;
     // localize params
     compiler.incScope();
@@ -1128,8 +1149,8 @@ pub const Compiler = struct {
     // - return does this automatically
     _ = try compiler.cBlockNoPops(&node.body.AstBlock, _reg);
     // append return inst as last
-    if (!node.body.AstBlock.nodes.getLast().isRet()) {
-      compiler.fun.code.write2ArgsInst(.Ret, 0, 0, compiler.lastLine(), compiler.vm);
+    if (node.body.AstBlock.nodes.len() == 0 or !node.body.AstBlock.nodes.getLast().isRet()) {
+      _ = compiler.cVoidRet(compiler.lastLine());
     }
     compiler.decScope();
     new_fn.envlen = compiler.upvalues.len;
@@ -1167,6 +1188,7 @@ pub const Compiler = struct {
     if (self.generics.get(node)) |list| {
       for (list.items()) |itm| {
         var fun = &itm.instance.AstFun;
+        if (fun.is_builtin) continue;
         // only attach names in the local scope since if we're in the global scope,
         // the name has already been attached in preallocateGlobals()
         if (self.inLocalScope()) {
@@ -1197,7 +1219,7 @@ pub const Compiler = struct {
     if (do_move) {_dst = win; win += 1;}
     // we need the function to be in a specific position in the register window, along with its args
     if (fun_dst != _dst) {
-      std.debug.assert(self.inLocalScope());
+      // std.debug.assert(self.inLocalScope());
       self.fun.code.write3ArgsInst(.Mov, _dst, fun_dst, 0, token.line, self.vm);
     }
     // don't optimize this call's arguments
@@ -1207,7 +1229,7 @@ pub const Compiler = struct {
       var tmp = try self.c(arg, dst);
       // we need the args to be positioned in line with the function in the register window
       if (tmp != dst) {
-        std.debug.assert(self.inLocalScope());
+        // std.debug.assert(self.inLocalScope());
         self.fun.code.write3ArgsInst(.Mov, dst, tmp, 0, self.lastLine(), self.vm);
       }
     }
@@ -1222,17 +1244,24 @@ pub const Compiler = struct {
     return reg;
   }
 
+  fn cVoidRet(self: *Self, line: usize) u32 {
+    const dst = 0;
+    const memidx = self.fun.code.writeValue(value.NOTHING_VAL, self.vm);
+    self.fun.code.write2ArgsInst(.Load, dst, memidx, @intCast(u32, line), self.vm);
+    self.fun.code.write2ArgsInst(.Ret, dst, 0, line, self.vm);
+    return dst;
+  }
+
   fn cRet(self: *Self, node: *ast.RetNode, reg: u32) !u32 {
     _ = reg;
-    // TODO: return nil when expr is null?
-    var dst: u32 = 0;
     if (node.expr) |expr| {
       var rg = try self.getReg(expr.getToken());
-      dst = try self.c(expr, rg);
+      var dst = try self.c(expr, rg);
       self.vreg.releaseReg(rg);
+      self.fun.code.write2ArgsInst(.Ret, dst, 0, node.token.line, self.vm);
+      return dst;
     }
-    self.fun.code.write2ArgsInst(.Ret, dst, 0, node.token.line, self.vm);
-    return dst;
+    return self.cVoidRet(node.token.line);
   }
 
   fn cError(self: *Self, node: *ast.ErrorNode, reg: u32) !u32 {

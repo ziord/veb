@@ -3,6 +3,7 @@ const util = @import("util.zig");
 const Mem = @import("mem.zig");
 const Vec = @import("vec.zig").Vec;
 const Map = @import("map.zig").Map;
+const ZFnNames = @import("native.zig").ZFnNames;
 const OpCode = @import("opcode.zig").OpCode;
 pub const OpType = @import("lex.zig").OpType;
 
@@ -169,7 +170,7 @@ pub const FALSE_VAL = @as(Value, (QNAN | TAG_FALSE));
 pub const TRUE_VAL = @as(Value, (QNAN | TAG_TRUE));
 pub const NOTHING_VAL = @as(Value, (QNAN | TAG_NOTHING));
 
-pub const ZFn = *const fn (*VM, argc: u8, args: *Value) Value;
+pub const ZFn = *const fn (*VM, argc: u32, args: u32) Value;
 pub const StringNullKey = ObjString {.obj = .{.id = .objstring, .next = null}, .hash = 0, .str = "", .len = 0};
 pub const StringHashMap = Map(*const ObjString, Value);
 pub const ValueHashMap = Map(Value, Value);
@@ -239,12 +240,12 @@ pub const ObjFn = extern struct {
 
 pub const ObjZFn = extern struct {
   obj: Obj,
-  arity: u8,
+  arity: u32,
   fun: ZFn,
   name: usize,
 
   pub fn getName(self: *ObjZFn) []const u8 {
-    return VM.ZFnNames[self.name];
+    return ZFnNames[self.name];
   }
 };
 
@@ -365,8 +366,11 @@ pub fn isNilNoInline(val: Value) bool {
   return isNil(val);
 }
 
-/// placeholder
 pub fn isVoidNoInline(val: Value) bool {
+  return isNothing(val);
+}
+
+pub fn isNoreturnNoInline(val: Value) bool {
   _ = val;
   return false;
 }
@@ -509,10 +513,6 @@ pub inline fn asFiber(val: Value) *ObjFiber {
 
 pub inline fn asError(val: Value) *ObjError {
   return @ptrCast(*ObjError, asObj(val));
-}
-
-pub fn getZFnName(name: usize) []const u8 {
-  return VM.ZFnNames[name];
 }
 
 pub inline fn valueEqual(a: Value, b: Value) bool {
@@ -786,7 +786,7 @@ pub fn createFn(vm: *VM, arity: u8) *ObjFn {
   return fun;
 }
 
-pub fn createZFn(vm: *VM, zfun: ZFn, arity: u8, name: usize) *ObjZFn {
+pub fn createZFn(vm: *VM, zfun: ZFn, arity: u32, name: usize) *ObjZFn {
   var fun = @call(.always_inline, createObject, .{vm, .objzfn, ObjZFn});
   fun.fun = zfun;
   fun.arity = arity;

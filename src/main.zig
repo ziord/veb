@@ -9,26 +9,28 @@ const check = @import("check.zig");
 const flow = @import("flow.zig");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
-const CnAllocator = @import("allocator.zig");
+const VebAllocator = @import("allocator.zig");
+
 
 pub fn main() !void {
-  std.debug.print("hello canary!\n", .{});
+  std.debug.print("hello veb!\n", .{});
 }
 
 fn doTest(src: []const u8) !value.Value {
-  var cna = CnAllocator.init(std.heap.ArenaAllocator.init(std.testing.allocator));
+  var cna = VebAllocator.init(std.heap.ArenaAllocator.init(std.testing.allocator));
   defer cna.deinit();
-  const filename = @as([]const u8, "test.cn");
+  const filename = @as([]const u8, "test.veb");
+  var al = cna.getArenaAllocator();
   var parser = parse.Parser.init(@constCast(&src), &filename, &cna);
   const node = try parser.parse();
   // std.debug.print("node: {}\n", .{node});
 
-  var tych = check.TypeChecker.init(cna.getArenaAllocator(), &parser.diag);
-  try tych.typecheck(node);
+  var tych = check.TypeChecker.init(al, &parser.diag);
+  try tych.typecheck(node, &cna);
   var cpu = vm.VM.init(&cna);
   defer cpu.deinit();
   var fun = value.createFn(&cpu, 0);
-  var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna);
+  var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych._prelude);
   try compiler.compile(node);
   debug.Disassembler.disCode(&fun.code, "test");
   var start = std.time.milliTimestamp();
@@ -45,17 +47,18 @@ fn doTest(src: []const u8) !value.Value {
 }
 
 fn doTest2(src: []const u8) !value.Value {
-  var cna = CnAllocator.init(std.heap.ArenaAllocator.init(std.heap.page_allocator));
+  var cna = VebAllocator.init(std.heap.ArenaAllocator.init(std.heap.page_allocator));
   defer cna.deinit();
-  const filename = @as([]const u8, "test.cn");
+  const filename = @as([]const u8, "test.veb");
+  var al = cna.getArenaAllocator();
   var parser = parse.Parser.init(@constCast(&src), &filename, &cna);
   const node = try parser.parse();
-  var tych = check.TypeChecker.init(cna.getArenaAllocator(), &parser.diag);
-  try tych.typecheck(node);
+  var tych = check.TypeChecker.init(al, &parser.diag);
+  try tych.typecheck(node, &cna);
   var cpu = vm.VM.init(&cna);
   defer cpu.deinit();
   var fun = value.createFn(&cpu, 0);
-  var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna);
+  var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych._prelude);
   try compiler.compile(node);
   debug.Disassembler.disCode(&fun.code, "test");
   return 0;
@@ -457,7 +460,7 @@ test "indexing" {
   \\ let y = {'fox' as str | num: 'fan', 'fun': 'fox', 5: 'fox'}
   \\ let z:  str = 'fox'
   \\ let p = y[z] and y[5] and y[5 as str | num]
-  \\ p == 'fox'
+  \\ assert(p == 'fox', 'should be fox')
   ;
   _ = try doTest(src);
 }
@@ -479,7 +482,7 @@ test "nil access" {
   \\ let p = x.? + 10
   \\ let f = {'foo': 5 as num?}
   \\ let j = f['foo'].? + 5
-  \\ j == 10
+  \\ assert(j == 10, 'should be 10')
   ;
   _ = try doTest(src);
 }
@@ -501,7 +504,7 @@ test "if statement" {
   \\   p = x - 10
   \\   p -= -1111
   \\ end
-  \\ p == 1
+  \\ assert(p == 1, 'should be 1')
   \\ let x = 5
   \\ let p = 'let'
   \\ if (x > x) and !5 then
@@ -571,7 +574,7 @@ test "if statement" {
   \\   p -= -1111
   \\   p += 0b1111_1111_1111
   \\ end
-  \\ p == 0b1010001010001
+  \\ assert(p == 0b1010001010001, 'should be same')
   ;
   _ = try doTest(src4);
   // if-else
@@ -598,7 +601,7 @@ test "if statement" {
   \\ if q == 'fox'
   \\   w /= 2
   \\ end
-  \\ w == 61.5
+  \\ assert(w == 61.5, 'should be 61.5')
   ;
   _ = try doTest(src5);
 }
@@ -644,16 +647,16 @@ test "is expression" {
   \\
   \\ # indirect checks
   \\ let n: str | num | list{num} | map{str, num} = {}
-  \\ n is list == false
-  \\ n is map == true
+  \\ assert(n is list == false, 'n should be list')
+  \\ assert(n is map == true, 'n should be map')
   \\ n = 'foo'
-  \\ n is str == true
-  \\ n is num == false
+  \\ assert(n is str == true, 'n should be str')
+  \\ assert(n is num == false, 'n should be not num')
   \\ n = 5
-  \\ n is num == true
-  \\ !!n is bool == true
-  \\ bool == bool is bool == true
-  \\ ((bool == bool) is bool) == true  # same as above
+  \\ assert(n is num == true, 'n should be num')
+  \\ assert(!!n is bool == true, 'should be boolean')
+  \\ assert(bool == bool is bool == true, 'true')
+  \\ assert(((bool == bool) is bool) == true, 'true')  # same as above
   \\
   \\ # is not
   \\ # direct checks
@@ -671,18 +674,18 @@ test "is expression" {
   \\
   \\ # indirect checks
   \\ let n: str | num | list{num} | map{str, num} = {}
-  \\ n is not list == false
-  \\ n is not map == true
+  \\ assert(n is not list != false, 'not list')
+  \\ assert(n is not map != true, 'not map')
   \\ n = 'foo'
-  \\ n is not str == true
-  \\ n is not num == false
+  \\ assert(n is not str != true, 'not str')
+  \\ assert(n is not num != false, 'not num')
   \\ n = 5
-  \\ n is not num == true
+  \\ assert(n is not num == false, 'not num?')
   \\ !!n is not bool == true
   \\ bool == bool is not bool == true
-  \\ !({} is not map)
-  \\ ((bool == bool) is not bool) == true  # same as above
-  \\ num == str
+  \\ assert(!({} is not map), 'a map')
+  \\ assert(((bool == bool) is not bool) != true, 'not true')  # same as above
+  \\ assert(num != str, 'num is not str')
   ;
   _ = try doTest(src);
 }
@@ -1001,7 +1004,7 @@ test "narrowing-20" {
   \\      p
   \\    end
   \\ end
-  \\ t == 16
+  \\ assert(t == 16, 'should be 16')
   ;
   _ = try doTest(src3);
 }
@@ -1026,6 +1029,63 @@ test "narrowing-21" {
   \\  return n + 5
   \\ end
   \\ fun(12)
+  ;
+  _ = try doTest(src);
+}
+
+test "narrowing-22" {
+  var src =
+  \\ def fish(p: "a" | "b" | 5)
+  \\  if p == "a"
+  \\    return 'nice'
+  \\  elif p == "b"
+  \\    return 'good'
+  \\  elif p == 5
+  \\    return 'okay'
+  \\  else
+  \\    # type of p here is 'never'
+  \\    # TODO: we shouldn't have to return anything here
+  \\    #       for this func to be type str
+  \\    return 'hmm'
+  \\  end
+  \\ end
+  \\ 
+  \\ assert(fish(5) == 'okay', 'ok')
+  \\
+  \\ def fun
+  \\  let p = 10
+  \\  if p < 5
+  \\    exit(2)
+  \\  else
+  \\    assert(true, 'oops')
+  \\  end
+  \\  p -= 2
+  \\  return p
+  \\ end
+  \\ 
+  \\ assert(fun() == 8, 'should be 8')
+  ;
+  _ = try doTest(src);
+}
+
+test "void narrowing" {
+  var src =
+  \\ def fox(x: bool)
+  \\  if x then
+  \\    return 3
+  \\  end
+  \\ end
+  \\
+  \\ let t = fox(false)
+  \\ if t is not void then
+  \\   t += 5
+  \\ end
+  \\ [t]
+  \\ t = fox(!!1)
+  \\ if t is not void then
+  \\   t += 12
+  \\ end
+  \\ assert(t == 15, 't should be 15')
   ;
   _ = try doTest(src);
 }
@@ -1115,7 +1175,7 @@ test "while loop" {
   \\  break
   \\  # x += 5
   \\ end
-  \\ x == 10
+  \\ assert(x == 10, 'should be 10')
   ;
   _ = try doTest(src2);
   var src3 =
@@ -1140,7 +1200,7 @@ test "while loop" {
   \\ while i < 0xffff
   \\  i += 1
   \\ end
-  \\ i == 0o177777
+  \\ assert(i == 0o177777, 'should be 65535')
   ;
   _ = try doTest(src3);
 }
@@ -1151,7 +1211,7 @@ test "functions-0" {
   \\ def j(a: T): T
   \\  return (a * 2)
   \\ end
-  \\ j(5) + 9 == 19
+  \\ assert(j(5) + 9 == 19, 'should be 19')
   ;
   _ = try doTest(src);
   var src2 =
@@ -1164,7 +1224,7 @@ test "functions-0" {
   \\ end
   \\ fox(5)(9) == 14
   \\ let j = fox(5)(8)
-  \\ j == 13
+  \\ assert(j == 13, 'should be 13')
   \\ end
   ;
   _ = try doTest(src2);
@@ -1175,7 +1235,7 @@ test "functions-0" {
   \\  end
   \\  return fib(n - 1) + fib(n - 2)
   \\ end
-  \\ fib(13) == 233
+  \\ assert(fib(13) == 233, 'should be 233')
   ;
   _ = try doTest(src3);
   var src4 =
@@ -1187,7 +1247,7 @@ test "functions-0" {
   \\ let j = 4
   \\ let p = 12 * foo(foo(j))
   \\ let q = {j: p}
-  \\ q[j] == 2064
+  \\ assert(q[j] == 2064, 'should be 2064')
   ;
   _ = try doTest(src4);
 }
@@ -1364,14 +1424,14 @@ test "functions-5" {
   \\   return def (y: num): T => x * y
   \\  end
   \\  let mul = higher{num, num}(5)
-  \\  mul(6) == 30
+  \\  assert(mul(6) == 30, 'should be 30')
   \\ end
   \\
   \\ def higher{T, J}(x: num): fn(J): T
   \\  return def (y: num): T => x * y
   \\ end
   \\ let mul = higher{num, num}(5)
-  \\ mul(12) == 60
+  \\ assert(mul(12) == 60, 'should be 60')
   ;
   _ = try doTest(src);
 }
@@ -1379,9 +1439,9 @@ test "functions-5" {
 test "functions-6" {
   var src =
   \\ do
-  \\  (def (x: str) 
+  \\  assert(def (x: str) 
   \\   return x
-  \\  end)('ppp') == "ppp"
+  \\  end)('ppp') == "ppp", 'should be "ppp"')
   \\ end
   \\
   \\ let j = 12
@@ -1390,12 +1450,12 @@ test "functions-6" {
   \\
   \\ do
   \\  let j = 12
-  \\  (def => j * 3)() == 36
+  \\  assert((def => j * 3)() == 36, 'should be 36')
   \\  [(def => j * 3)][0]() + 12 == 48
   \\  (def => [(def => j * 3)][0]() + 12 == 48)()
   \\ end
   \\ let j = 6
-  \\ (def => [(def => j * 3)][0]() + 6 == 24)()
+  \\ assert((def => [(def => j * 3)][0]() + 6 == 24)(), 'should be true')
   ;
   _ = try doTest(src);
 }
@@ -1477,24 +1537,24 @@ test "functions-8" {
   \\ end
   \\ fun()
   \\ do
-  \\  (def (x: str) 
+  \\  assert(def (x: str) 
   \\   return x
-  \\  end)('ppp') == "ppp"
+  \\  end)('ppp') == "ppp", 'should be ppp')
   \\ end
   \\
   \\ let j = 12
-  \\ (def => j * 3)() == 36
-  \\ [(def => j * 3)][0]() + 12 == 48
+  \\ assert(def => j * 3)() == 36, 'should be 36')
+  \\ assert([(def => j * 3)][0]() + 12) == 48, 'should be 48')
   \\
   \\ do
   \\  let j = 12
   \\  (def => j * 3)() == 36
   \\  [(def => j * 3)][0]() + 12 == 48
-  \\  (def => [(def => j * 3)][0]() + 12 == 48)()
+  \\  assert((def => [(def => j * 3)][0]() + 12 == 48)(), 'should be 48')
   \\ end
   \\ let j = 6
-  \\ (def => [(def => j * 3)][0]() + 6 == 24)()
-    \\ let j = [89, def(x: num) => x * 2, def(y: num) => y + 5]
+  \\ assert(def => [(def => j * 3)][0]() + 6 == 24)(), 'true')
+  \\ let j = [89, def(x: num) => x * 2, def(y: num) => y + 5]
   \\ if j[1] is not num
   \\  if j[0] is num
   \\    j[0] += j[1](16)
@@ -1507,14 +1567,14 @@ test "functions-8" {
   \\   return def (y: num): T => x * y
   \\  end
   \\  let mul = higher{num, num}(5)
-  \\  mul(6) == 30
+  \\  assert(mul(6) == 30, 'true')
   \\ end
   \\
   \\ def higher{T, J}(x: num): fn(J): T
   \\  return def (y: num): T => x * y
   \\ end
   \\ let mul = higher{num, num}(5)
-  \\ mul(12) == 60
+  \\ assert(mul(12) == 60, 'should be 60')
     \\ do
   \\ def add {T} (k: T, t: num)
   \\    return (k, t)
@@ -1653,9 +1713,9 @@ test "functions-10" {
   \\ end
   \\ let x = fox
   \\ let j = x(5)
-  \\ j(3) == 15
+  \\ assert(j(3) == 15, 'should be 15')
   \\ let x = [[fox]][0][0]
-  \\ x(5)(3) == 15
+  \\ assert(x(5)(3) == 15, 'should be 15')
   ;
   _ = try doTest(src);
   var src2 =
@@ -1664,7 +1724,7 @@ test "functions-10" {
   \\ end
   \\
   \\ let j = fox(5)
-  \\ j(4) == 20
+  \\ assert(j(4) == 20, 'should be 20')
   ;
   _ = try doTest(src2);
   var src3 =
@@ -1675,7 +1735,7 @@ test "functions-10" {
   \\ if j is num 
   \\  j += 5
   \\ end
-  \\ j == 10
+  \\ assert(j == 10, 'should be 10')
   ;
   _ = try doTest(src3);
   var src4 =
@@ -1689,7 +1749,7 @@ test "functions-10" {
   \\  return fun
   \\ end
   \\
-  \\ fox(2)(3) == 6
+  \\ assert(fox(2)(3) == 6, 'should be 6')
   ;
   _ = try doTest(src4);
 }
@@ -1699,14 +1759,14 @@ test "functions-11" {
   \\ let j = [def (x: num) => x * x, def (y: num) => ~y]
   \\ let t = 1
   \\ let p = j[t]
-  \\ p(6) == -7
+  \\ assert(p(6) == -7, 'should be -7')
   \\
   \\ let j = [def (x: num) => x * x, def (y: num) => ~y]
   \\ let t = 1 * 0
   \\ let p = j[t]
-  \\ p(12) == 144
+  \\ assert(p(12) == 144, 'should be 144')
   \\
-  \\ [def (x: num) => x * x, def (y: num) => ~y][-1](t + 7) == -8
+  \\ assert([def (x: num) => x * x, def (y: num) => ~y][-1](t + 7) == -8, 'should be -8')
   \\
   \\ let j = [def (x: num) => x * x, def (y: num) => !y]
   \\ [def (x: num) => x * x, def (y: num) => ~y][t - 1](t + 7)
@@ -1743,6 +1803,74 @@ test "functions-12-user-defined-never" {
   \\ p
   ;
   _ = try doTest2(src);
+}
+
+test "functions-13" {
+  var src =
+  \\ def fun: void
+  \\  let p = 10
+  \\  p += 5
+  \\ end
+  \\
+  \\ let j = fun()
+  \\ assert(j is void, 'should be void')
+  ;
+  _ = try doTest(src);
+}
+
+test "functions-14" {
+  var src =
+  \\ def fun: void | noreturn
+  \\  let p = 10
+  \\  p += 5
+  \\  return assert(!!fun, 'good')
+  \\ end
+  \\
+  \\ fun()
+  ;
+  _ = try doTest(src);
+}
+
+test "functions-15" {
+  var src =
+  \\ def fun
+  \\ end
+  \\ [fun()]
+  ;
+  _ = try doTest(src);
+}
+
+test "builtin-functions" {
+  var src =
+  \\ assert(true, 'ok')
+  \\ assert(!!exit, 'exit')
+  \\ assert(!!assert, 'assert')
+  \\ assert(!!panic, 'panic')
+  \\ [panic, exit, assert]
+  ;
+  _ = try doTest(src);
+}
+
+test "builtin-functions-override" {
+  var src =
+  \\ def panic{T}(x: T)
+  \\  return [x]
+  \\ end
+  \\ assert(panic('nice')[0] == 'nice', 'okay')
+  \\
+  \\ def exit(x: num)
+  \\  return x - 2
+  \\ end
+  \\
+  \\ assert(exit(10) == 8, 'okay')
+  \\
+  \\ let check = assert
+  \\ def assert{T}(t: T)
+  \\  check(t, 'nice')
+  \\ end
+  \\ assert(!!check)
+  ;
+  _ = try doTest(src);
 }
 
 test "errors-1" {

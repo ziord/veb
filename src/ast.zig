@@ -588,6 +588,7 @@ pub const FunNode = struct {
   body: *AstNode,
   name: ?*VarNode,
   ret: ?*AstNode = null,
+  is_builtin: bool = false,
 
   pub fn init(params: VarDeclList, body: *AstNode, name: ?*VarNode, ret: ?*AstNode, tparams: ?*types.TypeList) @This() {
     return @This() {.params = params, .body = body, .name = name, .ret = ret, .tparams = tparams};
@@ -623,6 +624,7 @@ pub const FunNode = struct {
     // don't clone tparams, they're always substituted.
     // don't clone name, it'll be updated.
     var fun = FunNode.init(params, self.body.clone(al), self.name, ret, self.tparams);
+    fun.is_builtin = self.is_builtin;
     var new = util.alloc(AstNode, al);
     new.* = .{.AstFun = fun};
     return new;
@@ -741,6 +743,13 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn isEmpty(self: *@This()) bool {
+    return switch (self.*) {
+      .AstEmpty => true,
+      else => false,
+    };
+  }
+
   pub inline fn isOrElse(self: *@This()) bool {
     return switch (self.*) {
       .AstOrElse => true,
@@ -765,6 +774,13 @@ pub const AstNode = union(AstType) {
   pub inline fn isNilLiteral(self: *@This()) bool {
     return switch (self.*) {
       .AstNil => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isConstLiteral(self: *@This()) bool {
+    return switch (self.*) {
+      .AstBool, .AstString, .AstNumber => true,
       else => false,
     };
   }
@@ -869,6 +885,28 @@ pub const AstNode = union(AstType) {
         std.log.debug("Attempt to set type on node: {}\n", .{self});
       },
     }
+  }
+
+  pub fn toTypeNode(self: *@This(), al: std.mem.Allocator) *@This() {
+    var tyn: TypeNode = undefined;
+    switch (self.*) {
+      .AstNumber => |num| {
+        tyn = TypeNode.init(Type.newConstant(.TyNumber, num.token.value).box(al), num.token);
+      },
+      .AstString => |str| {
+        tyn = TypeNode.init(Type.newConstant(.TyString, str.token.value).box(al), str.token);
+      },
+      .AstBool => |bol| {
+        tyn = TypeNode.init(Type.newConstant(.TyBool, bol.token.value).box(al), bol.token);
+      },
+      .AstNil => |nil| {
+        tyn = TypeNode.init(Type.newConcrete(.TyNil, nil.token.value).box(al), nil.token);
+      },
+      else => unreachable,
+    }
+    var node = util.alloc(AstNode, al);
+    node.* = .{.AstNType = tyn};
+    return node;
   }
 
   pub fn getToken(self: *@This()) Token {

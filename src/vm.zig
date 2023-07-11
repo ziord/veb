@@ -3,7 +3,8 @@ const vl = @import("value.zig");
 const OpCode = @import("opcode.zig").OpCode;
 const Mem = @import("mem.zig");
 const GC = @import("gc.zig");
-const NovaAllocator = @import("allocator.zig");
+const VebAllocator = @import("allocator.zig");
+const native = @import("native.zig");
 
 const Value = vl.Value;
 const Code = vl.Code;
@@ -23,6 +24,7 @@ pub const VM = struct {
   objects: ?*vl.Obj,
   mem: Mem,
   gc: GC,
+  has_error: bool = false,
 
   const Self = @This();
   const STACK_MAX = 0xfff;
@@ -34,15 +36,13 @@ pub const VM = struct {
   const RuntimeError = error{RuntimeError};
   const TypeTag2CheckFunc = [_]*const fn(Value) bool {
     vl.isBoolNoInline, vl.isNumberNoInline, vl.isStringNoInline,
-    vl.isNilNoInline, vl.isVoidNoInline, vl.isListNoInline, vl.isMapNoInline,
-    vl.isTupleNoInline, vl.isErrorNoInline, vl.isFnNoInline, vl.isClosureNoInline,
+    vl.isNilNoInline, vl.isVoidNoInline, vl.isNoreturnNoInline,
+    vl.isListNoInline, vl.isMapNoInline, vl.isTupleNoInline,
+    vl.isErrorNoInline, vl.isFnNoInline, vl.isClosureNoInline,
     vl.isUpvalueNoInline, vl.isZFnNoInline, vl.isFiberNoInline
   };
-  pub const ZFnNames = [_][]const u8 {
-    "",
-  };
 
-  pub fn init(allocator: *NovaAllocator) Self {
+  pub fn init(allocator: *VebAllocator) Self {
     return Self {
       .fiber = undefined,
       .mem = Mem.init(allocator.getAllocator()),
@@ -56,7 +56,7 @@ pub const VM = struct {
 
   pub fn boot(self: *Self, fun: *ObjFn) void {
     var clo = vl.createClosure(self, fun);
-    // TODO: init builtins
+    native.addBuiltins(self);
     self.fiber = vl.createFiber(self, clo, .Root, null);
   }
 
@@ -217,9 +217,15 @@ pub const VM = struct {
   }
 
   fn runtimeError(self: *Self, comptime fmt: []const u8, args: anytype) RuntimeError {
-    _ = self;
+    self.has_error = true;
     std.debug.print(fmt ++ "\n", args);
     return error.RuntimeError;
+  }
+
+  pub fn panickUnwindError(self: *Self, comptime fmt: []const u8, args: anytype) void {
+    // TODO: unwind the stack
+    self.has_error = true;
+    std.debug.print(fmt ++ "\n", args);
   }
 
   pub inline fn printStack(self: *Self) void {
@@ -416,12 +422,19 @@ pub const VM = struct {
         },
         .Call => {
           var rx: u32 = undefined;
-          // TODO: use function arg count; n
           var n: u32 = undefined;
           self.read2Args(inst, &rx, &n);
           try self.ensureFrameCapacity(&fp, &fiber);
-          fiber.appendFrame(vl.asClosure(fp.stack[rx]), fp.stack + rx + 1);
-          fp = fiber.fp;
+          var val = fp.stack[rx];
+          if (vl.isClosure(val)) {
+            fiber.appendFrame(vl.asClosure(val), fp.stack + rx + 1);
+            fp = fiber.fp;
+            continue;
+          }
+          var func = vl.asZFn(val);
+          var res = func.fun(self, n, rx + 1);
+          if (self.has_error) return error.RuntimeError;
+          fp.stack[rx] = res;
           continue;
         },
         .Ret => {

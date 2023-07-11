@@ -30,6 +30,9 @@ pub const TypeKind = enum (u8) {
   /// void type:
   ///  void
   TyVoid,
+  /// noreturn type:
+  ///  noreturn
+  TyNoReturn,
   /// class type:
   ///  ex. list, map, etc.
   TyClass,
@@ -666,6 +669,10 @@ pub const Type = struct {
     return self.isConcreteTypeEq(.TyVoid);
   }
 
+  pub inline fn isNoreturnTy(self: *Self) bool {
+    return self.isConcreteTypeEq(.TyNoReturn);
+  }
+
   pub inline fn isClassTy(self: *Self) bool {
     return self.isConcreteTypeEq(.TyClass);
   }
@@ -735,18 +742,19 @@ pub const Type = struct {
     switch (self.kind) {
       .Concrete => |conc| {
         switch (conc.tkind) {
-          .TyBool   => self.tid = 1 << ID_HASH,
-          .TyNumber => self.tid = 2 << ID_HASH,
-          .TyString => self.tid = 3 << ID_HASH,
-          .TyNil    => self.tid = 4 << ID_HASH,
-          .TyVoid   => self.tid = 9 << ID_HASH,
-          .TyClass  => {
+          .TyBool     => self.tid = 1 << ID_HASH,
+          .TyNumber   => self.tid = 2 << ID_HASH,
+          .TyString   => self.tid = 3 << ID_HASH,
+          .TyNil      => self.tid = 4 << ID_HASH,
+          .TyVoid     => self.tid = 9 << ID_HASH,
+          .TyNoReturn => self.tid = 10 << ID_HASH,
+          .TyType     => self.tid = 12 << ID_HASH,
+          .TyClass    => {
             self.tid = 5 << ID_HASH;
             for (conc.name.?) |ch| {
               self.tid += @as(u8, ch);
             }
           },
-          .TyType   => self.tid = 12 << ID_HASH,
         }
       },
       .Generic => |*gen| {
@@ -788,7 +796,7 @@ pub const Type = struct {
           }
         }
       },
-      .Recursive => |rec| {
+      .Recursive => |*rec| {
         self.tid = rec.base.typeid();
       }
     }
@@ -1079,13 +1087,14 @@ pub const Type = struct {
     if (depth.* > MAX_STEPS) return "...";
     return switch (self.kind) {
       .Concrete => |conc| switch (conc.tkind) {
-        .TyBool   => "bool",
-        .TyNumber => "num",
-        .TyString => "str",
-        .TyNil    => "nil",
-        .TyVoid   => "void",
-        .TyType   => "Type",
-        .TyClass  => conc.name.?,
+        .TyBool     => "bool",
+        .TyNumber   => "num",
+        .TyString   => "str",
+        .TyNil      => "nil",
+        .TyVoid     => "void",
+        .TyNoReturn => "noreturn",
+        .TyType     => "Type",
+        .TyClass    => conc.name.?,
       },
       .Constant => |*cons| {
         if (cons.kind != .TyString) return cons.val;

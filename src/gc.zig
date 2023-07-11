@@ -1,18 +1,18 @@
 const std = @import("std");
 const value = @import("value.zig");
 const VM = @import("vm.zig").VM;
-const NovaAllocator = @import("allocator.zig");
+const VebAllocator = @import("allocator.zig");
 
 const Obj = value.Obj;
 
 bytes_allocated: usize,
 next_collection: usize,
 gray_stack: std.ArrayList(*Obj),
-allocator: *NovaAllocator,
+allocator: *VebAllocator,
 
 const Self = @This();
 
-pub fn init(allocator: *NovaAllocator) Self {
+pub fn init(allocator: *VebAllocator) Self {
   return Self {
     .gray_stack = std.ArrayList(*Obj).init(allocator.getArenaAllocator()),
     .bytes_allocated = 0,

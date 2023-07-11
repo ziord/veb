@@ -1,6 +1,6 @@
 const std = @import("std");
 const OpCode = @import("opcode.zig").OpCode;
-const NovaAllocator = @import("allocator.zig");
+const VebAllocator = @import("allocator.zig");
 
 const keywords = std.ComptimeStringMap(TokenType, .{
   .{"return", .TkReturn},
@@ -36,6 +36,7 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"void", .TkVoid},
   .{"orelse", .TkOrElse},
   .{"continue", .TkContinue},
+  .{"noreturn", .TkNoReturn},
 });
 
 pub const TokenType = enum (u8) {
@@ -104,6 +105,7 @@ pub const TokenType = enum (u8) {
   TkOrElse,         // orelse
   TkReturn,         // return
   TkContinue,       // continue
+  TkNoReturn,       // noreturn
   TkNumber,         // <number>
   TkString,         // <string>
   TkAllocString,    // <string>
@@ -224,6 +226,7 @@ pub const TokenType = enum (u8) {
       .TkOrElse => "orelse",
       .TkReturn => "return",
       .TkContinue => "continue",
+      .TkNoReturn => "noreturn",
       .TkNumber => "<number>",
       .TkString, .TkAllocString => "<string>",
       .TkIdent => "<identifier>",
@@ -365,6 +368,7 @@ pub const Token = struct {
         break;
       }
     }
+    if (src[start_col] == '\n') start_col += 1;
     var end_col: usize = start_col;
     // walk forwards
     for (src[start_col..]) |ch| {
@@ -426,7 +430,7 @@ pub const Lexer = struct {
 
   const Self = @This();
 
-  pub fn init(src: []const u8, allocator: *NovaAllocator) Self {
+  pub fn init(src: []const u8, allocator: *VebAllocator) Self {
     return Self {
       .line = 1,
       .column = 1,

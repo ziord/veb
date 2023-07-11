@@ -4,7 +4,7 @@ const ast = @import("ast.zig");
 const types = @import("type.zig");
 const util = @import("util.zig");
 const diagnostics = @import("diagnostics.zig");
-const CnAllocator = @import("allocator.zig");
+const VebAllocator = @import("allocator.zig");
 
 const Node = ast.AstNode;
 const exit = std.os.exit;
@@ -30,7 +30,6 @@ pub const Parser = struct {
   lexer: lex.Lexer,
   allocator: std.mem.Allocator,
   diag: Diagnostic,
-  cna: *CnAllocator,
   allow_nl: usize = 0,
   funcs: ?*Node = null,
   in_cast: u32 = 0,
@@ -131,6 +130,7 @@ pub const Parser = struct {
     .{.bp = .Term, .prefix = null, .infix = Self.orElseExpr},           // TkOrElse
     .{.bp = .None, .prefix = null, .infix = null},                      // TkReturn
     .{.bp = .None, .prefix = null, .infix = null},                      // TkContinue
+    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkNoReturn
     .{.bp = .None, .prefix = Self.number, .infix = null},               // TkNumber
     .{.bp = .None, .prefix = Self.string, .infix = null},               // TkString
     .{.bp = .None, .prefix = Self.string, .infix = null},               // TkAllocString
@@ -139,13 +139,12 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkEof
   };
 
-  pub fn init(src: *[]const u8, filename: *const[]const u8, allocator: *CnAllocator) Self {
+  pub fn init(src: *[]const u8, filename: *const[]const u8, allocator: *VebAllocator) Self {
     var al = allocator.getArenaAllocator();
     return Self {
       .current_tok = undefined,
       .previous_tok = undefined,
       .lexer = lex.Lexer.init(src.*, allocator),
-      .cna = allocator,
       .diag = Diagnostic.init(al, filename, src),
       // use the arena allocator for allocating general nodes.
       .allocator = al,
@@ -833,12 +832,13 @@ pub const Parser = struct {
         typ = try self.tExpr();
         try self.consume(.TkRBracket);
       },
-      .TkBool, .TkNum, .TkStr, .TkVoid => |ty| {
+      .TkBool, .TkNum, .TkStr, .TkVoid, .TkNoReturn => |ty| {
           var tkind: TypeKind = switch (ty) {
           .TkBool => .TyBool,
           .TkNum => .TyNumber,
           .TkStr => .TyString,
           .TkVoid => .TyVoid,
+          .TkNoReturn => .TyNoReturn,
           else => unreachable,
         };
         // direct 'unit' types such as listed above do not need names

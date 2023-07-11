@@ -77,13 +77,16 @@ pub const FlowNode = struct {
     return list;
   }
 
-  fn outgoingNodes(node: *@This(), visited: *std.AutoArrayHashMap(*FlowNode, u32), edge: FlowEdge) void {
+  fn outgoingNodes(node: *@This(), visited: *std.AutoArrayHashMap(*FlowNode, u32), nodes: *FlowList, edge: FlowEdge) void {
+    // skip the node for which the outgoing nodes is being computed,
+    // if on the same edge as its outgoing nodes
+    if (node.edge == edge and visited.count() > 0) {
+      nodes.append(node);
+    }
     visited.put(node, 0) catch {};
     for (node.prev_next.items()) |nd| {
-      if (nd.next and nd.flo.edge == edge) {
-        if (visited.get(nd.flo) == null) {
-          outgoingNodes(nd.flo, visited, edge);
-        }
+      if (nd.next and visited.get(nd.flo) == null) {
+        outgoingNodes(nd.flo, visited, nodes, edge);
       }
     }
   }
@@ -91,9 +94,7 @@ pub const FlowNode = struct {
   pub fn getOutgoingNodes(node: *@This(), edge: FlowEdge, allocator: std.mem.Allocator) FlowList {
     var nodes = FlowList.init(allocator);
     var visited = std.AutoArrayHashMap(*FlowNode, u32).init(allocator);
-    outgoingNodes(node, &visited, edge);
-    nodes.list.items = visited.keys();
-    nodes.list.items = nodes.list.items[1..];
+    outgoingNodes(node, &visited, &nodes, edge);
     return nodes;
   }
 

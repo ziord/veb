@@ -389,6 +389,8 @@ pub const Type = struct {
   tid: u32 = 0,
   alias: ?*Type = null,
   kind: TypeInfo,
+  /// only applies to function types; whether this function type is variadic
+  variadic: bool = false,
 
   const Self = @This();
 
@@ -405,6 +407,7 @@ pub const Type = struct {
   fn setRestFields(ty1: *Self, ty2: *Self) void {
     ty1.tid = ty2.tid;
     ty1.alias = ty2.alias;
+    ty1.variadic = ty2.variadic;
   }
 
   pub fn clone(self: *Self, A: std.mem.Allocator) *Self {

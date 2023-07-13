@@ -1840,6 +1840,44 @@ test "functions-15" {
   _ = try doTest(src);
 }
 
+test "functions-16-varargs" {
+  var src =
+  \\ do
+  \\ def fun(args*: num)
+  \\  return args
+  \\ end
+  \\
+  \\ let j = fun(1, 2, 3)[0] + 12
+  \\ assert(j == 13, 'j should be 13')
+  \\ fun()
+  \\ end
+  \\
+  \\ def foo(a: num, rest*: num)
+  \\  return [a * rest[0], rest]
+  \\ end
+  \\
+  \\ let res = foo(5, 3)
+  \\ if res[0] is num
+  \\  assert(res[0]==15, 'should be 15')
+  \\ else
+  \\  assert(false, 'oops')
+  \\ end
+  \\ res = foo(12, 2, 3, 4, 5, 6)
+  \\ if res[0] is num
+  \\  assert(res[0]==24, 'should be 24')
+  \\ else
+  \\  assert(false, 'oops')
+  \\ end
+  \\ if res[1] is tuple
+  \\  assert(res[1][0]==2, 'should be 2')
+  \\  assert(res[1][4]==6, 'should be 6')
+  \\ else
+  \\  assert(false, 'oops')
+  \\ end
+  ;
+  _ = try doTest(src);
+}
+
 test "builtin-functions" {
   var src =
   \\ assert(true, 'ok')

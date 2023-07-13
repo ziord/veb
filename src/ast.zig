@@ -519,6 +519,8 @@ pub const ControlNode = struct {
 };
 
 pub const CallNode = struct {
+  variadic: bool = false,
+  va_start: usize = 0,
   expr: *AstNode,
   targs: ?*AstNodeList = null,
   args: AstNodeList,
@@ -530,6 +532,20 @@ pub const CallNode = struct {
 
   pub inline fn isGeneric(self: *@This()) bool {
     return self.targs != null;
+  }
+
+  pub fn transformVariadicArgs(self: *@This()) void {
+    var al = self.args.allocator();
+    var tuple = AstNodeList.init(al);
+    tuple.appendSlice(self.args.items()[self.va_start..]);
+    var node = util.alloc(AstNode, al);
+    node.* = .{.AstTuple = .{.elems = tuple}};
+    if (self.args.len() > 0) {
+      self.args.items()[self.va_start] = node;
+    } else {
+      self.args.append(node);
+    }
+    self.args.list.items.len = self.va_start + 1;
   }
 
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
@@ -589,6 +605,7 @@ pub const FunNode = struct {
   name: ?*VarNode,
   ret: ?*AstNode = null,
   is_builtin: bool = false,
+  variadic: bool = false,
 
   pub fn init(params: VarDeclList, body: *AstNode, name: ?*VarNode, ret: ?*AstNode, tparams: ?*types.TypeList) @This() {
     return @This() {.params = params, .body = body, .name = name, .ret = ret, .tparams = tparams};

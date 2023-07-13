@@ -1221,6 +1221,7 @@ pub const TypeChecker = struct {
     for (node.params.items()) |vd| {
       fun.params.append(vd.ident.typ.?);
     }
+    ty.variadic = ast_node.AstFun.variadic;
     return ty.box(self.ctx.allocator());
   }
 
@@ -1419,39 +1420,28 @@ pub const TypeChecker = struct {
     // meta-data (`node`) which would not be present if the type was created by a user
     return inf_ret_ty.box(self.ctx.allocator());
   }
-  
-  fn inferCall(self: *Self, node: *ast.CallNode) !*Type {
-    var ty = try self.infer(node.expr);
-    // check that we're actually calling a function
-    if (!ty.isFunction()) {
-      return self.error_(
-        true, node.expr.getToken(),
-        "Expected callable or function type but found '{s}'", .{self.getTypename(ty)}
-      );
-    }
-    var fun_ty = ty.function();
-    // perform signature checks
+
+  fn validateCallArgCount(self: *Self, fun_ty: *types.Function, node: *ast.CallNode) !void {
     if (fun_ty.params.len() != node.args.len()) {
-       return self.error_(
-        true, node.expr.getToken(),
-        "Argument mismatch. Expected {} argument(s) but found {}", .{fun_ty.params.len(), node.args.len()}
-      );
-    }
-    // check generic is properly called
-    if (node.isGeneric() and !fun_ty.isGeneric()) {
-      return self.error_(
-        true, node.expr.getToken(),
-        "Non-generic function called as generic", .{}
-      );
-    }
-    if (!fun_ty.isGeneric()) {
-      var is_cyclic = false;
-      if (fun_ty.node) |fun_node| {
-        is_cyclic = self.cycles.contains(fun_node, Node.eql);
-        if (!fun_node.AstFun.body.AstBlock.checked and !is_cyclic) {
-          _ = try self.inferFun(fun_node, ty);
+      if (node.variadic) {
+        // argc -> == n - 1 or > n
+        if (!(node.args.len() == fun_ty.params.len() - 1 or node.args.len() > fun_ty.params.len())) {
+          return self.error_(
+            true, node.expr.getToken(),
+            "Argument mismatch. Expected {} argument(s) but found {}", .{fun_ty.params.len() - 1, node.args.len()}
+          );
         }
+      } else {
+        return self.error_(
+          true, node.expr.getToken(),
+          "Argument mismatch. Expected {} argument(s) but found {}", .{fun_ty.params.len(), node.args.len()}
+        );
       }
+    }
+  }
+
+  fn validateCallArguments(self: *Self, fun_ty: *types.Function, node: *ast.CallNode) !void {
+    if (!node.variadic) {
       for (fun_ty.params.items(), node.args.items()) |p_ty, arg| {
         var arg_ty = try self.infer(arg);
         if (!p_ty.isRelatedTo(arg_ty, .RCAny, self.ctx.allocator())) {
@@ -1467,6 +1457,71 @@ pub const TypeChecker = struct {
           p_ty.function().node = arg;
         }
       }
+    } else {
+      var non_varargs_len = fun_ty.params.len() - 1;
+      node.va_start = non_varargs_len;
+      if (node.args.len() == 0) return;
+      // validate regular args
+      for (fun_ty.params.items()[0..non_varargs_len], node.args.items()[0..non_varargs_len]) |p_ty, arg| {
+        var arg_ty = try self.infer(arg);
+        if (!p_ty.isRelatedTo(arg_ty, .RCAny, self.ctx.allocator())) {
+          return self.error_(
+            true, arg.getToken(),
+            "Argument mismatch. Expected type '{s}' but found '{s}'",
+            .{self.getTypename(p_ty), self.getTypename(arg_ty)}
+          );
+        }
+        // set extra 'node' metadata for this arg type, which would be null if
+        // arg type was created by a user
+        if (p_ty.isFunction() and arg.isFun()) {
+          p_ty.function().node = arg;
+        }
+      }
+      // validate varargs
+      // we expect the variadic type to be a tuple, so perform relations check with it tparam:
+      var va_ty = fun_ty.params.getLast().generic().tparams.itemAt(0);
+      for (node.args.items()[non_varargs_len..]) |arg| {
+        var arg_ty = try self.infer(arg);
+        if (!va_ty.isRelatedTo(arg_ty, .RCAny, self.ctx.allocator())) {
+          return self.error_(
+            true, arg.getToken(),
+            "Argument mismatch. Expected type '{s}' but found '{s}'",
+            .{self.getTypename(va_ty), self.getTypename(arg_ty)}
+          );
+        }
+      }
+    }
+  }
+  
+  fn inferCall(self: *Self, node: *ast.CallNode) !*Type {
+    var ty = try self.infer(node.expr);
+    // check that we're actually calling a function
+    if (!ty.isFunction()) {
+      return self.error_(
+        true, node.expr.getToken(),
+        "Expected callable or function type but found '{s}'", .{self.getTypename(ty)}
+      );
+    }
+    var fun_ty = ty.function();
+    node.variadic = ty.variadic;
+    // perform signature checks
+    try self.validateCallArgCount(fun_ty, node);
+    // check generic is properly called
+    if (node.isGeneric() and !fun_ty.isGeneric()) {
+      return self.error_(
+        true, node.expr.getToken(),
+        "Non-generic function called as generic", .{}
+      );
+    }
+    if (!fun_ty.isGeneric()) {
+      var is_cyclic = false;
+      if (fun_ty.node) |fun_node| {
+        is_cyclic = self.cycles.contains(fun_node, Node.eql);
+        if (!fun_node.AstFun.body.AstBlock.checked and !is_cyclic) {
+          _ = try self.inferFun(fun_node, ty);
+        }
+      }
+      try self.validateCallArguments(fun_ty, node);
       // [N*]: check if we're currently resolving this type, i.e. if it's recursive
       if (is_cyclic) {
         if (self.inferFunReturnTypePartial(self.cfg.lookup(fun_ty.node.?).?)) |typ| {
@@ -1564,16 +1619,7 @@ pub const TypeChecker = struct {
       }
     }
     // validate monomorphized function params
-    for (new_fun_ty.function().params.items(), node.args.items()) |p_ty, arg| {
-      var arg_ty = try self.infer(arg);
-      if (!p_ty.isRelatedTo(arg_ty, .RCAny, self.ctx.allocator())) {
-        return self.error_(
-          true, arg.getToken(),
-          "Argument mismatch. Expected type '{s}' but found '{s}'",
-          .{self.getTypename(p_ty), self.getTypename(arg_ty)}
-        );
-      }
-    }
+    try self.validateCallArguments(new_fun_ty.function(), node);
     var typ = try self.inferFun(new_fun_node, new_fun_ty);
     node.typ = typ.function().ret;
     node.expr.setType(new_fun_ty);

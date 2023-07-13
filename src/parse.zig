@@ -733,7 +733,7 @@ pub const Parser = struct {
   }
 
   fn builtinType(self: *Self) !Type {
-    // handle builtin list/map/tuple type
+    // handle builtin list/map/tuple/err type
     var debug = self.current_tok;
     try self.advance();
     var conc = Type.newConcrete(.TyClass, debug.value);
@@ -1068,9 +1068,10 @@ pub const Parser = struct {
     return node;
   }
 
-  fn funParams(self: *Self) !ast.VarDeclList {
+  fn funParams(self: *Self, variadic: *bool) !ast.VarDeclList {
     // Params      :=  "(" Ident ":" Type ("," Ident ":" Type)* ")"
     var params = ast.VarDeclList.init(self.allocator);
+    var disamb = std.StringHashMap(u32).init(self.allocator);
     if (self.match(.TkLBracket)) {
       while (!self.check(.TkEof) and !self.check(.TkRBracket)) {
         if (params.len() > 0) {
@@ -1078,9 +1079,28 @@ pub const Parser = struct {
         }
         try self.consume(.TkIdent);
         var ident = ast.VarNode.init(self.previous_tok);
-        try self.consume(.TkColon);
-        try self.annotation(&ident);
-        params.append(ast.VarDeclNode.init(ident.box(self.allocator), undefined, true));
+        if (disamb.get(ident.token.value)) |_| {
+          return self.err(ident.token, "duplicate parameter is illegal in parameter list");
+        }
+        disamb.put(ident.token.value, 0) catch {};
+        if (!self.match(.TkStar)) {
+          try self.consume(.TkColon);
+          try self.annotation(&ident);
+          params.append(ast.VarDeclNode.init(ident.box(self.allocator), undefined, true));
+        } else {
+          variadic.* = true;
+          var conc = Type.newConcrete(.TyClass, "tuple");
+          var tuple = Type.newGeneric(self.allocator, conc.box(self.allocator)).box(self.allocator);
+          try self.consume(.TkColon);
+          try self.annotation(&ident);
+          tuple.generic().append(ident.typ.?);
+          ident.typ = tuple;
+          params.append(ast.VarDeclNode.init(ident.box(self.allocator), undefined, true));
+          if (!self.check(.TkRBracket)) {
+            return self.err(self.current_tok, "variadic parameter should be last in a parameter list");
+          }
+          break;
+        }
       }
       try self.consume(.TkRBracket);
     }
@@ -1116,7 +1136,8 @@ pub const Parser = struct {
       var tmp = try self.abstractTypeParams(undefined);
       tparams = util.box(TypeList, tmp.generic().tparams, self.allocator);
     }
-    var params = try self.funParams();
+    var variadic = false;
+    var params = try self.funParams(&variadic);
     var ret: ?*Node = null;
     if (self.check(.TkColon)) {
       ret = try self.returnSig();
@@ -1138,6 +1159,7 @@ pub const Parser = struct {
     self.funcs = prev_func;
     body.AstBlock.cond = func;
     func.* = .{.AstFun = ast.FunNode.init(params, body, ident, ret, tparams)};
+    func.AstFun.variadic = variadic;
     return func;
   }
 

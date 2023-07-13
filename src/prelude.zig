@@ -1,4 +1,6 @@
 pub const _BuiltinsItf =
+\\ type never = never
+\\
 \\ def assert(arg: bool, msg: str): void | noreturn
 \\    #[[internal]]
 \\ end

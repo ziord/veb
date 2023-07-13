@@ -26,6 +26,13 @@ pub fn ArrayList(comptime T: type) type {
       };
     }
 
+    pub inline fn appendSlice(self: *@This(), item: []const T) void {
+      self.list.appendSlice(item) catch |e| {
+        std.debug.print("error: {}", .{e});
+        std.os.exit(1);
+      };
+    }
+
     pub fn count(self: *@This(), comptime func: fn(_: T) bool) usize {
       var i = @as(usize, 0);
       for (self.list.items) |itm| {

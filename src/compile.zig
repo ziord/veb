@@ -727,9 +727,9 @@ pub const Compiler = struct {
     return dst;
   }
 
-  inline fn cCollection(self: *Self, node: *ast.ListNode, ast_node: *Node, dst: u32, new: OpCode, set: OpCode) !u32 {
+  inline fn cCollection(self: *Self, node: *ast.ListNode, ast_node: *Node, dst: u32, op: OpCode, set: OpCode) !u32 {
     const size = @intCast(u32, node.elems.len());
-    self.fun.code.write2ArgsInst(new, dst, size, self.lastLine(), self.vm);
+    self.fun.code.write2ArgsInst(op, dst, size, self.lastLine(), self.vm);
     var token = ast_node.getToken();
     var idx: u32 = undefined;
     for (node.elems.items(), 0..) |elem, i| {
@@ -1205,6 +1205,7 @@ pub const Compiler = struct {
     // - get a register window
     // - compile the call expr
     // - generate the instruction: call r(func), b(argc)
+    if (node.variadic) node.transformVariadicArgs();
     var token = node.expr.getToken();
     var fun_dst = try self.c(node.expr, reg);
     var _dst = reg;

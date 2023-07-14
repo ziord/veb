@@ -29,6 +29,7 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"bool", .TkBool},
   .{"list", .TkList},
   .{"err", .TkErr},
+  .{"any", .TkAny},
   .{"type", .TkType},
   .{"tuple", .TkTuple},
   .{"then", .TkThen},
@@ -89,6 +90,7 @@ pub const TokenType = enum (u8) {
   TkStr,            // str
   TkNil,            // nil
   TkErr,            // err
+  TkAny,            // any
   TkTry,            // try
   TkBool,           // bool
   TkList,           // list
@@ -210,6 +212,7 @@ pub const TokenType = enum (u8) {
       .TkStr => "str",
       .TkNil => "nil",
       .TkErr => "err",
+      .TkAny => "any",
       .TkTry => "try",
       .TkBool => "bool",
       .TkList => "list",

@@ -1439,7 +1439,7 @@ test "functions-5" {
 test "functions-6" {
   var src =
   \\ do
-  \\  assert(def (x: str) 
+  \\  assert((def (x: str) 
   \\   return x
   \\  end)('ppp') == "ppp", 'should be "ppp"')
   \\ end
@@ -1537,14 +1537,14 @@ test "functions-8" {
   \\ end
   \\ fun()
   \\ do
-  \\  assert(def (x: str) 
+  \\  assert((def (x: str) 
   \\   return x
   \\  end)('ppp') == "ppp", 'should be ppp')
   \\ end
   \\
   \\ let j = 12
-  \\ assert(def => j * 3)() == 36, 'should be 36')
-  \\ assert([(def => j * 3)][0]() + 12) == 48, 'should be 48')
+  \\ assert((def => j * 3)() == 36, 'should be 36')
+  \\ assert([(def => j * 3)][0]() + 12 == 48, 'should be 48')
   \\
   \\ do
   \\  let j = 12
@@ -1553,7 +1553,7 @@ test "functions-8" {
   \\  assert((def => [(def => j * 3)][0]() + 12 == 48)(), 'should be 48')
   \\ end
   \\ let j = 6
-  \\ assert(def => [(def => j * 3)][0]() + 6 == 24)(), 'true')
+  \\ assert((def => [(def => j * 3)][0]() + 6 == 24)(), 'true')
   \\ let j = [89, def(x: num) => x * 2, def(y: num) => y + 5]
   \\ if j[1] is not num
   \\  if j[0] is num
@@ -1878,12 +1878,36 @@ test "functions-16-varargs" {
   _ = try doTest(src);
 }
 
+test "functions-17" {
+  var src =
+  \\ do
+  \\  def foo{T}(x*: T)
+  \\   print(x)
+  \\   return x
+  \\  end
+  \\
+  \\  let j: any | num | str = ['fox']
+  \\  foo{num}(6, 7)
+  \\  do
+  \\   print(1, 2, 3, 4)
+  \\  end
+  \\ end
+  \\ print(print(), 'jeryr')
+  \\ (def (p*:any) => print(p))(1, 2, 'a', 'b', false, true, nil)
+  \\ let j: any? = nil
+  \\ if j is num
+  \\ end
+  ;
+  _ = try doTest(src);
+}
+
 test "builtin-functions" {
   var src =
   \\ assert(true, 'ok')
   \\ assert(!!exit, 'exit')
   \\ assert(!!assert, 'assert')
   \\ assert(!!panic, 'panic')
+  \\ assert(!!print, 'print')
   \\ [panic, exit, assert]
   ;
   _ = try doTest(src);
@@ -1907,6 +1931,11 @@ test "builtin-functions-override" {
   \\  check(t, 'nice')
   \\ end
   \\ assert(!!check)
+  \\
+  \\ def print(x*: any)
+  \\  return x
+  \\ end
+  \\ check(print('fox', 'fry', 1, 2, 3)[0] == 'fox', 'should be "fox"')
   ;
   _ = try doTest(src);
 }

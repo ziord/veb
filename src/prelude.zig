@@ -12,4 +12,8 @@ pub const _BuiltinsItf =
 \\ def panic{T}(msg: T): noreturn
 \\   #[[internal]]
 \\ end
+\\
+\\ def print(args*: any): void
+\\   #[[internal]]
+\\ end
 ;

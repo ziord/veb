@@ -33,8 +33,11 @@ pub const TypeKind = enum (u8) {
   /// noreturn type:
   ///  noreturn
   TyNoReturn,
+  /// any type:
+  ///  any
+  TyAny,
   /// class type:
-  ///  ex. list, map, etc.
+  ///  list, map, etc.
   TyClass,
 };
 
@@ -64,6 +67,7 @@ pub const Concrete = struct {
   pub fn isRelatedTo(this: *Concrete, other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
     _ = A;
     _ = ctx;
+    if (this.tkind == .TyAny) return true;
     switch (other.kind) {
       // Concrete & Concrete 
       .Concrete => |*conc| {
@@ -473,11 +477,12 @@ pub const Type = struct {
     var nil = if (nil_ty) |nil| nil else Type.newConcrete(.TyNil, null).box(al);
     if (ty.isUnion()) {
       ty.union_().set(nil);
-      return ty;
+      return compressTypes(&ty.union_().variants, ty);
     } else {
-      var typ = Type.newUnion(al);
-      typ.union_().addSlice(([_]*Type{ty, nil})[0..]);
-      return typ.box(al);
+      var hs = TypeHashSet.init(al);
+      hs.set(ty.typeid(), ty);
+      hs.set(nil.typeid(), nil);
+      return compressTypes(&hs, null);
     }
   }
 
@@ -676,6 +681,10 @@ pub const Type = struct {
     return self.isConcreteTypeEq(.TyNoReturn);
   }
 
+  pub inline fn isAnyTy(self: *Self) bool {
+    return self.isConcreteTypeEq(.TyAny);
+  }
+
   pub inline fn isClassTy(self: *Self) bool {
     return self.isConcreteTypeEq(.TyClass);
   }
@@ -751,6 +760,7 @@ pub const Type = struct {
           .TyNil      => self.tid = 4 << ID_HASH,
           .TyVoid     => self.tid = 9 << ID_HASH,
           .TyNoReturn => self.tid = 10 << ID_HASH,
+          .TyAny      => self.tid = 11 << ID_HASH,
           .TyType     => self.tid = 12 << ID_HASH,
           .TyClass    => {
             self.tid = 5 << ID_HASH;
@@ -1096,6 +1106,7 @@ pub const Type = struct {
         .TyNil      => "nil",
         .TyVoid     => "void",
         .TyNoReturn => "noreturn",
+        .TyAny      => "any",
         .TyType     => "Type",
         .TyClass    => conc.name.?,
       },
@@ -1197,7 +1208,10 @@ pub const Type = struct {
       var false_ty: ?*Type = null;
       for (typeset.values()) |typ| {
         // skip related types & nil types
-        if (typ.isNilTy()) {
+        if (typ.isAnyTy()) {
+          // any supercedes all other types
+          return typ;
+        } else if (typ.isNilTy()) {
           nil_ty = typ;
           continue;
         } else if (typ.typeid() == Type.getConstantTrueHash()) {
@@ -1240,7 +1254,13 @@ pub const Type = struct {
         typ = final.itemAt(0);
       }
       if (nil_ty) |nil| {
-        typ = Type.newNullable(typ, allocator, nil);
+        if (typ.isUnion()) {
+          typ.union_().set(nil);
+        } else {
+          var tmp = Type.newUnion(allocator).box(allocator);
+          tmp.union_().addSlice(&[_]*Type{typ, nil});
+          typ = tmp;
+        }
       }
       return typ;
     }

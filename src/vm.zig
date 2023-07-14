@@ -37,6 +37,7 @@ pub const VM = struct {
   const TypeTag2CheckFunc = [_]*const fn(Value) bool {
     vl.isBoolNoInline, vl.isNumberNoInline, vl.isStringNoInline,
     vl.isNilNoInline, vl.isVoidNoInline, vl.isNoreturnNoInline,
+    vl.isAnyNoInline,
     vl.isListNoInline, vl.isMapNoInline, vl.isTupleNoInline,
     vl.isErrorNoInline, vl.isFnNoInline, vl.isClosureNoInline,
     vl.isUpvalueNoInline, vl.isZFnNoInline, vl.isFiberNoInline

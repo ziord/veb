@@ -375,6 +375,11 @@ pub fn isNoreturnNoInline(val: Value) bool {
   return false;
 }
 
+pub fn isAnyNoInline(val: Value) bool {
+  _ = val;
+  return true;
+}
+
 pub inline fn isNothing(val: Value) bool {
   return val == NOTHING_VAL;
 }

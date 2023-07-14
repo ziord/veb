@@ -87,7 +87,7 @@ pub const Parser = struct {
     .{.bp = .BitXor, .prefix = null, .infix = Self.binary},             // TkCaret
     .{.bp = .BitOr, .prefix = null, .infix = Self.binary},              // TkPipe
     .{.bp = .Unary, .prefix = Self.unary, .infix = null},               // TkTilde
-    .{.bp = .Access, .prefix = null, .infix = Self.dotderef},            // TkDot
+    .{.bp = .Access, .prefix = null, .infix = Self.dotderef},           // TkDot
     .{.bp = .None, .prefix = null, .infix = null},                      // TkQMark
     .{.bp = .None, .prefix = null, .infix = null},                      // TkNewline
     .{.bp = .None, .prefix = null, .infix = null},                      // TkEqGrt
@@ -114,6 +114,7 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkStr
     .{.bp = .None, .prefix = Self.nullable, .infix = null},             // TkNil
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkErr
+    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkAny
     .{.bp = .Unary, .prefix = Self.tryExpr, .infix = null},             // TkTry
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkBool
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkList
@@ -832,13 +833,14 @@ pub const Parser = struct {
         typ = try self.tExpr();
         try self.consume(.TkRBracket);
       },
-      .TkBool, .TkNum, .TkStr, .TkVoid, .TkNoReturn => |ty| {
+      .TkBool, .TkNum, .TkStr, .TkVoid, .TkNoReturn, .TkAny => |ty| {
           var tkind: TypeKind = switch (ty) {
           .TkBool => .TyBool,
           .TkNum => .TyNumber,
           .TkStr => .TyString,
           .TkVoid => .TyVoid,
           .TkNoReturn => .TyNoReturn,
+          .TkAny => .TyAny,
           else => unreachable,
         };
         // direct 'unit' types such as listed above do not need names

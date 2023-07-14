@@ -1582,11 +1582,12 @@ pub const TypeChecker = struct {
           }
         }
         if (!resolved) {
-          return self.error_(
+          self.error_(
             true, tvar.variable().tokens.itemAt(0),
-            "Type variable '{s}' must be explicitly specified if not used with an argument",
+            "Could not resolve the generic type variable '{s}'. Consider explicitly specifying the type parameter",
             .{self.getTypename(tvar)}
-          );
+          ) catch {};
+          return self.error_(true, node.expr.getToken(), "Called from here:", .{});
         }
       }
     }
@@ -1651,7 +1652,7 @@ pub const TypeChecker = struct {
     if (ty.isErrorTy()) {
       return self.error_(
         true, node.expr.getToken(),
-        "nested error types are unsupported: '{s}'", .{self.getTypename(ty)}
+        "Nested error types are unsupported: '{s}'", .{self.getTypename(ty)}
       );
     }
     var al = self.ctx.allocator();
@@ -1742,7 +1743,7 @@ pub const TypeChecker = struct {
       if (!node.typ.?.isEitherWayRelatedTo(source, .RCAny, self.ctx.allocator())) {
         return self.error_(
           true, node.op.token,
-          "types must be related for comparison.{s}'{s}' is not related to '{s}'",
+          "Types must be related for comparison.{s}'{s}' is not related to '{s}'",
           .{
             if (!narrowed) " " else " Narrowed type ",
             self.getTypename(node.typ.?), self.getTypename(source),
@@ -1847,7 +1848,7 @@ pub const TypeChecker = struct {
       }
       if (errors > 1) {
         return self.error_(
-          true, debug, "error unions with multiple error types are unsupported: '{s}'",
+          true, debug, "Error unions with multiple error types are unsupported: '{s}'",
           .{self.getTypename(typ)}
         );
       }
@@ -1892,7 +1893,7 @@ pub const TypeChecker = struct {
     } else if (!typ.isRelatedTo(err_ty, .RCAny, self.ctx.allocator())) {
       return self.error_(
         true, debug,
-        "type on both sides of 'orelse' must be related.\n\t"
+        "Type on both sides of 'orelse' must be related.\n\t"
         ++ "'{s}' is not related to '{s}'",
         .{self.getTypename(typ), self.getTypename(err_ty)}
       );
@@ -1968,8 +1969,9 @@ pub const TypeChecker = struct {
     };
     self.analyzer.analyzeDeadCodeWithTypes(self.cfg.program.entry) catch {};
     if (self.diag.hasAny()) {
+      var has_error = self.diag.hasErrors();
       self.diag.display();
-      return error.CheckError;
+      if (has_error) return error.CheckError;
     }
   }
 };

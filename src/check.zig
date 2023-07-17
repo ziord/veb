@@ -20,6 +20,7 @@ const types = link.types;
 const Scope = link.Scope;
 const Token = link.Token;
 const Type = link.Type;
+const RelationContext = types.RelationContext;
 const TypeKind = link.TypeKind;
 const TypeInfo = link.TypeInfo;
 const Union = link.Union;
@@ -216,6 +217,7 @@ pub const TypeChecker = struct {
     var tyString: Type = Type.init(.{.Concrete = str});
     var tyBool: Type = Type.init(.{.Concrete = bol});
     var tyNil: Type = Type.init(.{.Concrete = nil});
+    var tyAny: Type = Type.newConcrete(.TyAny, "any");
     var TyTy: Type = Type.init(.{.Concrete = tyty});
   };
   pub const FnInfo = struct {
@@ -244,9 +246,9 @@ pub const TypeChecker = struct {
   fn loadBuiltinsPrelude(self: *Self, linker: *TypeLinker, al: *VebAllocator) void {
     const filename = @as([]const u8, "$builtins$");
     var parser = parse.Parser.init(@constCast(&@as([]const u8, _BuiltinsItf)), &filename, al);
-    const node = try parser.parse();
-    linker.linkTypes(node) catch unreachable;
-    self.buildProgramFlow(node) catch unreachable;
+    const node = parser.parse(true) catch unreachable;
+    linker.linkTypes(node, true) catch unreachable;
+    self.buildProgramFlow(node, true) catch unreachable;
     self.flowInferEntry(self.cfg.program.entry) catch unreachable;
     for (node.AstProgram.decls.items()) |itm| {
       if (itm.isFun()) {
@@ -913,6 +915,8 @@ pub const TypeChecker = struct {
     var base = Type.newConcrete(.TyClass, name).box(al);
     node.typ = Type.newGeneric(al, base).box(al);
     if (node.elems.len() == 0) {
+      node.typ.?.generic().append(&UnitTypes.tyAny);
+      node.typ.?.generic().empty = true;
       return node.typ.?;
     }
     // infer type of elements stored in the list
@@ -941,6 +945,9 @@ pub const TypeChecker = struct {
     var base = Type.newConcrete(.TyClass, "map").box(al);
     node.typ = Type.newGeneric(al, base).box(al);
     if (node.pairs.len() == 0) {
+      var any = &UnitTypes.tyAny;
+      node.typ.?.generic().tparams.appendSlice(&[_]*Type{any, any});
+      node.typ.?.generic().empty = true;
       return node.typ.?;
     }
     // infer type of items stored in the map
@@ -1076,8 +1083,24 @@ pub const TypeChecker = struct {
   fn inferCast(self: *Self, node: *ast.CastNode) !*Type {
     var typ = try self.infer(node.expr);
     var cast_typ = node.typn.typ;
+    var true_ctx: RelationContext = undefined; 
+    switch (node.expr.*) {
+      .AstList, .AstTuple => |*col| {
+        if (col.elems.len() == 0) {
+          true_ctx = .RCConst;
+        }
+      },
+      .AstMap => |*map| {
+        if (map.pairs.len() == 0) {
+          true_ctx = .RCConst;
+        }
+      },
+      else => {
+        true_ctx = .RCAny;
+      }
+    }
     // use coercion rules
-    return try self.checkCast(typ, cast_typ, node.typn.token, true);
+    return try self.checkCast(typ, cast_typ, true_ctx, node.typn.token, true);
   }
 
   fn inferAssign(self: *Self, node: *ast.BinaryNode) !*Type {
@@ -1128,7 +1151,7 @@ pub const TypeChecker = struct {
       if (node.ident.typ) |typ| {
         var expr_ty = try self.infer(node.value);
         node.ident.typ = typ;
-        _ = try self.checkAssign(typ, expr_ty, node.ident.token, true);
+        _ = try self.checkInitAssign(typ, expr_ty, node.ident.token, true);
       } else {
         node.ident.typ = try self.infer(node.value);
       }
@@ -1682,8 +1705,8 @@ pub const TypeChecker = struct {
     return undefined;
   }
 
-  fn checkCast(self: *Self, node_ty: *Type, cast_ty: *Type, debug: Token, emit: bool) TypeCheckError!*Type {
-    var ty = node_ty.canBeCastTo(cast_ty, self.ctx.allocator()) catch |e| {
+  fn checkCast(self: *Self, node_ty: *Type, cast_ty: *Type, ctx: RelationContext, debug: Token, emit: bool) TypeCheckError!*Type {
+    var ty = node_ty.canBeCastTo(cast_ty, ctx, self.ctx.allocator()) catch |e| {
       if (e == error.UnionCastError) {
         var active = if (node_ty.isUnion()) self.getTypename(node_ty.union_().active.?) else "different";
         return self.error_(
@@ -1709,14 +1732,26 @@ pub const TypeChecker = struct {
   }
 
   fn checkAssign(self: *Self, target: *Type, source: *Type, debug: Token, emit: bool) !*Type {
-    var typ = target.canBeAssigned(source, self.ctx.allocator());
+    var typ = target.canBeAssigned(source, .RCAny, self.ctx.allocator());
     if (typ == null) {
       return self.error_(
         emit, debug,
         "Cannot assign type '{s}' to type '{s}'",
         .{self.getTypename(source), self.getTypename(target)}
       );
-    } 
+    }
+    return typ.?;
+  }
+
+  fn checkInitAssign(self: *Self, target: *Type, source: *Type, debug: Token, emit: bool) !*Type {
+    var typ = target.canBeAssigned(source, .RCConst, self.ctx.allocator());
+    if (typ == null) {
+      return self.error_(
+        emit, debug,
+        "Cannot initialize type '{s}' with type '{s}'",
+        .{self.getTypename(target), self.getTypename(source)}
+      );
+    }
     return typ.?;
   }
 
@@ -1740,7 +1775,8 @@ pub const TypeChecker = struct {
     // source is type of rhs
     // node.typ is type of lhs
     if (node.op.optype == .OpEqq or node.op.optype == .OpNeq or node.op.optype == .OpIs) {
-      if (!node.typ.?.isEitherWayRelatedTo(source, .RCAny, self.ctx.allocator())) {
+      var ctx: RelationContext = if (node.op.optype == .OpIs) .RCIs else .RCAny;
+      if (!node.typ.?.isEitherWayRelatedTo(source, ctx, self.ctx.allocator())) {
         return self.error_(
           true, node.op.token,
           "Types must be related for comparison.{s}'{s}' is not related to '{s}'",
@@ -1875,8 +1911,8 @@ pub const TypeChecker = struct {
     }
     var typ = try self.excludeError(ok_ty, debug);
     // if excludeError() doesn't err, it's safe to say this type has only one error type
-    self.ctx.varScope.pushScope();
-    errdefer self.ctx.varScope.popScope();
+    var last = self.ctx.varScope.pushScopeSafe();
+    errdefer self.ctx.varScope.popScopeSafe(last);
     if (oe.evar) |evar| {
       for (ok_ty.union_().variants.values()) |ty| {
         if (ty.isErrorTy()) {
@@ -1898,7 +1934,7 @@ pub const TypeChecker = struct {
         .{self.getTypename(typ), self.getTypename(err_ty)}
       );
     }
-    self.ctx.varScope.popScope();
+    self.ctx.varScope.popScopeSafe(last);
     oe.typ = typ;
     return typ;
   }
@@ -1942,35 +1978,37 @@ pub const TypeChecker = struct {
     try self.analyzer.analyzeDeadCode(flo.dead);
   }
 
-  fn buildProgramFlow(self: *Self, root: *Node) !void {
+  fn buildProgramFlow(self: *Self, root: *Node, display_diag: bool) !void {
     self.cfg = self.builder.build(root);
     self.analyzer.analyzeDeadCode(self.cfg.program.dead) catch |e| {
-      self.diag.display();
+      if (display_diag) self.diag.display();
       return e;
     };
   }
 
-  pub fn typecheck(self: *Self, node: *Node, va: *VebAllocator) TypeCheckError!void {
+  pub fn typecheck(self: *Self, node: *Node, va: *VebAllocator, display_diag: bool) TypeCheckError!void {
     var linker = TypeLinker.init(self.ctx.allocator(), self.diag);
     self.loadBuiltinsPrelude(&linker, va);
-    linker.linkTypes(node) catch |e| {
+    linker.linkTypes(node, display_diag) catch |e| {
       return e;
     };
     self.linker = &linker;
     self.ctx.typScope = linker.ctx.typScope;
-    try self.buildProgramFlow(node);
+    try self.buildProgramFlow(node, display_diag);
     self.flowInferEntry(self.cfg.program.entry) catch {
       // just stack up as much errors as we can from here.
       var nodes = self.cfg.program.entry.getOutgoingNodes(.ESequential, self.ctx.allocator());
       for (nodes.items()) |flo| {
         if (flo.res.isResolved()) continue;
-        self.flowInfer(flo, false) catch {};
+        self.flowInfer(flo, false) catch {
+          flo.res = .Resolved;
+        };
       }
     };
     self.analyzer.analyzeDeadCodeWithTypes(self.cfg.program.entry) catch {};
     if (self.diag.hasAny()) {
       var has_error = self.diag.hasErrors();
-      self.diag.display();
+      if (display_diag) self.diag.display();
       if (has_error) return error.CheckError;
     }
   }

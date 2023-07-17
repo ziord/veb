@@ -67,6 +67,18 @@ pub fn GenScope(comptime K: type, comptime V: type) type {
       _ = self.decls.pop();
     }
 
+    /// push a new scope and return the last known count before the new scope
+    pub fn pushScopeSafe(self: *@This()) usize {
+      self.decls.append(ScopeMap.init(self.decls.allocator()));
+      return self.decls.len() - 1;
+    }
+
+    /// safely restore the scope list to a last known count `last`
+    pub fn popScopeSafe(self: *@This(), last: usize) void {
+      // pop n (now - last) items to return to `last`
+      self.popScopes(self.decls.len() - last);
+    }
+
     pub fn popScopes(self: *@This(), count: usize) void {
       if (self.decls.len() == 0) {
         util.error_("pop from empty scope-list", .{});
@@ -731,11 +743,12 @@ pub const TypeLinker = struct {
     }
   }
 
-  pub fn linkTypes(self: *Self, node: *Node) !void {
+  pub fn linkTypes(self: *Self, node: *Node, display_diag: bool) !void {
     self.link(node) catch {};
     if (self.diag.hasAny()) {
-      self.diag.display();
-      return error.TypeLinkError;
+      var has_error = self.diag.hasErrors();
+      if (display_diag) self.diag.display();
+      if (has_error) return error.TypeLinkError;
     }
   }
 };

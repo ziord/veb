@@ -709,7 +709,7 @@ pub const Compiler = struct {
     const dst2 = try self.getReg(node.left.getToken());
     var rk2 = tb: {
       var typ = node.right.getType().?;
-      if (typ.isGeneric()) {
+      if (typ.isClassTy() or typ.isGeneric()) {
         break :tb (
           if (typ.isListTy()) @enumToInt(TypeKind.TyClass)
           else if (typ.isMapTy()) @enumToInt(TypeKind.TyClass) + 1

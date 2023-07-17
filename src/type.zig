@@ -218,6 +218,8 @@ pub const Union = struct {
 pub const Generic = struct {
   base: *Type,
   tparams: TypeList,
+  /// whether this container-like generic has no items
+  empty: bool = false,
 
   pub fn init(allocator: std.mem.Allocator, base: *Type) @This() {
     return Generic {.tparams = TypeList.init(allocator), .base = base};
@@ -243,8 +245,10 @@ pub const Generic = struct {
     switch (other.kind) {
       .Generic => |*gen| {
         if (!this.base.isRelatedTo(gen.base, ctx, A)) return false;
+        // expr is Type
+        if (gen.tparams_len() == 0 and ctx == .RCIs) return true;
         // less specific to specific, for ex: lex x = []; x = [1, 2, 3]
-        if (gen.tparams_len() == 0) return true;
+        if (gen.empty and ctx == .RCConst) return true;
         if (this.tparams_len() != gen.tparams_len()) return false;
         for (this.tparams.items(), 0..) |tparam, i| {
           var param = gen.tparams.itemAt(i);
@@ -254,7 +258,14 @@ pub const Generic = struct {
         }
         return true;
       },
-      .Constant, .Concrete, .Union, .Variable, .Recursive, .Function => return false,
+      .Concrete => |*conc| {
+        if (conc.tkind == .TyClass) {
+          if (ctx == .RCIs) {
+            return this.base.isRelatedTo(other, ctx, A);
+          }
+        }
+      },
+      .Constant, .Union, .Variable, .Recursive, .Function => return false,
     }
     return false;
   }
@@ -382,11 +393,15 @@ pub const TypeInfo = union(enum) {
 };
 
 /// context for inspecting relation rules 
-const RelationContext = enum(u8) {
-  /// any context
+pub const RelationContext = enum(u8) {
+  /// in any/general context
   RCAny,
   /// in generic type parameter context
   RCTypeParams,
+  /// in a constant context
+  RCConst,
+  /// in an `is` context
+  RCIs,
 };
 
 pub const Type = struct {
@@ -438,6 +453,7 @@ pub const Type = struct {
       },
       .Generic => |*gen| {
         var new = Generic.init(A, gen.base.clone(A));
+        new.empty = gen.empty;
         new.tparams.ensureTotalCapacity(gen.tparams.capacity());
         for (gen.tparams.items()) |ty| {
           new.append(ty.clone(A));
@@ -646,14 +662,19 @@ pub const Type = struct {
     };
   }
 
-  inline fn isXClassTy(self: *Self, name: []const u8) bool {
-    if (self.isGeneric()) {
-      var gen = self.generic();
-      if (gen.base.isClassTy()) {
-        return std.mem.eql(u8, gen.base.concrete().name.?, name);
-      }
+  inline fn _isXClassTy(self: *Self, name: []const u8) bool {
+    if (self.isClassTy()) {
+      return std.mem.eql(u8, self.concrete().name.?, name);
     }
     return false;
+  }
+
+  inline fn isXClassTy(self: *Self, name: []const u8) bool {
+    if (self.isGeneric()) {
+      return self.generic().base._isXClassTy(name);
+    } else {
+      return self._isXClassTy(name);
+    }
   }
 
   /// more qol helper methods
@@ -771,10 +792,12 @@ pub const Type = struct {
         }
       },
       .Generic => |*gen| {
-        self.tid = gen.base.typeid();
+        self.tid = 13 << ID_HASH;
+        self.tid += gen.base.typeid();
         for (gen.getSlice()) |typ| {
           self.tid += typ.typeid();
         }
+        self.tid += @boolToInt(gen.empty);
       },
       .Union => |*uni| {
         self.tid = 6 << ID_HASH;
@@ -933,7 +956,7 @@ pub const Type = struct {
     return this.isRelatedTo(other, ctx, A) or other.isRelatedTo(this, ctx, A);
   }
 
-  pub fn canBeCastTo(node_ty: *Type, cast_ty: *Type, A: std.mem.Allocator) error{CastError, UnionCastError}!*Type {
+  pub fn canBeCastTo(node_ty: *Type, cast_ty: *Type, ctx: RelationContext, A: std.mem.Allocator) error{CastError, UnionCastError}!*Type {
     switch (cast_ty.kind) {
       .Concrete => |conc| {
         switch (conc.tkind) {
@@ -941,7 +964,7 @@ pub const Type = struct {
           .TyBool => return cast_ty,
           .TyNil => return error.CastError,
           else => {
-            if (cast_ty.isRelatedTo(node_ty, .RCAny, A)) {
+            if (cast_ty.isRelatedTo(node_ty, ctx, A)) {
               return cast_ty;
             }
           },
@@ -949,23 +972,23 @@ pub const Type = struct {
       },
       .Union => |*uni| {
         // upcasting/widening
-        if (cast_ty.isRelatedTo(node_ty, .RCAny, A)) {
+        if (cast_ty.isRelatedTo(node_ty, ctx, A)) {
           // keep track of the active
           uni.active = node_ty;
           return cast_ty;
         }
       },
       else => {
-        if (cast_ty.isRelatedTo(node_ty, .RCAny, A)) {
+        if (cast_ty.isRelatedTo(node_ty, ctx, A)) {
           return cast_ty;
         }
       }
     }
     // downcasting
-    if (node_ty.castContainsType(cast_ty, A)) {
+    if (node_ty.castContainsType(cast_ty, ctx, A)) {
       if (node_ty.union_().active) |active| {
         // check if the active type can be cast to the cast type
-        _ = active.canBeCastTo(cast_ty, A) catch return error.UnionCastError;
+        _ = active.canBeCastTo(cast_ty, ctx, A) catch return error.UnionCastError;
         return cast_ty;
       } else {
         // TODO:
@@ -987,10 +1010,10 @@ pub const Type = struct {
     return error.CastError;
   }
   
-  pub fn canBeAssigned(target: *Self, source: *Self, A: std.mem.Allocator) ?*Type {
+  pub fn canBeAssigned(target: *Self, source: *Self, ctx: RelationContext, A: std.mem.Allocator) ?*Type {
     switch (target.kind) {
       .Union => |*uni| {
-        if (target.isRelatedTo(source, .RCAny, A)) {
+        if (target.isRelatedTo(source, ctx, A)) {
           var active = if (source.isUnion()) source.union_().active else source;
           // if this is a Constant type assignment, we want to use the constant
           // type as the active type (if the active type is not itself a constant type)
@@ -1013,7 +1036,7 @@ pub const Type = struct {
         }
       },
       else => {
-        if (target.isRelatedTo(source, .RCAny, A)) {
+        if (target.isRelatedTo(source, ctx, A)) {
           return target;
         }
       },
@@ -1025,43 +1048,14 @@ pub const Type = struct {
     return null;
   }
 
-  /// check if `source` is contained in `target`. This is false if `target` is not a union.
-  pub fn assignContainsType(target: *Self, source: *Self, A: std.mem.Allocator) bool {
-    switch (target.kind) {
-      .Union => |*uni_a| {
-        switch (source.kind) {
-          .Union => |*uni_b| {
-            for (uni_b.variants.values()) |ty| {
-              if (!target.assignContainsType(ty, A)) {
-                return false;
-              }
-            }
-            return true;
-          },
-          else => {
-            for (uni_a.variants.values()) |ty| {
-              if (ty.typeidEql(source)) {
-                return true;
-              } else if (ty.canBeAssigned(source, A)) |_| {
-                return true;
-              }
-            }
-          }
-        }
-      },
-      else => {}
-    }
-    return false;
-  }
-
   /// check if `cast_ty` is contained in `node_ty`. This is false if `node_ty` is not a union.
-  pub fn castContainsType(node_ty: *Self, cast_ty: *Self, A: std.mem.Allocator) bool {
+  pub fn castContainsType(node_ty: *Self, cast_ty: *Self, ctx: RelationContext, A: std.mem.Allocator) bool {
     switch (node_ty.kind) {
       .Union => |*uni_a| {
         switch (cast_ty.kind) {
           .Union => |*uni_b| {
             for (uni_b.variants.values()) |ty| {
-              if (!node_ty.castContainsType(ty, A)) {
+              if (!node_ty.castContainsType(ty, ctx, A)) {
                 return false;
               }
             }
@@ -1071,7 +1065,7 @@ pub const Type = struct {
             for (uni_a.variants.values()) |ty| {
               if (ty.typeidEql(cast_ty)) {
                 return true;
-              } else if (cast_ty.canBeCastTo(ty, A) catch null) |_| {
+              } else if (cast_ty.canBeCastTo(ty, ctx, A) catch null) |_| {
                 return true;
               }
             }
@@ -1401,11 +1395,16 @@ pub const Type = struct {
         }
       },
       .Generic => |*t1_gen| {
-        if (!t2.isGeneric()) return null;
-        var t2_gen = t2.generic();
-        if (is(t1_gen.base, t2_gen.base, al) == null) return null;
-        std.debug.assert(t2_gen.tparams_len() == 0);
-        return t1;
+        if (t2.isConcrete()) {
+          if (is(t1_gen.base, t2, al)) |_| {
+            return t1;
+          }
+        } else if (t2.isGeneric()) {
+          var t2_gen = t2.generic();
+          if (is(t1_gen.base, t2_gen.base, al)) |_| {
+            return t1;
+          }
+        } else return null;
       },
       .Union => |*uni| {
         for (uni.variants.values()) |ty| {

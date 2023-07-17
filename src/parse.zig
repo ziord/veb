@@ -737,8 +737,7 @@ pub const Parser = struct {
     // handle builtin list/map/tuple/err type
     var debug = self.current_tok;
     try self.advance();
-    var conc = Type.newConcrete(.TyClass, debug.value);
-    return Type.newGeneric(self.allocator, conc.box(self.allocator));
+    return Type.newConcrete(.TyClass, debug.value);
   }
 
   fn refType(self: *Self) !Type {
@@ -1244,7 +1243,7 @@ pub const Parser = struct {
     return try self.exprStmt();
   }
 
-  pub fn parse(self: *Self) !*Node {
+  pub fn parse(self: *Self, display_diag: bool) !*Node {
     self.advance() catch {};
     var program = self.newNode();
     program.* = .{.AstProgram = ast.ProgramNode.init(self.allocator)};
@@ -1252,8 +1251,12 @@ pub const Parser = struct {
       self.addStatement(&program.AstProgram.decls) catch self.recover();
     }
     if (self.diag.hasAny()) {
-      self.diag.display();
-      program.AstProgram.decls.clearRetainingCapacity();
+      var has_error = self.diag.hasErrors();
+      if (display_diag) self.diag.display();
+      if (has_error) {
+        program.AstProgram.decls.clearRetainingCapacity();
+        return error.ParseError;
+      }
     }
     return program;
   }

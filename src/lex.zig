@@ -35,6 +35,8 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"then", .TkThen},
   .{"break", .TkBreak},
   .{"void", .TkVoid},
+  .{"self", .TkSelf},
+  .{"class", .TkClass},
   .{"orelse", .TkOrElse},
   .{"continue", .TkContinue},
   .{"noreturn", .TkNoReturn},
@@ -100,6 +102,8 @@ pub const TokenType = enum (u8) {
   TkElif,           // elif
   TkTrue,           // true
   TkVoid,           // void
+  TkSelf,           // self
+  TkClass,          // class
   TkBreak,          // break
   TkFalse,          // false
   TkTuple,          // tuple
@@ -222,6 +226,8 @@ pub const TokenType = enum (u8) {
       .TkElif => "elif",
       .TkTrue => "true",
       .TkVoid => "void",
+      .TkSelf => "self",
+      .TkClass => "class",
       .TkBreak => "break",
       .TkFalse => "false",
       .TkTuple => "tuple",

@@ -124,12 +124,15 @@ pub const ResolutionState = enum {
 pub const CFG = struct {
   /// named functions
   funcs: ds.ArrayList(FlowMeta),
+  /// classes
+  classes: ds.ArrayList(FlowMeta),
   /// whole program
   program: FlowMeta,
 
   pub fn init(al: std.mem.Allocator) @This() {
     return @This() {
       .funcs = ds.ArrayList(FlowMeta).init(al),
+      .classes = ds.ArrayList(FlowMeta).init(al),
       .program = undefined,
     };
   }
@@ -138,8 +141,21 @@ pub const CFG = struct {
     self.funcs.append(info);
   }
 
-  pub fn lookup(self: *@This(), node: *Node) ?FlowMeta {
+  pub fn putClass(self: *@This(), info: FlowMeta) void {
+    self.classes.append(info);
+  }
+
+  pub fn lookupFunc(self: *@This(), node: *Node) ?FlowMeta {
     for (self.funcs.items()) |itm| {
+      if (itm.entry.node == node) {
+        return itm;
+      }
+    }
+    return null;
+  }
+
+  pub fn lookupClass(self: *@This(), node: *Node) ?FlowMeta {
+    for (self.classes.items()) |itm| {
       if (itm.entry.node == node) {
         return itm;
       }
@@ -413,6 +429,32 @@ pub const CFGBuilder = struct {
     return flow_list;
   }
 
+  fn linkClass(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
+    var flow_list = self.linkAtomic(node, prev, edge, .CfgOther);
+    // skip generic classes
+    if (node.AstClass.isGeneric()) return flow_list;
+    // build the cfg of fun
+    var cls = &node.AstClass;
+    // TODO: cache builder
+    var builder = CFGBuilder.init(self.alloc());
+    var synth = ast.BlockNode.init(self.alloc(), null);
+    var cap: usize = if (cls.fields) |fds| fds.len() else 0;
+    cap += if (cls.methods) |mds| mds.len() else 0;
+    synth.nodes.ensureTotalCapacity(cap);
+    if (cls.fields) |fds| {
+      synth.nodes.extend(fds);
+    }
+    if (cls.methods) |mds| {
+      synth.nodes.extend(mds);
+    }
+    var body = @as(Node, .{.AstBlock = synth});
+    var flo = builder.buildBlock(self.cfg, &body);
+    // save node for future lookup()s
+    flo.entry.node = node;
+    self.cfg.putClass(flo);
+    return flow_list;
+  }
+
   fn linkProgram(self: *Self, ast_node: *Node, prev: FlowList, edge: FlowEdge) void {
     var node = &ast_node.AstProgram;
     var _prev = self.linkNodeList(&node.decls, null, prev, edge);
@@ -431,6 +473,7 @@ pub const CFGBuilder = struct {
       .AstWhile => self.linkWhile(node, prev, edge),
       .AstControl => self.linkControl(node, prev, edge, false),
       .AstFun => self.linkFun(node, prev, edge),
+      .AstClass => self.linkClass(node, prev, edge),
       else => |nd| {
         std.log.debug("trying to link node: {}\n", .{nd});
         return self.linkAtomic(node, prev, edge, .CfgOther);
@@ -454,6 +497,11 @@ pub const CFGBuilder = struct {
   pub fn buildFun(self: *Self, cfg: *CFG, node: *Node) void {
     self.cfg = cfg;
     _ = self.linkFun(node, self.entry.toList(self.alloc()), .ESequential);
+  }
+
+  pub fn buildCls(self: *Self, cfg: *CFG, node: *Node) void {
+    self.cfg = cfg;
+    _ = self.linkClass(node, self.entry.toList(self.alloc()), .ESequential);
   }
 
   pub fn buildBlock(self: *Self, cfg: *CFG, ast_node: *Node) FlowMeta {

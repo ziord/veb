@@ -1278,11 +1278,11 @@ pub const TypeChecker = struct {
     // generic is infer-by-need - performed on call/reference.
     if (!fun.isGeneric()) {
       var flo = blk: {
-        if (self.cfg.lookup(node)) |fm| break :blk fm;
+        if (self.cfg.lookupFunc(node)) |fm| break :blk fm;
         std.debug.assert(!node.AstFun.isGeneric());
         try self.linker.linkFun(fun, true);
         try self.buildFunFlow(node);
-        break :blk self.cfg.lookup(node).?;
+        break :blk self.cfg.lookupFunc(node).?;
       };
       try self.analyzer.analyzeDeadCode(flo.dead);
       self.cycles.append(node);
@@ -1394,6 +1394,7 @@ pub const TypeChecker = struct {
     if (node.AstFun.ret) |ret| {
       var ret_ty = ret.AstNType.typ;
       for (prev_nodes.items()) |nd| {
+        if (nd.isDeadNode()) continue;
         if (nd.node.isRet()) {
           if (nd.node.AstRet.typ) |typ| {
             if (typ.isRecursive()) {
@@ -1442,6 +1443,18 @@ pub const TypeChecker = struct {
     // prefer inferred type for function types, since function types need to have extra
     // meta-data (`node`) which would not be present if the type was created by a user
     return inf_ret_ty.box(self.ctx.allocator());
+  }
+
+  fn inferClass(self: *Self, node: *Node) !*Type {
+    var cls = &node.AstClass;
+    // generic is infer-by-need - performed on call/reference.
+    if (!cls.isGeneric()) {
+      var flo = self.cfg.lookupClass(node).?;
+      try self.flowInfer(flo.entry, true);
+      cls.checked = true;
+    }
+    cls.typ = &UnitTypes.TyTy;
+    return cls.typ.?;
   }
 
   fn validateCallArgCount(self: *Self, fun_ty: *types.Function, node: *ast.CallNode) !void {
@@ -1515,6 +1528,12 @@ pub const TypeChecker = struct {
       }
     }
   }
+
+  fn inferDotAccess(self: *Self, node: *ast.DotAccessNode) !*Type {
+    _ = node;
+    _ = self;
+    return undefined;
+  }
   
   fn inferCall(self: *Self, node: *ast.CallNode) !*Type {
     var ty = try self.infer(node.expr);
@@ -1547,7 +1566,7 @@ pub const TypeChecker = struct {
       try self.validateCallArguments(fun_ty, node);
       // [N*]: check if we're currently resolving this type, i.e. if it's recursive
       if (is_cyclic) {
-        if (self.inferFunReturnTypePartial(self.cfg.lookup(fun_ty.node.?).?)) |typ| {
+        if (self.inferFunReturnTypePartial(self.cfg.lookupFunc(fun_ty.node.?).?)) |typ| {
           return typ;
         }
         return ty.newRecursive().box(self.ctx.allocator());
@@ -1966,16 +1985,22 @@ pub const TypeChecker = struct {
       .AstFun => try self.inferFun(node, null),
       .AstError => |*nd| try self.inferError(nd),
       .AstOrElse => try self.inferOrElse(node),
+      .AstClass => try self.inferClass(node),
+      .AstDotAccess => |*nd| try self.inferDotAccess(nd),
       .AstProgram => |*nd| try self.inferProgram(nd),
       .AstIf, .AstElif, .AstSimpleIf,
       .AstCondition, .AstEmpty, .AstControl => return undefined,
     };
   }
 
-  pub fn buildFunFlow(self: *Self, node: *Node) !void {
+  fn buildFunFlow(self: *Self, node: *Node) !void {
     self.builder.buildFun(&self.cfg, node);
-    var flo = self.cfg.lookup(node).?;
+    var flo = self.cfg.lookupFunc(node).?;
     try self.analyzer.analyzeDeadCode(flo.dead);
+  }
+
+  inline fn buildClsFlow(self: *Self, node: *Node) !void {
+    self.builder.buildCls(&self.cfg, node);
   }
 
   fn buildProgramFlow(self: *Self, root: *Node, display_diag: bool) !void {
@@ -1995,14 +2020,16 @@ pub const TypeChecker = struct {
     self.linker = &linker;
     self.ctx.typScope = linker.ctx.typScope;
     try self.buildProgramFlow(node, display_diag);
-    self.flowInferEntry(self.cfg.program.entry) catch {
-      // just stack up as much errors as we can from here.
-      var nodes = self.cfg.program.entry.getOutgoingNodes(.ESequential, self.ctx.allocator());
-      for (nodes.items()) |flo| {
-        if (flo.res.isResolved()) continue;
-        self.flowInfer(flo, false) catch {
-          flo.res = .Resolved;
-        };
+    self.flowInferEntry(self.cfg.program.entry) catch |e| {
+      if (e != error.DeadCode) {
+        // just stack up as much errors as we can from here.
+        var nodes = self.cfg.program.entry.getOutgoingNodes(.ESequential, self.ctx.allocator());
+        for (nodes.items()) |flo| {
+          if (flo.res.isResolved()) continue;
+          self.flowInfer(flo, false) catch {
+            flo.res = .Resolved;
+          };
+        }
       }
     };
     self.analyzer.analyzeDeadCodeWithTypes(self.cfg.program.entry) catch {};

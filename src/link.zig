@@ -684,6 +684,31 @@ pub const TypeLinker = struct {
     self.ctx.leaveScope();
   }
 
+  fn linkClass(self: *Self, node: *ast.ClassNode, allow_generic: bool) !void {
+    if (node.isGeneric()) {
+      if (!allow_generic) return;
+      self.ban_alias = node.tparams;
+    }
+    if (node.trait) |trait| {
+      node.trait = try self.resolveType(trait, node.name.token);
+    }
+    if (node.fields) |fields| {
+      for (fields.items()) |field| {
+        try self.linkVarDecl(&field.AstVarDecl);
+      }
+    }
+    if (node.methods) |methods| {
+      for (methods.items()) |method| {
+        try self.linkFun(&method.AstFun, false);
+      }
+    }
+  }
+
+  fn linkDotAccess(self: *Self, node: *ast.DotAccessNode) !void {
+    try self.link(node.lhs);
+    try self.link(node.rhs);
+  }
+
   fn linkRet(self: *Self, node: *ast.RetNode) !void {
     if (node.expr) |expr| {
       try self.link(expr); 
@@ -733,6 +758,8 @@ pub const TypeLinker = struct {
       .AstElif => |*nd| try self.linkElif(nd),
       .AstWhile => |*nd| try self.linkWhile(nd),
       .AstControl => {},
+      .AstClass => |*nd| try self.linkClass(nd, false),
+      .AstDotAccess => |*nd| try self.linkDotAccess(nd),
       .AstCall => |*nd| try self.linkCall(nd),
       .AstFun => |*nd| try self.linkFun(nd, false),
       .AstRet => |*nd| try self.linkRet(nd),

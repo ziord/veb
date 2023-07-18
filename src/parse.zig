@@ -31,7 +31,8 @@ pub const Parser = struct {
   allocator: std.mem.Allocator,
   diag: Diagnostic,
   allow_nl: usize = 0,
-  funcs: ?*Node = null,
+  func: ?*Node = null,
+  class: ?*Node = null,
   in_cast: u32 = 0,
   loops: u32 = 0,
 
@@ -124,6 +125,8 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkElif
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkTrue
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkVoid
+    .{.bp = .None, .prefix = Self.selfExpr, .infix = null},             // TkSelf
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkClass
     .{.bp = .None, .prefix = null, .infix = null},                      // TkBreak
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkFalse
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkTuple
@@ -222,7 +225,7 @@ pub const Parser = struct {
   }
 
   inline fn inFun(self: *Self) bool {
-    return self.funcs != null;
+    return self.func != null;
   }
 
   fn genName(self: *Self, start: []const u8) []const u8 {
@@ -484,9 +487,33 @@ pub const Parser = struct {
     // expr.?
     var token = self.current_tok;
     try self.consume(.TkDot);
-    try self.consume(.TkQMark);
+    if (self.match(.TkQMark)) {
+      var node = self.newNode();
+      node.* = .{.AstDeref = ast.DerefNode.init(left, token)};
+      return try self.handleAugAssign(node, assignable);
+    } else {
+      return self.dotExpr(left, assignable);
+    }
+  }
+
+  fn dotExpr(self: *Self, left: *Node, assignable: bool) !*Node {
+    const bp = ptable[@enumToInt(self.previous_tok.ty)].bp;
+    const right = try self._parse(bp);
     var node = self.newNode();
-    node.* = .{.AstDeref = ast.DerefNode.init(left, token)};
+    node.* = .{.AstDotAccess = ast.DotAccessNode.init(left, right)};
+    return try self.handleAugAssign(node, assignable);
+  }
+
+  fn selfExpr(self: *Self, assignable: bool) !*Node {
+    if (self.class == null) {
+      return self.err(self.current_tok, "Use of 'self' outside class statement");
+    }
+    if (self.func == null) {
+      return self.err(self.current_tok, "Use of 'self' outside method definition");
+    }
+    try self.consume(.TkSelf);
+    var node = self.newNode();
+    node.* = .{.AstVar = ast.VarNode.init(self.previous_tok)};
     return try self.handleAugAssign(node, assignable);
   }
 
@@ -531,7 +558,7 @@ pub const Parser = struct {
 
   fn tryExpr(self: *Self, assignable: bool) !*Node {
     _ = assignable;
-    if (self.funcs == null) {
+    if (self.func == null) {
       return self.err(
         self.current_tok,
         "use of 'try' expression in top-level code. Consider using 'orelse' instead."
@@ -1116,11 +1143,11 @@ pub const Parser = struct {
   }
 
   fn funStmt(self: *Self, lambda: bool) !*Node {
-    // FunDecl     :=  "def" | "fn" TypeParams? Params? ReturnSig? NL Body End
+    // FunDecl     :=  "def" TypeParams? Params? ReturnSig? NL Body End
     try self.consume(.TkDef);
-    var prev_func = self.funcs;
+    var prev_func = self.func;
     var func = self.newNode();
-    self.funcs = func;
+    self.func = func;
     var ident: ?*ast.VarNode = null;
     if (!lambda) {
       try self.consume(.TkIdent);
@@ -1157,7 +1184,7 @@ pub const Parser = struct {
         break :blk try self.blockExpr();
       }
     };
-    self.funcs = prev_func;
+    self.func = prev_func;
     body.AstBlock.cond = func;
     func.* = .{.AstFun = ast.FunNode.init(params, body, ident, ret, tparams)};
     func.AstFun.variadic = variadic;
@@ -1179,13 +1206,85 @@ pub const Parser = struct {
       expr = try self.parseExpr();
     }
     node.* = .{.AstRet = ast.RetNode.init(expr, self.previous_tok)};
-    var funcs = self.funcs.?;
-    if (!funcs.AstFun.isAnonymous()) {
+    if (!self.func.?.AstFun.isAnonymous()) {
       try self.consumeNlOrEof();
     } else if (self.check(.TkNewline) or self.check(.TkEof)) {
       try self.consumeNlOrEof();
     }
     return node;
+  }
+
+  fn classTypeAnnotation(self: *Self) !?*Type {
+    if (self.match(.TkColon)) {
+      try self.consume(.TkIdent);
+      var ty = Type.newConcrete(.TyClass, self.previous_tok.value).box(self.allocator);
+      if (self.check(.TkPipe)) {
+        var tmp = Union.init(self.allocator);
+        tmp.set(ty);
+        while (self.match(.TkPipe)) {
+          try self.consume(.TkIdent);
+          tmp.set(Type.newConcrete(.TyClass, self.previous_tok.value).box(self.allocator));
+        }
+        ty = tmp.toType().box(self.allocator);
+      }
+      return ty;
+    }
+    return null;
+  }
+
+  fn classStmt(self: *Self) !*Node {
+    // ClassDecl           :=  "class" Ident TypeParams TypeAnnotation? ClassBody "end"
+    var prev_cls = self.class;
+    var cls = self.newNode();
+    self.class = cls;
+    try self.consume(.TkIdent);
+    var ident = ast.VarNode.init(self.previous_tok).box(self.allocator);
+    var tparams: ?*TypeList = null;
+    if (self.check(.TkLCurly)) {
+      var tmp = try self.abstractTypeParams(undefined);
+      tparams = util.box(TypeList, tmp.generic().tparams, self.allocator);
+    }
+    var trait = try self.classTypeAnnotation();
+    try self.consume(.TkNewline);
+    while (self.match(.TkNewline)) {}
+    // ClassBody
+    // ClassFields
+    var fields: ?*NodeList = null;
+    if (self.check(.TkIdent)) {
+      fields = util.box(NodeList, NodeList.init(self.allocator), self.allocator);
+      while (self.match(.TkIdent)) {
+        var id = ast.VarNode.init(self.previous_tok).box(self.allocator);
+        var val: *Node = undefined;
+        var has_default = false;
+        if (self.match(.TkColon)) {
+          try self.annotation(id);
+        }
+        if (self.match(.TkEqual)) {
+          val = try self.parseExpr();
+          has_default = true;
+        }
+        var field = util.box(Node, .{.AstVarDecl = ast.VarDeclNode.init(id, val, false)}, self.allocator);
+        field.AstVarDecl.is_field = true;
+        field.AstVarDecl.has_default = has_default;
+        fields.?.append(field);
+        while (self.match(.TkNewline)) {}
+      }
+    }
+    // ClassMethods
+    var methods: ?*NodeList = null;
+    if (self.check(.TkDef)) {
+      methods = util.box(NodeList, NodeList.init(self.allocator), self.allocator);
+      while (self.check(.TkDef)) {
+        methods.?.append(try self.funStmt(false));
+        while (self.match(.TkNewline)) {}
+      }
+    }
+    while (self.match(.TkNewline)) {}
+    try self.consume(.TkEnd);
+    try self.consumeNlOrEof();
+    self.class = prev_cls;
+    cls.* = .{.AstClass = ast.ClassNode.init(ident, tparams, trait, fields, methods)};
+    return cls;
   }
 
   fn exprStmt(self: *Self) !*Node {
@@ -1239,6 +1338,8 @@ pub const Parser = struct {
       return try self.funStmt(false);
     } else if (self.match(.TkReturn)) {
       return try self.returnStmt();
+    } else if (self.match(.TkClass)) {
+      return try self.classStmt();
     }
     return try self.exprStmt();
   }

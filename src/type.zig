@@ -302,11 +302,13 @@ pub const Variable = struct {
   }
 };
 
+const Node = @import("ast.zig").AstNode;
+
 pub const Function = struct {
   params: TypeList,
   ret: *Type,
   tparams: ?*TypeList = null,
-  node: ?*@import("ast.zig").AstNode = null,
+  node: ?*Node = null,
 
   pub fn init(allocator: std.mem.Allocator, ret: *Type) @This() {
     return Function {.params = TypeList.init(allocator), .ret = ret};
@@ -345,6 +347,41 @@ pub const Function = struct {
     return switch (other.kind) {
       .Function => |*fun| this.eql(fun),
       .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic => false,
+    };
+  }
+};
+
+pub const Class = struct {
+  name: []const u8,
+  fields: *TypeList,
+  methods: *TypeList,
+  tparams: ?*TypeList = null,
+  node: ?*Node = null,
+
+  pub fn init(name: []const u8, al: std.mem.Allocator) @This() {
+    var fields = util.box(TypeList, TypeList.init(al), al);
+    var methods = util.box(TypeList, TypeList.init(al), al);
+    return Class {.name = name, .fields = fields, .methods = methods};
+  }
+
+  pub fn isGeneric(self: *@This()) bool {
+    return self.tparams != null;
+  }
+
+  pub fn toType(self: @This()) Type {
+    return Type.init(.{.Class = self});
+  }
+
+  pub fn eql(self: *@This(), other: *@This()) bool {
+    return std.mem.eql(u8, self.name, other.name);
+  }
+
+  pub fn isRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
+    _ = A;
+    _ = ctx;
+    return switch (other.kind) {
+      .Class => |*cls| this.eql(cls),
+      .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic, .Function => false,
     };
   }
 };
@@ -390,6 +427,7 @@ pub const TypeInfo = union(enum) {
   Generic: Generic,
   Function: Function,
   Recursive: Recursive,
+  // Class: Class,
 };
 
 /// context for inspecting relation rules 

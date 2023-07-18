@@ -1343,6 +1343,8 @@ pub const Compiler = struct {
       .AstRet => |*nd| try self.cRet(nd, reg),
       .AstError => |*nd| try self.cError(nd, reg),
       .AstOrElse => |*nd| try self.cOrElse(nd, reg),
+      .AstClass => reg,
+      .AstDotAccess => reg,
       .AstProgram, .AstSimpleIf, .AstElif, .AstCondition, .AstEmpty => unreachable,
     };
   }

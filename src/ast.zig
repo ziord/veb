@@ -43,6 +43,8 @@ pub const AstType = enum {
   AstCall,
   AstError,
   AstOrElse,
+  AstClass,
+  AstDotAccess,
   AstProgram,
 };
 
@@ -255,7 +257,12 @@ pub const ExprStmtNode = struct {
 pub const VarDeclNode = struct {
   ident: *VarNode,
   value: *AstNode,
+  /// whether this node is a function/method parameter
   is_param: bool = false,
+  /// whether this node is a class field
+  is_field: bool = false,
+  /// whether this node being a class field has a default value
+  has_default: bool = false,
 
   pub fn init(ident: *VarNode, value: *AstNode, is_param: bool) @This() {
     return @This() {.ident = ident, .value = value, .is_param = is_param};
@@ -268,6 +275,8 @@ pub const VarDeclNode = struct {
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
     var value: *AstNode = if (self.is_param) self.value else self.value.clone(al);
     var vn = VarDeclNode.init(&self.ident.clone(al).AstVar, value, self.is_param);
+    vn.is_field = self.is_field;
+    vn.has_default = self.has_default;
     var new = util.alloc(AstNode, al);
     new.* = .{.AstVarDecl = vn};
     return new;
@@ -648,6 +657,82 @@ pub const FunNode = struct {
   }
 };
 
+pub const DotAccessNode = struct {
+  lhs: *AstNode,
+  rhs: *AstNode,
+  narrowed: ?*VarNode = null,
+  typ: ?*Type = null,
+
+  pub fn init(lhs: *AstNode, rhs: *AstNode) @This() {
+    return @This() { .lhs = lhs, .rhs = rhs};
+  }
+
+  pub inline fn line(self: *@This()) usize {
+    return self.rhs.getToken().line;
+  }
+
+  pub inline fn isSelfExpr(self: *@This()) bool {
+    return self.lhs.isVariable() and self.lhs.AstVar.token.ty == .TkSelf;
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var da = DotAccessNode.init(self.lhs.clone(al), self.rhs.clone(al));
+    if (self.narrowed) |narrowed| {
+      da.narrowed = &narrowed.clone(al).AstVar;
+    }
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstDotAccess = da};
+    return new;
+  }
+};
+
+pub const ClassNode = struct {
+  name: *VarNode,
+  trait: ?*Type = null,
+  fields: ?*AstNodeList = null,
+  methods: ?*AstNodeList = null,
+  tparams: ?*types.TypeList = null,
+  typ: ?*Type = null,
+  is_builtin: bool = false,
+  checked: bool = false,
+
+  pub fn init(name: *VarNode, tparams: ?*types.TypeList, trait: ?*Type, fields: ?*AstNodeList, methods: ?*AstNodeList) @This() {
+    return @This() {.name = name, .tparams = tparams, .trait = trait, .fields = fields, .methods = methods};
+  }
+
+  pub inline fn isGeneric(self: @This()) bool {
+    return self.tparams != null;
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var name = &self.name.clone(al).AstVar;
+    var trait: ?*Type = if (self.trait) |trait| trait.clone(al) else self.trait;
+    var fields: ?*AstNodeList = null;
+    if (self.fields) |fds| {
+      fields = util.box(AstNodeList, AstNodeList.init(al), al);
+      fields.?.ensureTotalCapacity(fds.capacity());
+      for (fds.items()) |itm| {
+        fields.?.append(itm.AstVarDecl.clone(al));
+      }
+    }
+    var methods: ?*AstNodeList = null;
+    if (self.methods) |mds| {
+      methods = util.box(AstNodeList, AstNodeList.init(al), al);
+      methods.?.ensureTotalCapacity(mds.capacity());
+      for (mds.items()) |itm| {
+        methods.?.append(itm.AstFun.clone(al));
+      }
+    }
+    var typ: ?*Type = if (self.typ) |typ| typ.clone(al) else self.typ;
+    // don't clone tparams, they're always substituted.
+    var cls = ClassNode.init(name, self.tparams, trait, fields, methods);
+    cls.typ = typ;
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstClass = cls};
+    return new;
+  }
+};
+
 pub const RetNode = struct {
   token: Token,
   expr: ?*AstNode,
@@ -716,6 +801,8 @@ pub const AstNode = union(AstType) {
   AstCall: CallNode,
   AstError: ErrorNode,
   AstOrElse: OrElseNode,
+  AstClass: ClassNode,
+  AstDotAccess: DotAccessNode,
   AstProgram: ProgramNode,
 
   pub inline fn isComptimeConst(self: *@This()) bool {
@@ -878,6 +965,8 @@ pub const AstNode = union(AstType) {
       .AstCall => |call| call.typ,
       .AstError => |er| er.typ,
       .AstOrElse => |oe| oe.typ,
+      .AstClass => |*cls| cls.typ,
+      .AstDotAccess => |*dot| dot.typ,
       .AstBlock, .AstIf, .AstElif,
       .AstWhile, .AstControl => null,
       else => unreachable,
@@ -889,6 +978,11 @@ pub const AstNode = union(AstType) {
       .AstUnary => |*una| una.typ = typ,
       .AstVar => |*id| id.typ = typ,
       .AstCast => |*cst| cst.typn.typ = typ,
+      .AstCall => |*call| call.typ = typ,
+      .AstDotAccess => |*dot| {
+        if (dot.narrowed) |nrw| nrw.typ = typ
+        else dot.typ = typ;
+      },
       .AstSubscript => |*sub| {
         if (sub.narrowed) |nrw| nrw.typ = typ
         else sub.typ = typ;
@@ -897,7 +991,6 @@ pub const AstNode = union(AstType) {
         if (der.narrowed) |nrw| nrw.typ = typ
         else der.typ = typ;
       },
-      .AstCall => |*call| call.typ = typ,
       else => {
         std.log.debug("Attempt to set type on node: {}\n", .{self});
       },
@@ -949,6 +1042,8 @@ pub const AstNode = union(AstType) {
       .AstError => |er| er.expr.getToken(),
       .AstOrElse => |oe| oe.ok.getToken(),
       .AstEmpty => |emp| emp.token,
+      .AstDotAccess => |*dot| dot.lhs.getToken(),
+      .AstClass => |*cls| cls.name.token,
       .AstFun => |*fun| {
         if (fun.name) |name| {
           return name.token;
@@ -998,6 +1093,7 @@ pub const AstNode = union(AstType) {
       .AstBinary, .AstAssign => |*bin| bin.clone(self, al),
       .AstUnary => |*una| una.clone(al),
       .AstSubscript => |*sub| sub.clone(al),
+      .AstDotAccess => |*dot| dot.clone(al),
       .AstList, .AstTuple => |*lst| lst.clone(self, al),
       .AstVar => |*vr| vr.clone(al),
       .AstBlock => |*bl| bl.clone(al),
@@ -1020,6 +1116,7 @@ pub const AstNode = union(AstType) {
       .AstError => |*er| er.clone(al),
       .AstOrElse => |*oe| oe.clone(al),
       .AstFun => |*fun| fun.clone(al),
+      .AstClass => |*cls| cls.clone(al),
       .AstProgram => unreachable,
     };
   }

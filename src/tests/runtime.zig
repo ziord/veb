@@ -1764,6 +1764,21 @@ test "functions-17" {
   _ = try doRuntimeTest(src);
 }
 
+test "functions-18" {
+  var src =
+  \\ def fun(): num
+  \\  if 1 > 2
+  \\    return 5
+  \\  else
+  \\    return 6
+  \\  end
+  \\ end
+  \\
+  \\ assert(fun() == 6, "should be 6")
+  ;
+  _ = try doRuntimeTest(src);
+}
+
 test "builtin-functions" {
   var src =
   \\ assert(true, 'ok')

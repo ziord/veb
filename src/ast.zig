@@ -689,14 +689,14 @@ pub const DotAccessNode = struct {
 pub const ClassNode = struct {
   name: *VarNode,
   trait: ?*Type = null,
-  fields: ?*AstNodeList = null,
-  methods: ?*AstNodeList = null,
   tparams: ?*types.TypeList = null,
+  fields: *AstNodeList,
+  methods: *AstNodeList,
   typ: ?*Type = null,
   is_builtin: bool = false,
   checked: bool = false,
 
-  pub fn init(name: *VarNode, tparams: ?*types.TypeList, trait: ?*Type, fields: ?*AstNodeList, methods: ?*AstNodeList) @This() {
+  pub fn init(name: *VarNode, tparams: ?*types.TypeList, trait: ?*Type, fields: *AstNodeList, methods: *AstNodeList) @This() {
     return @This() {.name = name, .tparams = tparams, .trait = trait, .fields = fields, .methods = methods};
   }
 
@@ -707,21 +707,17 @@ pub const ClassNode = struct {
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
     var name = &self.name.clone(al).AstVar;
     var trait: ?*Type = if (self.trait) |trait| trait.clone(al) else self.trait;
-    var fields: ?*AstNodeList = null;
-    if (self.fields) |fds| {
-      fields = util.box(AstNodeList, AstNodeList.init(al), al);
-      fields.?.ensureTotalCapacity(fds.capacity());
-      for (fds.items()) |itm| {
-        fields.?.append(itm.AstVarDecl.clone(al));
-      }
+    var fields: *AstNodeList = util.boxEnsureCapacity(
+      AstNodeList, AstNodeList.init(al), al, self.fields.capacity()
+    );
+    for (self.fields.items()) |itm| {
+      fields.append(itm.AstVarDecl.clone(al));
     }
-    var methods: ?*AstNodeList = null;
-    if (self.methods) |mds| {
-      methods = util.box(AstNodeList, AstNodeList.init(al), al);
-      methods.?.ensureTotalCapacity(mds.capacity());
-      for (mds.items()) |itm| {
-        methods.?.append(itm.AstFun.clone(al));
-      }
+    var methods: *AstNodeList = util.boxEnsureCapacity(
+      AstNodeList, AstNodeList.init(al), al, self.methods.capacity()
+    );
+    for (self.methods.items()) |itm| {
+      methods.append(itm.AstFun.clone(al));
     }
     var typ: ?*Type = if (self.typ) |typ| typ.clone(al) else self.typ;
     // don't clone tparams, they're always substituted.
@@ -1010,7 +1006,7 @@ pub const AstNode = union(AstType) {
         tyn = TypeNode.init(Type.newConstant(.TyBool, bol.token.value).box(al), bol.token);
       },
       .AstNil => |nil| {
-        tyn = TypeNode.init(Type.newConcrete(.TyNil, nil.token.value).box(al), nil.token);
+        tyn = TypeNode.init(Type.newConcrete(.TyNil).box(al), nil.token);
       },
       else => unreachable,
     }

@@ -36,9 +36,8 @@ pub const TypeKind = enum (u8) {
   /// any type:
   ///  any
   TyAny,
-  /// class type:
-  ///  list, map, etc.
-  TyClass,
+
+  pub const TyClass: u8 = 8;
 };
 
 fn allocate(comptime T: type, alloc: std.mem.Allocator) *T {
@@ -51,8 +50,6 @@ fn allocate(comptime T: type, alloc: std.mem.Allocator) *T {
 pub const Concrete = struct {
   /// kind of this Concrete type
   tkind: TypeKind,
-  /// resolved name of this Concrete type
-  name: ?[]const u8 = null,
   /// the token value of this Concrete type
   val: ?*[]const u8 = null,
 
@@ -71,14 +68,7 @@ pub const Concrete = struct {
     switch (other.kind) {
       // Concrete & Concrete 
       .Concrete => |*conc| {
-        if (conc.tkind != .TyClass) return conc.tkind == this.tkind;
-        // resolved name must match for target and source
-        // TODO: this would need to be updated with subtype rules when class inheritance is implemented
-        if (this.name != null and conc.name != null) {
-          if (std.mem.eql(u8, this.name.?, conc.name.?)) {
-            return true;
-          }
-        }
+        return conc.tkind == this.tkind;
       },
       .Constant => |*cons| return cons.kind == this.tkind,
       .Union => |*uni| {
@@ -91,7 +81,7 @@ pub const Concrete = struct {
           return true;
         }
       },
-      .Generic, .Variable, .Recursive, .Function => return false,
+      .Generic, .Variable, .Recursive, .Function, .Class => return false,
     }
     return false;
   }
@@ -124,7 +114,7 @@ pub const Constant = struct {
         }
         return false;
       },
-      .Union, .Generic, .Variable, .Recursive, .Function => return false,
+      .Union, .Generic, .Variable, .Recursive, .Function, .Class => return false,
     }
     return false;
   }
@@ -201,7 +191,7 @@ pub const Union = struct {
         }
         return true;
       },
-      .Constant, .Concrete, .Generic, .Variable, .Recursive, .Function => {
+      .Constant, .Concrete, .Generic, .Variable, .Recursive, .Function, .Class => {
         if (ctx == .RCTypeParams) return false;
         // related if there exists a variant of T1 that is related to T2
         for (this.variants.values()) |variant| {
@@ -237,19 +227,20 @@ pub const Generic = struct {
     self.tparams.append(typ);
   }
 
-  pub inline fn tparams_len(self: *@This()) usize {
+  pub inline fn tparamsLen(self: *@This()) usize {
     return self.tparams.len();
   }
 
   pub fn isRelatedTo(this: *Generic, other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
     switch (other.kind) {
       .Generic => |*gen| {
+        // TODO: update this
         if (!this.base.isRelatedTo(gen.base, ctx, A)) return false;
         // expr is Type
-        if (gen.tparams_len() == 0 and ctx == .RCIs) return true;
+        if (gen.tparamsLen() == 0 and ctx == .RCIs) return true;
         // less specific to specific, for ex: lex x = []; x = [1, 2, 3]
         if (gen.empty and ctx == .RCConst) return true;
-        if (this.tparams_len() != gen.tparams_len()) return false;
+        if (this.tparamsLen() != gen.tparamsLen()) return false;
         for (this.tparams.items(), 0..) |tparam, i| {
           var param = gen.tparams.itemAt(i);
           if (!tparam.isRelatedTo(param, .RCTypeParams, A)) {
@@ -258,14 +249,7 @@ pub const Generic = struct {
         }
         return true;
       },
-      .Concrete => |*conc| {
-        if (conc.tkind == .TyClass) {
-          if (ctx == .RCIs) {
-            return this.base.isRelatedTo(other, ctx, A);
-          }
-        }
-      },
-      .Constant, .Union, .Variable, .Recursive, .Function => return false,
+      .Concrete, .Constant, .Union, .Variable, .Recursive, .Function, .Class => return false,
     }
     return false;
   }
@@ -297,12 +281,13 @@ pub const Variable = struct {
     _ = ctx;
     return switch (other.kind) {
       .Variable => |*vr| this.eql(vr),
-      .Constant, .Concrete, .Union, .Recursive, .Generic, .Function => false,
+      .Constant, .Concrete, .Union, .Recursive, .Function, .Generic, .Class => false,
     };
   }
 };
 
 const Node = @import("ast.zig").AstNode;
+const NodeList = ds.ArrayList(*Node);
 
 pub const Function = struct {
   params: TypeList,
@@ -346,26 +331,55 @@ pub const Function = struct {
     _ = ctx;
     return switch (other.kind) {
       .Function => |*fun| this.eql(fun),
-      .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic => false,
+      .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic, .Class => false,
     };
   }
 };
 
 pub const Class = struct {
   name: []const u8,
-  fields: *TypeList,
-  methods: *TypeList,
+  fields: *NodeList,
+  methods: *NodeList,
   tparams: ?*TypeList = null,
   node: ?*Node = null,
+  empty: bool = false,
 
-  pub fn init(name: []const u8, al: std.mem.Allocator) @This() {
-    var fields = util.box(TypeList, TypeList.init(al), al);
-    var methods = util.box(TypeList, TypeList.init(al), al);
+  pub fn init(name: []const u8, fields: *NodeList, methods: *NodeList) @This() {
     return Class {.name = name, .fields = fields, .methods = methods};
   }
 
-  pub fn isGeneric(self: *@This()) bool {
+  pub fn initWithDefault(name: []const u8, al: std.mem.Allocator) @This() {
+    var fields = util.box(NodeList, NodeList.init(al), al);
+    var methods = util.box(NodeList, NodeList.init(al), al);
+    return Class {.name = name, .fields = fields, .methods = methods};
+  }
+
+  pub inline fn initTParams(self: *@This(), al: std.mem.Allocator) void {
+    if (self.tparams == null) {
+      self.tparams = util.box(TypeList, TypeList.init(al), al);
+    }
+  }
+
+  pub inline fn isGeneric(self: *@This()) bool {
     return self.tparams != null;
+  }
+
+  pub inline fn tparamsLen(self: *@This()) usize {
+    return if (self.tparams) |tp| tp.len() else 0;
+  }
+
+  pub inline fn getSlice(self: *@This()) []*Type {
+    return if (self.tparams) |tp| tp.items()[0..tp.len()] else (&[_]*Type{})[0..];
+  }
+
+  pub fn appendTParam(self: *@This(), typ: *Type) void {
+    self.tparams.?.append(typ);
+  }
+
+  pub fn appendTParamSlice(self: *@This(), typs: []const *Type) void {
+    for (typs) |ty| {
+      self.tparams.?.append(ty);
+    }
   }
 
   pub fn toType(self: @This()) Type {
@@ -377,11 +391,47 @@ pub const Class = struct {
   }
 
   pub fn isRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
-    _ = A;
-    _ = ctx;
     return switch (other.kind) {
-      .Class => |*cls| this.eql(cls),
-      .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic, .Function => false,
+      .Class => |*oth| {
+        if (!std.mem.eql(u8, this.name, oth.name)) return false;
+        // expr is Type
+        if (oth.tparamsLen() == 0 and ctx == .RCIs) return true;
+        // less specific to specific, for ex: lex x = []; x = [1, 2, 3]
+        if (oth.empty and ctx == .RCConst) return true;
+        if (this.tparams) |tparams1| {
+          if (oth.tparams) |tparams2| {
+            if (tparams1.len() != tparams2.len()) return false;
+            for (tparams1.items(), tparams2.items()) |tp1, tp2| {
+              if (!tp1.isRelatedTo(tp2, .RCTypeParams, A)) {
+                return false;
+              }
+            }
+          } else {
+            return false;
+          }
+        } else if (oth.tparams != null) {
+          return false;
+        }
+        if (this.fields.len() != oth.fields.len()) return false;
+        for (this.fields.items(), oth.fields.items()) |fd1, fd2| {
+          var id1 = fd1.AstVarDecl.ident;
+          var id2 = fd2.AstVarDecl.ident;
+          if (!std.mem.eql(u8, id1.token.value, id2.token.value)) {
+            return false;
+          }
+          if (!id1.typ.?.isRelatedTo(id2.typ.?, ctx, A)) {
+            return false;
+          }
+        }
+        if (this.methods.len() != oth.methods.len()) return false;
+        for (this.methods.items(), oth.methods.items()) |md1, md2| {
+          if (!md1.getType().?.isRelatedTo(md2.getType().?, ctx, A)) {
+            return false;
+          }
+        }
+        return true;
+      },
+      .Variable, .Constant, .Concrete, .Union, .Recursive, .Function, .Generic, => false,
     };
   }
 };
@@ -426,8 +476,8 @@ pub const TypeInfo = union(enum) {
   Union: Union,
   Generic: Generic,
   Function: Function,
+  Class: Class,
   Recursive: Recursive,
-  // Class: Class,
 };
 
 /// context for inspecting relation rules 
@@ -474,8 +524,7 @@ pub const Type = struct {
         var new = Function.init(A, fun.ret.clone(A));
         new.params.ensureTotalCapacity(fun.params.capacity());
         if (fun.tparams) |tparams| {
-          var new_tparams = util.box(TypeList, TypeList.init(A), A);
-          new_tparams.ensureTotalCapacity(tparams.capacity());
+          var new_tparams = util.boxEnsureCapacity(TypeList, TypeList.init(A), A, tparams.capacity());
           for (tparams.items()) |ty| {
             new_tparams.append(ty.clone(A));
           }
@@ -511,12 +560,36 @@ pub const Type = struct {
         ret.setRestFields(self);
         return ret;
       },
+      .Class => |*cls| {
+        var fields = util.boxEnsureCapacity(NodeList, NodeList.init(A), A, cls.fields.capacity());
+        var methods = util.boxEnsureCapacity(NodeList, NodeList.init(A), A, cls.methods.capacity());
+        for (cls.fields.items()) |itm| {
+          fields.append(itm.AstVarDecl.clone(A));
+        }
+        for (cls.methods.items()) |itm| {
+          methods.append(itm.AstFun.clone(A));
+        }
+        var tparams: ?*TypeList = null;
+        if (cls.tparams) |tp| {
+          var new_tparams = util.boxEnsureCapacity(TypeList, TypeList.init(A), A, tp.capacity());
+          for (tp.items()) |ty| {
+            new_tparams.append(ty.clone(A));
+          }
+          tparams = new_tparams;
+        }
+        var new = Class.init(cls.name, fields, methods);
+        new.empty = cls.empty;
+        new.node = cls.node;
+        new.tparams = tparams;
+        var ret = Type.init(.{.Class = new}).box(A);
+        ret.setRestFields(self);
+        return ret;
+      },
     }
   }
 
-  pub fn newConcrete(kind: TypeKind, name: ?[]const u8) Self {
+  pub fn newConcrete(kind: TypeKind) Self {
     var conc = Concrete.init(kind);
-    conc.name = name;
     return Self.init(.{.Concrete = conc});
   }
 
@@ -528,7 +601,7 @@ pub const Type = struct {
     if (ty.isNullable()) {
       return ty;
     }
-    var nil = if (nil_ty) |nil| nil else Type.newConcrete(.TyNil, null).box(al);
+    var nil = if (nil_ty) |nil| nil else Type.newConcrete(.TyNil).box(al);
     if (ty.isUnion()) {
       ty.union_().set(nil);
       return compressTypes(&ty.union_().variants, ty);
@@ -554,6 +627,10 @@ pub const Type = struct {
 
   pub fn newFunction(allocator: std.mem.Allocator, ret: *Self) Self {
     return Self.init(.{.Function = Function.init(allocator, ret)});
+  }
+
+  pub fn newClass(name: []const u8, allocator: std.mem.Allocator) Self {
+    return Self.init(.{.Class = Class.initWithDefault(name, allocator)});
   }
 
   pub fn newRecursive(base: *Self) Self {
@@ -609,6 +686,14 @@ pub const Type = struct {
     };
   }
 
+  /// a type that may require some form of substitution
+  pub inline fn isClsGeneric(self: *Self) bool {
+    return switch (self.kind) {
+      .Class => |*cls| cls.isGeneric(),
+      else => false,
+    };
+  }
+
   /// a compile-time constant type
   pub inline fn isConstant(self: *Self) bool {
     return switch (self.kind) {
@@ -657,6 +742,14 @@ pub const Type = struct {
     };
   }
 
+  /// a class type
+  pub inline fn isClass(self: *Self) bool {
+    return switch (self.kind) {
+      .Class => true,
+      else => false,
+    };
+  }
+
   /// a recursive type
   pub inline fn isRecursive(self: *Self) bool {
     return switch (self.kind) {
@@ -680,7 +773,7 @@ pub const Type = struct {
 
   /// a type that may be generic (from annotation usage)
   pub inline fn isLikeGeneric(self: *Self) bool {
-    return self.isLikeXTy(isGeneric);
+    return self.isLikeXTy(isGeneric) or self.isLikeXTy(isClsGeneric);
   }
 
   /// a type that may be constant
@@ -700,19 +793,11 @@ pub const Type = struct {
     };
   }
 
-  inline fn _isXClassTy(self: *Self, name: []const u8) bool {
-    if (self.isClassTy()) {
-      return std.mem.eql(u8, self.concrete().name.?, name);
+  inline fn isXClassTy(self: *Self, name: []const u8) bool {
+    if (self.isClass()) {
+      return std.mem.eql(u8, self.klass().name, name);
     }
     return false;
-  }
-
-  inline fn isXClassTy(self: *Self, name: []const u8) bool {
-    if (self.isGeneric()) {
-      return self.generic().base._isXClassTy(name);
-    } else {
-      return self._isXClassTy(name);
-    }
   }
 
   /// more qol helper methods
@@ -742,10 +827,6 @@ pub const Type = struct {
 
   pub inline fn isAnyTy(self: *Self) bool {
     return self.isConcreteTypeEq(.TyAny);
-  }
-
-  pub inline fn isClassTy(self: *Self) bool {
-    return self.isConcreteTypeEq(.TyClass);
   }
 
   pub inline fn isTypeTy(self: *Self) bool {
@@ -797,6 +878,10 @@ pub const Type = struct {
     return &self.kind.Function;
   }
 
+  pub inline fn klass(self: *Self) *Class {
+    return &self.kind.Class;
+  }
+
   pub inline fn recursive(self: *Self) Recursive {
     return self.kind.Recursive;
   }
@@ -821,12 +906,6 @@ pub const Type = struct {
           .TyNoReturn => self.tid = 10 << ID_HASH,
           .TyAny      => self.tid = 11 << ID_HASH,
           .TyType     => self.tid = 12 << ID_HASH,
-          .TyClass    => {
-            self.tid = 5 << ID_HASH;
-            for (conc.name.?) |ch| {
-              self.tid += @as(u8, ch);
-            }
-          },
         }
       },
       .Generic => |*gen| {
@@ -837,11 +916,26 @@ pub const Type = struct {
         }
         self.tid += @boolToInt(gen.empty);
       },
+      .Class => |*cls| {
+        self.tid = 5 << ID_HASH;
+        for (cls.name) |ch| {
+          self.tid += @as(u8, ch);
+        }
+        for (cls.getSlice()) |typ| {
+          self.tid += typ.typeid();
+        }
+        for (cls.fields.items()) |nd| {
+          self.tid += nd.getType().?.typeid();
+        }
+        for (cls.methods.items()) |nd| {
+          self.tid += nd.getType().?.typeid();
+        }
+        self.tid += @boolToInt(cls.empty);
+      },
       .Union => |*uni| {
         self.tid = 6 << ID_HASH;
         for (uni.variants.values()) |ty| {
           self.tid += ty.typeid();
-          // self.tid <<= 1; // mix
         }
       },
       .Constant => |*cons| {
@@ -895,12 +989,36 @@ pub const Type = struct {
       return;
     }
     switch (typ.kind) {
-      .Concrete, .Variable,
-      .Constant, .Function => list.append(typ),
+      // TODO: unfold function like generic
+      .Concrete, .Variable, .Constant, .Function => list.append(typ),
       .Generic => |*gen| {
         gen.base._unfoldRecursive(step + 1, list, visited);
         for (gen.tparams.items()) |param| {
           param._unfoldRecursive(step + 1, list, visited);
+        }
+      },
+      .Class => |*cls| {
+        // name
+        var name_ty = Type.newVariable(list.allocator()).box(list.allocator());
+        var token = Token.getDefault();
+        token.value = cls.name;
+        name_ty.variable().append(token);
+        list.append(name_ty);
+        // tparams
+        for (cls.getSlice()) |param| {
+          param._unfoldRecursive(step + 1, list, visited);
+        }
+        // fields
+        for (cls.fields.items()) |field| {
+          if (field.getType()) |ty| {
+            ty._unfoldRecursive(step + 1, list, visited);
+          }
+        }
+        // methods
+        for (cls.methods.items()) |method| {
+          if (method.getType()) |ty| {
+            ty._unfoldRecursive(step + 1, list, visited);
+          }
         }
       },
       .Union => |*uni| {
@@ -917,11 +1035,36 @@ pub const Type = struct {
 
   fn _unfold(self: *Self, list: *TypeList) void {
     switch (self.kind) {
+      // TODO: unfold function like generic
       .Concrete, .Constant, .Variable, .Function => list.append(self),
       .Generic => |*gen| {
         gen.base._unfold(list);
         for (gen.tparams.items()) |param| {
           param._unfold(list);
+        }
+      },
+      .Class => |*cls| {
+        // name
+        var name_ty = Type.newVariable(list.allocator()).box(list.allocator());
+        var token = Token.getDefault();
+        token.value = cls.name;
+        name_ty.variable().append(token);
+        list.append(name_ty);
+        // tparams
+        for (cls.getSlice()) |param| {
+          param._unfold(list);
+        }
+        // fields
+        for (cls.fields.items()) |field| {
+          if (field.getType()) |ty| {
+            ty._unfold(list);
+          }
+        }
+        // methods
+        for (cls.methods.items()) |method| {
+          if (method.getType()) |ty| {
+            ty._unfold(list);
+          }
         }
       },
       .Union => |*uni| {
@@ -976,6 +1119,9 @@ pub const Type = struct {
       },
       .Generic => |*gen| {
         return gen.isRelatedTo(other, ctx, A);
+      },
+      .Class => |*cls| {
+        return cls.isRelatedTo(other, ctx, A);
       },
       .Variable => |*vr| {
         return vr.isRelatedTo(other, ctx, A);
@@ -1140,7 +1286,6 @@ pub const Type = struct {
         .TyNoReturn => "noreturn",
         .TyAny      => "any",
         .TyType     => "Type",
-        .TyClass    => conc.name.?,
       },
       .Constant => |*cons| {
         if (cons.kind != .TyString) return cons.val;
@@ -1152,7 +1297,7 @@ pub const Type = struct {
       },
       .Generic => |*gen| {
         const name = try gen.base._typename(allocator, depth);
-        if (gen.tparams_len() == 0) {
+        if (gen.tparamsLen() == 0) {
           return name;
         } else {
           var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
@@ -1161,6 +1306,25 @@ pub const Type = struct {
           for (gen.getSlice(), 0..) |param, i| {
             _ = try writer.write(try param._typename(allocator, depth));
             if (i != gen.tparams.len() - 1) {
+              _ = try writer.write(", ");
+            }
+          }
+          _ = try writer.write("}");
+          return writer.context.items;
+        }
+      },
+      .Class => |*cls| {
+        const name = cls.name;
+        if (cls.tparams == null) {
+          return name;
+        } else {
+          var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
+          _ = try writer.write(name);
+          _ = try writer.write("{");
+          var tparams = cls.tparams.?;
+          for (tparams.items(), 0..) |param, i| {
+            _ = try writer.write(try param._typename(allocator, depth));
+            if (i != tparams.len() - 1) {
               _ = try writer.write(", ");
             }
           }
@@ -1272,7 +1436,7 @@ pub const Type = struct {
       // add constant true & false types if available
       if (true_ty) |tru| {
         if (false_ty) |_| {
-          final.append(Type.newConcrete(.TyBool, null).box(allocator));
+          final.append(Type.newConcrete(.TyBool).box(allocator));
         } else {
           final.append(tru);
         }
@@ -1403,7 +1567,7 @@ pub const Type = struct {
         }
         return Self.compressTypes(&new_uni, null);
       },
-      .Constant, .Concrete, .Generic, .Variable, .Function => return error.Negation,
+      .Constant, .Concrete, .Generic, .Variable, .Function, .Class => return error.Negation,
       // TODO: c'est fini?
       .Recursive => return t1,
     }
@@ -1414,15 +1578,8 @@ pub const Type = struct {
     // ex: is(str | list{num}, list) -> list{num}
     switch (t1.kind) {
       .Concrete => |conc| {
-        if (!t2.isConcrete()) return null;
-        if (conc.tkind != .TyClass) {
+        if (t2.isConcrete()) {
           if (conc.tkind == t2.concrete().tkind) {
-            return t1;
-          }
-        } else {
-          if (!t2.isClassTy()) return null;
-          // TODO: class relations
-          if (std.mem.eql(u8, conc.name.?, t2.concrete().name.?)) {
             return t1;
           }
         }
@@ -1433,16 +1590,22 @@ pub const Type = struct {
         }
       },
       .Generic => |*t1_gen| {
-        if (t2.isConcrete()) {
-          if (is(t1_gen.base, t2, al)) |_| {
-            return t1;
-          }
-        } else if (t2.isGeneric()) {
+        if (t2.isGeneric()) {
           var t2_gen = t2.generic();
           if (is(t1_gen.base, t2_gen.base, al)) |_| {
             return t1;
           }
-        } else return null;
+        } else {
+          return null;
+        }
+      },
+      .Class => |*cls1| {
+        if (t2.isClass()) {
+          // TODO: class relations
+          if (std.mem.eql(u8, cls1.name, t2.klass().name)) {
+            return t1;
+          }
+        }
       },
       .Union => |*uni| {
         for (uni.variants.values()) |ty| {
@@ -1452,15 +1615,17 @@ pub const Type = struct {
         }
       },
       .Variable => |*vr| {
-        if (!t2.isVariable()) return null;
-        if (vr.eql(t2.variable())) {
-          return t1;
+        if (t2.isVariable()) {
+          if (vr.eql(t2.variable())) {
+            return t1;
+          }
         }
       },
       .Function => |*fun| {
-        if (!t2.isFunction()) return null;
-        if (fun.eql(t2.function())) {
-          return t1;
+        if (t2.isFunction()) {
+          if (fun.eql(t2.function())) {
+            return t1;
+          }
         }
       },
       // TODO:

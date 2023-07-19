@@ -709,12 +709,12 @@ pub const Compiler = struct {
     const dst2 = try self.getReg(node.left.getToken());
     var rk2 = tb: {
       var typ = node.right.getType().?;
-      if (typ.isClassTy() or typ.isGeneric()) {
+      if (typ.isClass()) {
         break :tb (
-          if (typ.isListTy()) @enumToInt(TypeKind.TyClass)
-          else if (typ.isMapTy()) @enumToInt(TypeKind.TyClass) + 1
-          else if (typ.isTupleTy()) @enumToInt(TypeKind.TyClass) + 2
-          else if (typ.isErrorTy()) @enumToInt(TypeKind.TyClass) + 3
+          if (typ.isListTy()) TypeKind.TyClass
+          else if (typ.isMapTy()) TypeKind.TyClass + 1
+          else if (typ.isTupleTy()) TypeKind.TyClass + 2
+          else if (typ.isErrorTy()) TypeKind.TyClass + 3
           else unreachable
         );
       } else {
@@ -1285,7 +1285,7 @@ pub const Compiler = struct {
     // alt-end:
     var rx = try self.c(node.ok, reg);
     var tmp = try self.getReg(node.ok.getToken());
-    var rk2 = ((@enumToInt(TypeKind.TyClass) + 3) - 1);
+    var rk2 = ((TypeKind.TyClass + 3) - 1);
     self.fun.code.write3ArgsInst(.Is, tmp, rx, rk2, self.lastLine(), self.vm);
     var ok_to_alt = self.fun.code.write2ArgsJmp(.Jt, tmp, self.lastLine(), self.vm);
     var ok_to_end = self.fun.code.write2ArgsJmp(.Jf, tmp, self.lastLine(), self.vm);

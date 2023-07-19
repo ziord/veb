@@ -53,6 +53,25 @@ test "builtin properties" {
   });
 }
 
+test "builtin generics" {
+  var src =
+  \\ let j: list{} = []
+  \\ let k: map{str} = {1: 1}
+  \\ let i: tuple{num, bool} = (false,)
+  \\ let x: err{num, list{num}} = (56)!
+  \\ type T{K} = list{K{T}}
+  \\ type X{K} = num | str | K{bool}
+  ;
+  try doErrorTest(src, 6, [_][]const u8{
+    "empty type parameters are not supported",
+    "generic type instantiated with wrong number of paramters. Expected 2 but got 1",
+    "generic type instantiated with wrong number of paramters. Expected 1 but got 2",
+    "generic type instantiated with wrong number of paramters. Expected 1 but got 2",
+    "type variable in generic parameter cannot be generic",
+    "type variable in generic parameter cannot be generic",
+  });
+}
+
 test "casting" {
   var src =
   \\ let j = (1, 2)

@@ -65,6 +65,12 @@ pub inline fn box(comptime T: type, val: T, allocator: std.mem.Allocator) *T {
   return item;
 }
 
+pub fn boxEnsureCapacity(comptime T: type, val: T, al: std.mem.Allocator, cap: usize) *T {
+  var item = @call(.always_inline, box, .{T, val, al});
+  item.ensureTotalCapacity(cap);
+  return item;
+}
+
 pub inline fn todo(msg: []const u8) noreturn {
   @panic("Todo! " ++ msg ++ "\n");
 }

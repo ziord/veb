@@ -438,15 +438,9 @@ pub const CFGBuilder = struct {
     // TODO: cache builder
     var builder = CFGBuilder.init(self.alloc());
     var synth = ast.BlockNode.init(self.alloc(), null);
-    var cap: usize = if (cls.fields) |fds| fds.len() else 0;
-    cap += if (cls.methods) |mds| mds.len() else 0;
-    synth.nodes.ensureTotalCapacity(cap);
-    if (cls.fields) |fds| {
-      synth.nodes.extend(fds);
-    }
-    if (cls.methods) |mds| {
-      synth.nodes.extend(mds);
-    }
+    synth.nodes.ensureTotalCapacity(cls.fields.len() + cls.methods.len());
+    synth.nodes.extend(cls.fields);
+    synth.nodes.extend(cls.methods);
     var body = @as(Node, .{.AstBlock = synth});
     var flo = builder.buildBlock(self.cfg, &body);
     // save node for future lookup()s

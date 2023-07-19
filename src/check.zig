@@ -217,7 +217,7 @@ pub const TypeChecker = struct {
     var tyString: Type = Type.init(.{.Concrete = str});
     var tyBool: Type = Type.init(.{.Concrete = bol});
     var tyNil: Type = Type.init(.{.Concrete = nil});
-    var tyAny: Type = Type.newConcrete(.TyAny, "any");
+    var tyAny: Type = Type.newConcrete(.TyAny);
     var TyTy: Type = Type.init(.{.Concrete = tyty});
   };
   pub const FnInfo = struct {
@@ -912,12 +912,13 @@ pub const TypeChecker = struct {
   inline fn inferCollection(self: *Self, node: *ast.ListNode, name: []const u8) !*Type {
     // create a new type
     var al = self.ctx.allocator();
-    var base = Type.newConcrete(.TyClass, name).box(al);
-    node.typ = Type.newGeneric(al, base).box(al);
+    var base = Type.newClass(name, al).box(al);
+    base.klass().initTParams(al);
+    node.typ = base;
     if (node.elems.len() == 0) {
-      node.typ.?.generic().append(&UnitTypes.tyAny);
-      node.typ.?.generic().empty = true;
-      return node.typ.?;
+      base.klass().appendTParam(&UnitTypes.tyAny);
+      base.klass().empty = true;
+      return base;
     }
     // infer type of elements stored in the list
     var typeset = TypeHashSet.init(al);
@@ -926,9 +927,8 @@ pub const TypeChecker = struct {
       var typ = try self.infer(elem);
       typeset.set(typ.typeid(), typ);
     }
-    var gen = node.typ.?.generic();
-    gen.append(Type.compressTypes(&typeset, null));
-    return node.typ.?;
+    base.klass().appendTParam(Type.compressTypes(&typeset, null));
+    return base;
   }
 
   fn inferList(self: *Self, node: *ast.ListNode) !*Type {
@@ -942,13 +942,14 @@ pub const TypeChecker = struct {
   fn inferMap(self: *Self, node: *ast.MapNode) !*Type {
     // create a new type
     var al = self.ctx.allocator();
-    var base = Type.newConcrete(.TyClass, "map").box(al);
-    node.typ = Type.newGeneric(al, base).box(al);
+    var base = Type.newClass("map", al).box(al);
+    base.klass().initTParams(al);
+    node.typ = base;
     if (node.pairs.len() == 0) {
       var any = &UnitTypes.tyAny;
-      node.typ.?.generic().tparams.appendSlice(&[_]*Type{any, any});
-      node.typ.?.generic().empty = true;
-      return node.typ.?;
+      base.klass().appendTParamSlice(&[_]*Type{any, any});
+      base.klass().empty = true;
+      return base;
     }
     // infer type of items stored in the map
     var first_pair = node.pairs.itemAt(0);
@@ -956,8 +957,7 @@ pub const TypeChecker = struct {
     var val_typ = try self.infer(first_pair.value);
 
     if (node.pairs.len() > 1) {
-      for (node.pairs.items()[1..], 1..) |pair, i| {
-        _ = i;
+      for (node.pairs.items()[1..]) |pair| {
         var typ = try self.infer(pair.key);
         var debug = pair.key.getToken();
         _ = self.checkAssign(key_typ, typ, debug, false) catch {
@@ -987,10 +987,8 @@ pub const TypeChecker = struct {
       // ditto
       val_typ.union_().active = null;
     }
-    var gen = node.typ.?.generic();
-    gen.append(key_typ);
-    gen.append(val_typ);
-    return node.typ.?;
+    base.klass().appendTParamSlice(&[_]*Type{key_typ, val_typ});
+    return base;
   }
 
   fn inferUnary(self: *Self, node: *ast.UnaryNode) !*Type {
@@ -1045,7 +1043,7 @@ pub const TypeChecker = struct {
     }
     // at this point, rhs is a TypeNode
     var ty = node.right.AstNType.typ;
-    if ((ty.isGeneric() and ty.generic().tparams_len() != 0) or ty.isUnion() or ty.isVariable() or ty.isFunction()) {
+    if ((ty.isClsGeneric() and ty.klass().tparamsLen() != 0) or ty.isUnion() or ty.isVariable() or ty.isFunction()) {
       return self.error_(
         true, node.op.token,
         "Expected a concrete or class type in the rhs of the `is` operator but found '{s}'",
@@ -1178,7 +1176,7 @@ pub const TypeChecker = struct {
     }
     var expr_ty = try self.infer(node.expr);
     // fail fast
-    if (!expr_ty.isGeneric()) {
+    if (!expr_ty.isClsGeneric()) {
       return self.error_(
         true, node.index.getToken(),
         "Type '{s}' is not indexable", .{self.getTypename(expr_ty)}
@@ -1389,7 +1387,7 @@ pub const TypeChecker = struct {
       }
       uni.set(typ);
     }
-    if (has_noreturn_ty) uni.set(Type.newConcrete(.TyNoReturn, null).box(self.ctx.allocator()));
+    if (has_noreturn_ty) uni.set(Type.newConcrete(.TyNoReturn).box(self.ctx.allocator()));
     var inf_ret_ty = uni.toType();
     if (node.AstFun.ret) |ret| {
       var ret_ty = ret.AstNType.typ;
@@ -1515,7 +1513,7 @@ pub const TypeChecker = struct {
       }
       // validate varargs
       // we expect the variadic type to be a tuple, so perform relations check with it tparam:
-      var va_ty = fun_ty.params.getLast().generic().tparams.itemAt(0);
+      var va_ty = fun_ty.params.getLast().klass().tparams.?.itemAt(0);
       for (node.args.items()[non_varargs_len..]) |arg| {
         var arg_ty = try self.infer(arg);
         if (!va_ty.isRelatedTo(arg_ty, .RCAny, self.ctx.allocator())) {
@@ -1698,11 +1696,11 @@ pub const TypeChecker = struct {
       );
     }
     var al = self.ctx.allocator();
-    var base = Type.newConcrete(.TyClass, "err").box(al);
-    var typ = Type.newGeneric(al, base).box(al);
-    typ.generic().append(ty);
-    node.typ = typ;
-    return typ;
+    var base = Type.newClass("err", al).box(al);
+    base.klass().initTParams(al);
+    base.klass().appendTParam(ty);
+    node.typ = base;
+    return base;
   }
 
   fn inferOrElse(self: *Self, node: *Node) !*Type {
@@ -1839,7 +1837,7 @@ pub const TypeChecker = struct {
         "Type '{s}' is not indexable", .{self.getTypename(expr_ty)}
       );
     }
-    if (expr_ty.generic().tparams_len() == 0) {
+    if (expr_ty.klass().tparamsLen() == 0) {
       return self.error_(
         true, token,
         "Cannot index empty or non-specialized '{s}' type", .{self.getTypename(expr_ty)}
@@ -1853,13 +1851,13 @@ pub const TypeChecker = struct {
           .{self.getTypename(expr_ty), self.getTypename(index_ty)}
         );
       }
-      node.typ = expr_ty.generic().tparams.itemAt(0);
+      node.typ = expr_ty.klass().tparams.?.itemAt(0);
     } else if (expr_ty.isMapTy()) {
       // k-v. index with k, get v.
-      var gen = expr_ty.generic();
-      std.debug.assert(gen.tparams_len() == 2);
-      var key_typ = gen.tparams.itemAt(0);
-      var val_typ = gen.tparams.itemAt(1);
+      var cls = expr_ty.klass();
+      std.debug.assert(cls.tparamsLen() == 2);
+      var key_typ = cls.tparams.?.itemAt(0);
+      var val_typ = cls.tparams.?.itemAt(1);
       _ = self.checkAssign(key_typ, index_ty, node.index.getToken(), false) catch {
         return self.error_(
           true, token,

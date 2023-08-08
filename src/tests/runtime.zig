@@ -116,6 +116,7 @@ test "lists" {
 
 test "maps" {
   const srcs = [_][]const u8{
+    "[]",
     "{'abc': 123}",
     "{'abc' as bool | str: 123, true: 0xff, 'obs': 0b101}",
     "{}",

@@ -182,7 +182,7 @@ pub const Scope = GenScope([]const u8, *Type);
 pub const TContext = CreateTContext(Scope, Scope);
 
 pub const TypeLinker = struct {
-  ctx: TContext,
+  ctx: *TContext,
   /// track each substitution/resolution steps
   sub_steps: usize = 0,
   /// track if a Variable type is from a generic parameter type substitution 
@@ -203,10 +203,10 @@ pub const TypeLinker = struct {
 
   const Self = @This();
 
-  pub fn init(allocator: std.mem.Allocator, diag: *Diagnostic) @This() {
+  pub fn init(ctx: *TContext, diag: *Diagnostic) @This() {
     return Self {
-      .ctx = TContext.init(allocator),
-      .cyc_scope = PairScope.init(allocator),
+      .ctx = ctx,
+      .cyc_scope = PairScope.init(ctx.allocator()),
       .diag = diag,
     };
   }
@@ -420,6 +420,16 @@ pub const TypeLinker = struct {
         }
         unreachable;
       }
+      else if (eqn.isClass()) {
+        // create a temp generic type and validate if this generic substitution matches
+        var tmp = Type.init(.{.Generic = .{.tparams = eqn.klass().tparams.?.*, .base = eqn}});
+        try self.assertGenericAliasSubMatches(&tmp, typ, debug);
+        var len = eqn.klass().getSlice().len;
+        for (0..len) |i| {
+          eqn.klass().tparams.?.items()[i] = try self.resolveType(gen.tparams.itemAt(i), debug);
+        }
+        return eqn;
+      }
       // only instantiate generic type variables when the alias type is guaranteed to be generic
       else if (eqn.alias == null or !eqn.alias.?.isGeneric()) {
         return self.error_(debug, "Non-generic type instantiated as generic", .{});
@@ -616,6 +626,11 @@ pub const TypeLinker = struct {
     try self.link(node.value);
   }
 
+  fn linkFieldOrParamDecl(self: *Self, node: *ast.VarDeclNode) !void {
+    node.ident.typ = try self.resolve(node.ident.typ.?, node.ident.token);
+    self.ctx.varScope.insert(node.ident.token.value, node.ident.typ.?);
+  }
+
   fn linkAlias(self: *Self, node: *ast.AliasNode) !void {
     var typ = node.alias.typ;
     var tokens = if (typ.isGeneric()) typ.generic().base.variable().tokens else typ.variable().tokens;
@@ -670,21 +685,22 @@ pub const TypeLinker = struct {
       if (!allow_generic) return;
       self.ban_alias = node.tparams;
     }
-    self.ctx.enterScope();
-    for (node.params.items()) |vd| {
-      vd.ident.typ = try self.resolve(vd.ident.typ.?, vd.ident.token);
-      self.ctx.varScope.insert(vd.ident.token.value, vd.ident.typ.?);
+    for (node.params.items()) |*vd| {
+      try self.linkFieldOrParamDecl(vd);
     }
     if (node.ret) |ret| {
       try self.link(ret);
     }
-    self.ctx.enterScope();
     try self.link(node.body);
-    self.ctx.leaveScope();
-    self.ctx.leaveScope();
   }
 
-  fn linkClass(self: *Self, node: *ast.ClassNode, allow_generic: bool) !void {
+  pub fn linkClass(self: *Self, node: *ast.ClassNode, allow_generic: bool) !void {
+    if (!node.is_builtin) {
+      var typ = Type.newClass(node.name.token.value, self.ctx.allocator()).box(self.ctx.allocator());
+      // use tparams. fields and methods are resolved by the type checker
+      typ.klass().tparams = node.tparams;
+      self.ctx.typScope.insert(node.name.token.value, typ);
+    }
     if (node.isGeneric()) {
       if (!allow_generic) return;
       self.ban_alias = node.tparams;
@@ -693,7 +709,11 @@ pub const TypeLinker = struct {
       node.trait = try self.resolveType(trait, node.name.token);
     }
     for (node.fields.items()) |field| {
-      try self.linkVarDecl(&field.AstVarDecl);
+      if (field.AstVarDecl.has_default) {
+        try self.linkVarDecl(&field.AstVarDecl);
+      } else {
+        try self.linkFieldOrParamDecl(&field.AstVarDecl);
+      }
     }
     for (node.methods.items()) |method| {
       try self.linkFun(&method.AstFun, false);

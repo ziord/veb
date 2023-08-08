@@ -596,3 +596,137 @@ test "error type" {
     "Expected type 'num' + 'num', but got 'err{str} | num' + 'num'",
   });
 }
+
+test "simple-classes-1" {
+  var src =
+  \\ class Fox
+  \\    x: num
+  \\    def init(): void
+  \\      self.x = 0
+  \\    end
+  \\    def pulse()
+  \\      return self
+  \\    end
+  \\ end
+  \\ 
+  \\ let f = Fox()
+  \\ f.y + f.y
+  \\
+  \\ class Foo
+  \\  y: str
+  \\ end
+  \\
+  \\ Foo()
+  \\
+  \\ class Bar
+  \\  y: str
+  \\  def init(t: str)
+  \\    self.y = t
+  \\  end
+  \\ end
+  \\
+  \\ let q = Bar()
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "Fox has no property 'y'",
+    "a class having field(s) without defaults must define an `init` method that initializes such field(s)",
+    "field 'y' is declared but uninitialized",
+    "Argument mismatch. Expected 1 argument(s) but found 0",
+  });
+}
+
+test "generic-classes-1" {
+  var src =
+  \\ let p = {'a': 5}
+  \\ p.doesNotExist()
+  \\ let q = [1, 2]
+  \\ q.lens()
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "map{str, num} has no property 'doesNotExist'",
+    "list{num} has no property 'lens'",
+  });
+}
+
+test "generic-classes-2" {
+  var src =
+  \\ class Fox{T}
+  \\    x: tuple{T}
+  \\    def init(x*: T): void
+  \\      self.x = x
+  \\    end
+  \\    def pulse()
+  \\      return self
+  \\    end
+  \\
+  \\    def getGen()
+  \\      def fun{T}(p: T)
+  \\        return p[0]
+  \\      end
+  \\      return fun
+  \\    end
+  \\ end
+  \\ let x = Fox{num}(6, 7, 8)
+  \\ let t: Fox{num} = x
+  \\ t.pulse().y
+  \\ t.pulse().getGen()((7)!)
+  \\ t.pulse().pulse().x.len()[0]
+  \\ let q = {'a': 5, 'c': 12}
+  \\ q.keys().len() + 5
+  \\ q.items()[0].len() - '2'
+  \\ x.pulse().getGen()(5)
+  ;
+    try doErrorTest(src, 5, [_][]const u8{
+    "Fox{num} has no property 'y'",
+    "Type 'err{num}' is not indexable",
+    "Type 'num' is not indexable",
+    "Expected type 'num' - 'num', but got 'num' - 'str'",
+    "Type 'num' is not indexable"
+  });
+}
+
+test "generic-classes-3" {
+  var src =
+  \\ class Fox{T}
+  \\    x: tuple{T}
+  \\    def init(x*: T): void
+  \\      self.x = x
+  \\    end
+  \\    def pulse()
+  \\      return self
+  \\    end
+  \\
+  \\    def getGen()
+  \\      def fun{T}(p: T)
+  \\        return p[0]
+  \\      end
+  \\      return fun
+  \\    end
+  \\ end
+  \\
+  \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
+  \\ let q = w.pulse
+  \\ q().pulse().x += 5
+  \\ j.pulse().x += 6 as 6
+  \\ p().pulse().x + 5
+  \\ w.pulse().x += 2
+  \\ w.getGen()([12]) + 'g'
+  \\ w.getGen()(['a', 'b']) + 'g'
+  \\ let t = q().pulse()
+  \\ t.init(12)
+  \\ let s = t.pulse().getGen()
+  \\ s(((0)!,))
+  \\ 
+  \\ type Poo{T} = Fox{T}
+  \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
+  \\ let j: Poo{'miah'} = Fox{'mia'}('mia')
+  ;
+    try doErrorTest(src, 6, [_][]const u8{
+    "Expected type 'num' + 'num', but got 'tuple{mia}' + 'num'",
+    "Expected type 'num' + 'num', but got 'tuple{mia}' + 'num'",
+    "Expected type 'num' + 'num', but got 'num' + 'str'",
+    "Expected type 'num' + 'num', but got 'str' + 'str'",
+    "Argument mismatch. Expected type 'mia' but found 'num'",
+    "Cannot initialize type 'Poo{miah}' with type 'Fox{mia} instance'"
+  });
+}

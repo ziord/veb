@@ -156,13 +156,26 @@ pub const Parser = struct {
     };
   }
 
-  fn errWithArgs(self: *Self, token: lex.Token, comptime fmt: []const u8, args: anytype) ParseError {
+  inline fn _errWithArgs(self: *Self, token: lex.Token, comptime fmt: []const u8, args: anytype) void {
     self.diag.addDiagnostics(.DiagError, token, "Error: " ++ fmt, args);
+  }
+
+  fn softErrArgs(self: *Self, token: lex.Token, comptime fmt: []const u8, args: anytype) void {
+   self._errWithArgs(token, fmt, args);
+  }
+
+  fn softErrMsg(self: *Self, token: lex.Token, msg: []const u8) void {
+    self._errWithArgs(token, "{s}", .{msg});
+  }
+
+  fn errMsg(self: *Self, token: lex.Token, msg: []const u8) ParseError {
+    self._errWithArgs(token, "{s}", .{msg});
     return error.ParseError;
   }
 
-  fn errWithMsg(self: *Self, token: lex.Token, msg: []const u8) ParseError {
-    return self.errWithArgs(token, "{s}", .{msg});
+  fn errArgs(self: *Self, token: lex.Token, comptime fmt: []const u8, args: anytype) ParseError {
+   self._errWithArgs(token, fmt, args);
+   return error.ParseError;
   }
 
   fn advance(self: *Self) !void {
@@ -171,7 +184,7 @@ pub const Parser = struct {
     if (!tok.isErr()) {
       self.current_tok = tok;
     } else {
-      return self.errWithMsg(tok, tok.value);
+      return self.errMsg(tok, tok.value);
     }
   }
 
@@ -184,7 +197,7 @@ pub const Parser = struct {
         &buff,  "expected token '{s}', but found '{s}'", 
         .{tty.str(), self.current_tok.ty.str()}
       ) catch exit(1);
-      return self.errWithMsg(self.current_tok, msg);
+      return self.errMsg(self.current_tok, msg);
     }
   }
 
@@ -254,14 +267,14 @@ pub const Parser = struct {
 
   inline fn assertMaxElements(self: *Self, len: usize, msg: []const u8) !void {
     if (len > MAX_LISTING_ELEMS) {
-      return self.errWithMsg(self.current_tok, msg);
+      return self.errMsg(self.current_tok, msg);
     }
   }
 
   fn _parse(self: *Self, bp: BindingPower) !*Node {
     const prefix = ptable[@enumToInt(self.current_tok.ty)].prefix;
     if (prefix == null) {
-      return self.errWithMsg(self.current_tok, "token found at an invalid prefix position");
+      return self.errMsg(self.current_tok, "token found at an invalid prefix position");
     }
     const bp_val = @enumToInt(bp);
     const assignable = bp_val <= @enumToInt(BindingPower.Assignment);
@@ -269,7 +282,7 @@ pub const Parser = struct {
     while (bp_val < @enumToInt(ptable[@enumToInt(self.current_tok.ty)].bp)) {
       var infix = ptable[@enumToInt(self.current_tok.ty)].infix;
       if (infix == null) {
-        return self.errWithMsg(self.current_tok, "token found at an invalid infix position");
+        return self.errMsg(self.current_tok, "token found at an invalid infix position");
       }
       node = try infix.?(self, node, assignable);
     }
@@ -286,8 +299,9 @@ pub const Parser = struct {
     const node = self.newNode();
     node.* = .{.AstNumber = try self.literal(.TkNumber)};
     var token = node.AstNumber.token;
-    node.AstNumber.value = token.parseNum() catch {
-      return self.errWithMsg(token, "invalid number token");
+    node.AstNumber.value = token.parseNum() catch b: {
+      self.softErrMsg(token, "invalid number token");
+      break :b 0;
     };
     return node;
   }
@@ -465,7 +479,7 @@ pub const Parser = struct {
         "maximum number of map elements exceeded"
       );
       if (pairs.len() > max_items) {
-        return self.errWithMsg(self.current_tok, "maximum number of map items exceeded");
+        self.softErrMsg(self.current_tok, "maximum number of map items exceeded");
       }
       var key = try self.parseExpr();
       try self.consume(.TkColon);
@@ -502,6 +516,9 @@ pub const Parser = struct {
   }
 
   fn dotExpr(self: *Self, left: *Node, assignable: bool) !*Node {
+    if (!self.check(.TkIdent)) {
+      self.softErrMsg(self.current_tok, "expected identifier after '.'");
+    }
     const bp = ptable[@enumToInt(self.previous_tok.ty)].bp;
     const right = try self._parse(bp);
     var node = self.newNode();
@@ -511,10 +528,10 @@ pub const Parser = struct {
 
   fn selfExpr(self: *Self, assignable: bool) !*Node {
     if (self.class == null) {
-      return self.errWithMsg(self.current_tok, "Use of 'self' outside class statement");
+      self.softErrMsg(self.current_tok, "Use of 'self' outside class statement");
     }
     if (self.func == null) {
-      return self.errWithMsg(self.current_tok, "Use of 'self' outside method definition");
+      self.softErrMsg(self.current_tok, "Use of 'self' outside method definition");
     }
     try self.consume(.TkSelf);
     var node = self.newNode();
@@ -564,7 +581,7 @@ pub const Parser = struct {
   fn tryExpr(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     if (self.func == null) {
-      return self.errWithMsg(
+      self.softErrMsg(
         self.current_tok,
         "use of 'try' expression in top-level code. Consider using 'orelse' instead."
       );
@@ -588,7 +605,7 @@ pub const Parser = struct {
     // expr orelse |e|? expr | (do .. end)
     _ = assignable;
     if (left.isOrElse()) {
-      return self.errWithMsg(
+      self.softErrMsg(
         self.previous_tok,
         "try/orelse expression should not be used in an 'orelse' expression"
       );
@@ -667,19 +684,19 @@ pub const Parser = struct {
 
   inline fn assertMaxTParams(self: *Self, len: usize) !void {
     if (len >= types.MAX_TPARAMS) {
-      return self.errWithMsg(self.current_tok, "maximum type parameters exceeded");
+      self.softErrMsg(self.current_tok, "maximum type parameters exceeded");
     }
   }
 
   inline fn assertMaxArgs(self: *Self, len: usize, comptime d: []const u8) !void {
     if (len >= MAX_PARAMS) {
-      return self.errWithMsg(self.current_tok, "maximum " ++ d ++ " exceeded");
+      self.softErrMsg(self.current_tok, "maximum " ++ d ++ " exceeded");
     }
   }
 
   inline fn assertNonEmptyTParams(self: *Self, len: usize) !void {
     if (len == 0) {
-      return self.errWithMsg(self.previous_tok, "empty type parameters are not supported");
+      self.softErrMsg(self.previous_tok, "empty type parameters are not supported");
     }
   }
 
@@ -692,7 +709,7 @@ pub const Parser = struct {
       else return
     );
     if (cls.tparamsLen() != exp) {
-      return self.errWithArgs(
+      self.softErrArgs(
         tok, "generic type instantiated with wrong number of paramters. "
         ++ "Expected {} but got {}",
         .{exp, cls.tparamsLen()}
@@ -705,7 +722,7 @@ pub const Parser = struct {
       // `param` and `typ` have Variable.tokens equal to size 1.
       var token = param.variable().tokens.getLast();
       if (std.mem.eql(u8, typ.variable().tokens.getLast().value, token.value)) {
-        return self.errWithMsg(token, "redefinition of type parameter");
+        return self.softErrMsg(token, "redefinition of type parameter");
       }
     }
   }
@@ -716,7 +733,7 @@ pub const Parser = struct {
     var typ = Type.newVariable(self.allocator);
     typ.variable().append(debug);
     if (self.check(.TkDot)) {
-      return self.errWithMsg(self.current_tok, "expected single identifier, found multiple");
+      return self.errMsg(self.current_tok, "expected single identifier, found multiple");
     }
     return typ;
   }
@@ -756,7 +773,7 @@ pub const Parser = struct {
       .TkNumber => .TyNumber,
       .TkString, .TkAllocString => .TyString,
       else => {
-        return self.errWithMsg(self.current_tok, "invalid type-start");
+        return self.errMsg(self.current_tok, "invalid type-start");
       }
     };
     // direct 'unit' types such as listed above do not need names
@@ -768,7 +785,9 @@ pub const Parser = struct {
   fn builtinType(self: *Self) !Type {
     // handle builtin list/map/tuple/err type
     try self.advance();
-    return Type.newClass(self.previous_tok.value, self.allocator);
+    var ty = Type.newClass(self.previous_tok.value, self.allocator);
+    ty.klass().builtin = true;
+    return ty;
   }
 
   fn refType(self: *Self) !Type {
@@ -791,7 +810,7 @@ pub const Parser = struct {
         .TkMap,
         .TkTuple,
         .TkErr => try self.builtinType(),
-        else => self.errWithMsg(self.current_tok, "invalid type")
+        else => self.errMsg(self.current_tok, "invalid type")
       };
     }
   }
@@ -806,8 +825,7 @@ pub const Parser = struct {
       //   tparams = util.box(TypeList, tmp.generic().tparams, self.allocator);
       // }
     try self.consume(.TkLBracket);
-    var fun = Function.init(self.allocator, undefined);
-    fun.tparams = tparams;
+    var fun = Function.init(self.allocator, undefined, tparams, null);
     while (!self.check(.TkEof) and !self.check(.TkRBracket)) {
       if (fun.params.len() > 0) try self.consume(.TkComma);
       fun.params.append((try self.tExpr()).box(self.allocator));
@@ -984,7 +1002,7 @@ pub const Parser = struct {
       .Generic => |*gen| {
         for (gen.getSlice()) |param| {
           if (self.checkGenericTParam(param, rhs_ty)) |tok| {
-            return self.errWithMsg(tok.*, "type variable in generic parameter cannot be generic");
+            return self.softErrMsg(tok.*, "type variable in generic parameter cannot be generic");
           }
         }
       },
@@ -997,7 +1015,7 @@ pub const Parser = struct {
     // check, as it's possible for the alias to be meaningfully hidden in the aliasee.
     var lhs_ty = if (abs_ty.isGeneric()) abs_ty.generic().base else abs_ty;
     if (self.checkGenericTParam(lhs_ty, rhs_ty)) |tok| {
-      return self.errWithMsg(tok.*, "type alias cannot be used directly in the aliasee");
+      return self.softErrMsg(tok.*, "type alias cannot be used directly in the aliasee");
     }
   }
 
@@ -1105,7 +1123,7 @@ pub const Parser = struct {
 
   fn controlStmt(self: *Self) !*Node {
     if (!self.inLoop()) {
-      return self.errWithMsg(self.current_tok, "control statement used outside loop");
+      self.softErrMsg(self.current_tok, "control statement used outside loop");
     }
     if (!self.match(.TkBreak)) {
       try self.consume(.TkContinue);
@@ -1140,7 +1158,7 @@ pub const Parser = struct {
         try self.consume(.TkIdent);
         var ident = ast.VarNode.init(self.previous_tok);
         if (disamb.get(ident.token.value)) |_| {
-          return self.errWithMsg(
+          self.softErrMsg(
             ident.token,
             "duplicate parameter is illegal in parameter list"
           );
@@ -1153,6 +1171,7 @@ pub const Parser = struct {
         } else {
           variadic.* = true;
           var tuple = Type.newClass("tuple", self.allocator).box(self.allocator);
+          tuple.klass().builtin = true;
           tuple.klass().initTParams(self.allocator);
           try self.consume(.TkColon);
           try self.annotation(&ident);
@@ -1160,7 +1179,7 @@ pub const Parser = struct {
           ident.typ = tuple;
           params.append(ast.VarDeclNode.init(ident.box(self.allocator), undefined, true));
           if (!self.check(.TkRBracket)) {
-            return self.errWithMsg(
+            self.softErrMsg(
               self.current_tok,
               "variadic parameter should be last in a parameter list"
             );
@@ -1194,11 +1213,12 @@ pub const Parser = struct {
     func.* = .{.AstFun = ast.FunNode {
       .params = undefined, .body = undefined,
       .name = ident, .ret = undefined,
-      .tparams = undefined
+      .tparams = undefined, .is_builtin = false,
+      .variadic = false,
     }};
     var tparams: ?*TypeList = null;
     if (self.check(.TkLCurly)) {
-      if (lambda) return self.errWithMsg(self.current_tok, "generic lambdas are unsupported");
+      if (lambda) self.softErrMsg(self.current_tok, "generic lambdas are unsupported");
       var tmp = try self.abstractTypeParams(undefined);
       tparams = util.box(TypeList, tmp.generic().tparams, self.allocator);
     }
@@ -1224,8 +1244,7 @@ pub const Parser = struct {
     };
     self.func = prev_func;
     body.AstBlock.cond = func;
-    func.* = .{.AstFun = ast.FunNode.init(params, body, ident, ret, tparams)};
-    func.AstFun.variadic = variadic;
+    func.* = .{.AstFun = ast.FunNode.init(params, body, ident, ret, tparams, false, variadic)};
     return func;
   }
 
@@ -1236,10 +1255,7 @@ pub const Parser = struct {
 
   fn returnStmt(self: *Self) !*Node {
     if (!self.inFun()) {
-      return self.errWithMsg(
-        self.previous_tok,
-        "return statement used outside function"
-      );
+      self.softErrMsg(self.previous_tok, "return statement used outside function");
     }
     var node = self.newNode();
     var expr: ?*Node = null;
@@ -1281,7 +1297,10 @@ pub const Parser = struct {
     var prev_cls = self.class;
     var cls = self.newNode();
     self.class = cls;
-    try self.consume(.TkIdent);
+    switch (self.current_tok.ty) {
+      .TkList, .TkErr, .TkTuple, .TkMap => try self.advance(),
+      else => try self.consume(.TkIdent)
+    }
     var ident = ast.VarNode.init(self.previous_tok).box(self.allocator);
     var tparams: ?*TypeList = null;
     if (self.check(.TkLCurly)) {
@@ -1293,9 +1312,14 @@ pub const Parser = struct {
     while (self.match(.TkNewline)) {}
     // ClassBody
     // ClassFields
+    var disamb = std.StringHashMap(lex.Token).init(self.allocator);
     var fields: *NodeList = util.box(NodeList, NodeList.init(self.allocator), self.allocator);
     if (self.check(.TkIdent)) {
       while (self.match(.TkIdent)) {
+        if (disamb.get(self.previous_tok.value)) |tok| {
+          self.softErrMsg(self.previous_tok, "illegal duplicate field");
+          self.softErrMsg(tok, "field also declared here");
+        }
         var id = ast.VarNode.init(self.previous_tok).box(self.allocator);
         var val: *Node = undefined;
         var has_default = false;
@@ -1306,18 +1330,33 @@ pub const Parser = struct {
           val = try self.parseExpr();
           has_default = true;
         }
-        var field = util.box(Node, .{.AstVarDecl = ast.VarDeclNode.init(id, val, false)}, self.allocator);
+        var field = @as(Node, .{.AstVarDecl = ast.VarDeclNode.init(id, val, false)}).box(self.allocator);
         field.AstVarDecl.is_field = true;
         field.AstVarDecl.has_default = has_default;
         fields.append(field);
+        disamb.put(id.token.value, id.token) catch {};
         while (self.match(.TkNewline)) {}
       }
     }
     // ClassMethods
+    var mdisamb = std.StringHashMap(lex.Token).init(self.allocator);
     var methods: *NodeList = util.box(NodeList, NodeList.init(self.allocator), self.allocator);
     if (self.check(.TkDef)) {
       while (self.check(.TkDef)) {
-        methods.append(try self.funStmt(false));
+        var method = try self.funStmt(false);
+        if (disamb.get(method.AstFun.name.?.token.value)) |tok| {
+          self.softErrArgs(method.AstFun.name.?.token, "method conflicts with field '{s}'", .{tok.value});
+          self.softErrMsg(tok, "field declared here");
+        }
+        if (mdisamb.get(method.AstFun.name.?.token.value)) |tok| {
+          self.softErrMsg(method.AstFun.name.?.token, "illegal duplicate method");
+          self.softErrMsg(tok, "method also declared here");
+        }
+        if (method.AstFun.isGeneric()) {
+          self.softErrMsg(method.AstFun.name.?.token, "generic methods are unsupported");
+        }
+        methods.append(method);
+        mdisamb.put(method.AstFun.name.?.token.value, method.AstFun.name.?.token) catch {};
         while (self.match(.TkNewline)) {}
       }
     }
@@ -1325,7 +1364,7 @@ pub const Parser = struct {
     try self.consume(.TkEnd);
     try self.consumeNlOrEof();
     self.class = prev_cls;
-    cls.* = .{.AstClass = ast.ClassNode.init(ident, tparams, trait, fields, methods)};
+    cls.* = .{.AstClass = ast.ClassNode.init(ident, tparams, trait, fields, methods, false, false)};
     return cls;
   }
 

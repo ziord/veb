@@ -79,3 +79,82 @@ test "functions-12-user-defined-never" {
   ;
   try doStaticTest(src);
 }
+
+test "simple-classes-1" {
+  var src =
+  \\ class Fox
+  \\    x: num
+  \\    def init(): void
+  \\      self.x = 0
+  \\    end
+  \\    def pulse()
+  \\      return self
+  \\    end
+  \\ end
+  \\
+  \\ let f = Fox()
+  \\ let p = f.x + 5
+  \\ assert(f.pulse() == f, "instances should be the same")
+  \\ assert(f.pulse().x + 5 == p, "field should be equal")
+  \\ let j: Fox = f
+  \\ assert(j is Fox, "j should be type Fox")
+  ;
+  try doStaticTest(src);
+}
+
+test "generic-classes-1" {
+  var src =
+  \\ let j = [1, 2, 3]
+  \\ let p = (j.pop() orelse 0) + 4
+  \\ j.append(4)
+  \\ let k = (j, p)
+  \\ p += k.len()
+  \\ 
+  \\ let x = {'a': 5, 'b': 6}
+  \\ x.keys().len()
+  \\ x.values().len()
+  \\ x.get('a').? + 12
+  \\ let j = [1, 2, 3]
+  \\ let p = (j.pop() orelse 0) + 4
+  ;
+  try doStaticTest(src);
+}
+
+test "generic-classes-2" {
+  var src =
+  \\ class Fox{T}
+  \\    x: tuple{T}
+  \\    def init(x*: T): void
+  \\      self.x = x
+  \\    end
+  \\    def pulse()
+  \\      return self
+  \\    end
+  \\
+  \\    def getGen()
+  \\      def fun{T}(p: T)
+  \\        return p[0]
+  \\      end
+  \\      return fun
+  \\    end
+  \\ end
+  \\ let x = Fox{num}(6, 7, 8)
+  \\ let t: Fox{num} = x
+  \\ t.pulse().x[0] + 12
+  \\ t.pulse().getGen()(('starters',))
+  \\ t.pulse().pulse().x.len()
+  \\
+  \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
+  \\ let j: Fox{'mia'} = w
+  \\ j.pulse().x
+  \\
+  \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
+  \\ let j = Fox{'mia'}('mia')
+  \\ j = w
+  \\
+  \\ type Poo{T} = Fox{T}
+  \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
+  \\ let j:Poo{'mia'} = Fox{'mia'}('mia')
+  ;
+  try doStaticTest(src);
+}

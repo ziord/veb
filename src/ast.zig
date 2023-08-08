@@ -246,6 +246,20 @@ pub const ExprStmtNode = struct {
     return @This() {.expr = expr};
   }
 
+  pub fn isSelfDotAccessAssignment(self: *@This()) ?*DotAccessNode {
+    if (self.expr.isAssign() and self.expr.AstAssign.op.optype == .OpAssign) {
+      if (self.expr.AstAssign.left.isDotAccess()) {
+        if (self.expr.AstAssign.left.AstDotAccess.lhs.isVariable()) {
+          var value = self.expr.AstAssign.left.AstDotAccess.lhs.AstVar.token.value;
+          if (std.mem.eql(u8, "self", value)) {
+            return &self.expr.AstAssign.left.AstDotAccess;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
     var es = ExprStmtNode.init(self.expr.clone(al));
     var new = util.alloc(AstNode, al);
@@ -273,7 +287,10 @@ pub const VarDeclNode = struct {
   }
 
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
-    var value: *AstNode = if (self.is_param) self.value else self.value.clone(al);
+    var value: *AstNode = (
+      if (self.is_param or (self.is_field and !self.has_default)) self.value
+      else self.value.clone(al)
+    );
     var vn = VarDeclNode.init(&self.ident.clone(al).AstVar, value, self.is_param);
     vn.is_field = self.is_field;
     vn.has_default = self.has_default;
@@ -613,11 +630,17 @@ pub const FunNode = struct {
   body: *AstNode,
   name: ?*VarNode,
   ret: ?*AstNode = null,
-  is_builtin: bool = false,
-  variadic: bool = false,
+  is_builtin: bool,
+  variadic: bool,
 
-  pub fn init(params: VarDeclList, body: *AstNode, name: ?*VarNode, ret: ?*AstNode, tparams: ?*types.TypeList) @This() {
-    return @This() {.params = params, .body = body, .name = name, .ret = ret, .tparams = tparams};
+  pub fn init(
+    params: VarDeclList, body: *AstNode, name: ?*VarNode, ret: ?*AstNode,
+    tparams: ?*types.TypeList, is_builtin: bool, variadic: bool
+  ) @This() {
+    return @This() {
+      .params = params, .body = body, .name = name, .ret = ret,
+      .tparams = tparams, .is_builtin = is_builtin, .variadic = variadic
+    };
   }
 
   pub inline fn isGeneric(self: @This()) bool {
@@ -626,6 +649,10 @@ pub const FunNode = struct {
 
   pub inline fn isAnonymous(self: @This()) bool {
     return self.name == null;
+  }
+
+  pub inline fn isChecked(self: @This()) bool {
+    return self.body.AstBlock.checked;
   }
 
   pub inline fn getName(self: *@This()) ?[]const u8 {
@@ -649,8 +676,10 @@ pub const FunNode = struct {
     }
     // don't clone tparams, they're always substituted.
     // don't clone name, it'll be updated.
-    var fun = FunNode.init(params, self.body.clone(al), self.name, ret, self.tparams);
-    fun.is_builtin = self.is_builtin;
+    var fun = FunNode.init(
+      params, self.body.clone(al), self.name, ret,
+      self.tparams, self.is_builtin, self.variadic
+    );
     var new = util.alloc(AstNode, al);
     new.* = .{.AstFun = fun};
     return new;
@@ -693,11 +722,17 @@ pub const ClassNode = struct {
   fields: *AstNodeList,
   methods: *AstNodeList,
   typ: ?*Type = null,
-  is_builtin: bool = false,
-  checked: bool = false,
+  is_builtin: bool,
+  checked: bool,
 
-  pub fn init(name: *VarNode, tparams: ?*types.TypeList, trait: ?*Type, fields: *AstNodeList, methods: *AstNodeList) @This() {
-    return @This() {.name = name, .tparams = tparams, .trait = trait, .fields = fields, .methods = methods};
+  pub fn init(
+    name: *VarNode, tparams: ?*types.TypeList, trait: ?*Type, fields: *AstNodeList,
+    methods: *AstNodeList, is_builtin: bool, checked: bool
+  ) @This() {
+    return @This() {
+      .name = name, .tparams = tparams, .trait = trait, .fields = fields,
+      .methods = methods, .is_builtin = is_builtin, .checked = checked
+    };
   }
 
   pub inline fn isGeneric(self: @This()) bool {
@@ -721,7 +756,7 @@ pub const ClassNode = struct {
     }
     var typ: ?*Type = if (self.typ) |typ| typ.clone(al) else self.typ;
     // don't clone tparams, they're always substituted.
-    var cls = ClassNode.init(name, self.tparams, trait, fields, methods);
+    var cls = ClassNode.init(name, self.tparams, trait, fields, methods, self.is_builtin, false);
     cls.typ = typ;
     var new = util.alloc(AstNode, al);
     new.* = .{.AstClass = cls};
@@ -836,6 +871,13 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn isAssign(self: *@This()) bool {
+    return switch (self.*) {
+      .AstAssign => true,
+      else => false,
+    };
+  }
+
   pub inline fn isBlock(self: *@This()) bool {
     return switch (self.*) {
       .AstBlock => true,
@@ -920,9 +962,30 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn isClass(self: *@This()) bool {
+    return switch (self.*) {
+      .AstClass => true,
+      else => false,
+    };
+  }
+
   pub inline fn isRet(self: *@This()) bool {
     return switch (self.*) {
       .AstRet => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isExprStmt(self: *@This()) bool {
+    return switch (self.*) {
+      .AstExprStmt => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isDotAccess(self: *@This()) bool {
+    return switch (self.*) {
+      .AstDotAccess => true,
       else => false,
     };
   }
@@ -1115,5 +1178,9 @@ pub const AstNode = union(AstType) {
       .AstClass => |*cls| cls.clone(al),
       .AstProgram => unreachable,
     };
+  }
+
+  pub fn box(self: @This(), al: std.mem.Allocator) *@This() {
+    return util.box(AstNode, self, al);
   }
 };

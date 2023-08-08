@@ -12,9 +12,6 @@ pub const TypeHashSet = ds.ArrayHashMap(u32, *Type);
 pub const TypeList = ds.ArrayList(*Type);
 
 pub const TypeKind = enum (u8) {
-  /// 'type' type:
-  /// type of all types
-  TyType,
   /// boolean type:
   ///  bool
   TyBool,
@@ -37,7 +34,7 @@ pub const TypeKind = enum (u8) {
   ///  any
   TyAny,
 
-  pub const TyClass: u8 = 8;
+  pub const TyClass: u8 = 7;
 };
 
 fn allocate(comptime T: type, alloc: std.mem.Allocator) *T {
@@ -81,7 +78,7 @@ pub const Concrete = struct {
           return true;
         }
       },
-      .Generic, .Variable, .Recursive, .Function, .Class => return false,
+      .Generic, .Variable, .Recursive, .Function, .Method, .Class, .Top, .Instance => return false,
     }
     return false;
   }
@@ -114,7 +111,7 @@ pub const Constant = struct {
         }
         return false;
       },
-      .Union, .Generic, .Variable, .Recursive, .Function, .Class => return false,
+      .Union, .Generic, .Variable, .Recursive, .Function, .Method, .Class, .Top, .Instance => return false,
     }
     return false;
   }
@@ -191,7 +188,7 @@ pub const Union = struct {
         }
         return true;
       },
-      .Constant, .Concrete, .Generic, .Variable, .Recursive, .Function, .Class => {
+      .Constant, .Concrete, .Generic, .Variable, .Recursive, .Function, .Method, .Class, .Top, .Instance => {
         if (ctx == .RCTypeParams) return false;
         // related if there exists a variant of T1 that is related to T2
         for (this.variants.values()) |variant| {
@@ -249,7 +246,7 @@ pub const Generic = struct {
         }
         return true;
       },
-      .Concrete, .Constant, .Union, .Variable, .Recursive, .Function, .Class => return false,
+      .Concrete, .Constant, .Union, .Variable, .Recursive, .Function, .Method, .Class, .Top, .Instance => return false,
     }
     return false;
   }
@@ -281,7 +278,7 @@ pub const Variable = struct {
     _ = ctx;
     return switch (other.kind) {
       .Variable => |*vr| this.eql(vr),
-      .Constant, .Concrete, .Union, .Recursive, .Function, .Generic, .Class => false,
+      .Constant, .Concrete, .Union, .Recursive, .Function, .Method, .Generic, .Class, .Top, .Instance => false,
     };
   }
 };
@@ -292,11 +289,11 @@ const NodeList = ds.ArrayList(*Node);
 pub const Function = struct {
   params: TypeList,
   ret: *Type,
-  tparams: ?*TypeList = null,
-  node: ?*Node = null,
+  tparams: ?*TypeList,
+  node: ?*Node,
 
-  pub fn init(allocator: std.mem.Allocator, ret: *Type) @This() {
-    return Function {.params = TypeList.init(allocator), .ret = ret};
+  pub fn init(allocator: std.mem.Allocator, ret: *Type, tparams: ?*TypeList, node: ?*Node) @This() {
+    return Function {.params = TypeList.init(allocator), .ret = ret, .tparams = tparams, .node = node};
   }
 
   pub fn isGeneric(self: *@This()) bool {
@@ -331,7 +328,49 @@ pub const Function = struct {
     _ = ctx;
     return switch (other.kind) {
       .Function => |*fun| this.eql(fun),
-      .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic, .Class => false,
+      .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic, .Method, .Class, .Top, .Instance => false,
+    };
+  }
+};
+
+pub const Method = struct {
+  func: *Type,
+  cls: *Type,
+
+  pub fn init(func: *Type, cls: *Type) @This() {
+    return Method {.func = func, .cls = cls};
+  }
+
+  pub fn toType(self: @This()) Type {
+    return Type.init(.{.Method = self});
+  }
+
+  pub fn isRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
+    return switch (other.kind) {
+      .Method => |*oth| this.func.isRelatedTo(oth.func, ctx, A) and this.cls.isRelatedTo(oth.cls, ctx, A),
+      .Function, .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic, .Class, .Top, .Instance => false,
+    };
+  }
+};
+
+pub const Top = struct {
+  child: *Type,
+
+  pub fn init(child: *Type) @This() {
+    return Top {.child = child};
+  }
+
+  pub fn toType(self: @This()) Type {
+    return Type.init(.{.Top = self});
+  }
+
+  pub fn isRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
+    _ = A;
+    _ = ctx;
+    _ = this;
+    return switch (other.kind) {
+      .Top => true,
+      else => false,
     };
   }
 };
@@ -339,19 +378,28 @@ pub const Function = struct {
 pub const Class = struct {
   name: []const u8,
   fields: *NodeList,
-  methods: *NodeList,
-  tparams: ?*TypeList = null,
-  node: ?*Node = null,
-  empty: bool = false,
+  methods: *TypeList,
+  tparams: ?*TypeList,
+  node: ?*Node,
+  empty: bool,
+  builtin: bool,
+  resolved: bool = false,
 
-  pub fn init(name: []const u8, fields: *NodeList, methods: *NodeList) @This() {
-    return Class {.name = name, .fields = fields, .methods = methods};
+  pub fn init(
+    name: []const u8, fields: *NodeList, methods: *TypeList,
+    tparams: ?*TypeList, node: ?*Node, empty: bool, builtin: bool
+  ) @This() {
+    return Class {
+      .name = name, .fields = fields, .methods = methods,
+      .tparams = tparams, .node = node, .empty = empty,
+      .builtin = builtin,
+    };
   }
 
   pub fn initWithDefault(name: []const u8, al: std.mem.Allocator) @This() {
     var fields = util.box(NodeList, NodeList.init(al), al);
-    var methods = util.box(NodeList, NodeList.init(al), al);
-    return Class {.name = name, .fields = fields, .methods = methods};
+    var methods = util.box(TypeList, TypeList.init(al), al);
+    return Class.init(name, fields, methods, null, null, false, false);
   }
 
   pub inline fn initTParams(self: *@This(), al: std.mem.Allocator) void {
@@ -390,6 +438,39 @@ pub const Class = struct {
     return std.mem.eql(u8, self.name, other.name);
   }
 
+  pub fn setAsResolved(self: *@This()) void {
+    self.resolved = true;
+  }
+
+  pub fn getField(self: *@This(), name: []const u8) ?*Node {
+    for (self.fields.items()) |field| {
+      if (std.mem.eql(u8, field.AstVarDecl.ident.token.value, name)) {
+        return field;
+      }
+    }
+    return null;
+  }
+
+  pub fn getMethod(self: *@This(), name: []const u8) ?*Node {
+    if (self.node) |node| {
+      for (node.AstClass.methods.items()) |mth| {
+        if (std.mem.eql(u8, mth.AstFun.name.?.token.value, name)) {
+          return mth;
+        }
+      }
+    }
+    return null;
+  }
+
+  pub fn getMethodTy(self: *@This(), name: []const u8) ?*Type {
+    for (self.methods.items()) |mth| {
+      if (std.mem.eql(u8, mth.function().node.?.AstFun.name.?.token.value, name)) {
+        return mth;
+      }
+    }
+    return null;
+  }
+
   pub fn isRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
     return switch (other.kind) {
       .Class => |*oth| {
@@ -412,26 +493,13 @@ pub const Class = struct {
         } else if (oth.tparams != null) {
           return false;
         }
-        if (this.fields.len() != oth.fields.len()) return false;
-        for (this.fields.items(), oth.fields.items()) |fd1, fd2| {
-          var id1 = fd1.AstVarDecl.ident;
-          var id2 = fd2.AstVarDecl.ident;
-          if (!std.mem.eql(u8, id1.token.value, id2.token.value)) {
-            return false;
-          }
-          if (!id1.typ.?.isRelatedTo(id2.typ.?, ctx, A)) {
-            return false;
-          }
-        }
-        if (this.methods.len() != oth.methods.len()) return false;
-        for (this.methods.items(), oth.methods.items()) |md1, md2| {
-          if (!md1.getType().?.isRelatedTo(md2.getType().?, ctx, A)) {
-            return false;
-          }
+        if (this.builtin) {
+          return oth.builtin;
         }
         return true;
       },
-      .Variable, .Constant, .Concrete, .Union, .Recursive, .Function, .Generic, => false,
+      .Instance => this.isRelatedTo(other.instance().cls, ctx, A),
+      .Variable, .Constant, .Concrete, .Union, .Recursive, .Function, .Method, .Generic, .Top => false,
     };
   }
 };
@@ -460,6 +528,25 @@ pub const Recursive = struct {
   }
 };
 
+pub const Instance = struct {
+  cls: *Type,
+
+  pub fn init(cls: *Type) @This() {
+    return Instance {.cls = cls};
+  }
+
+  pub fn toType(self: @This()) Type {
+    return Type.init(.{.Instance = self});
+  }
+
+  pub fn isRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
+    return switch (other.kind) {
+      .Instance => |*oth| this.cls.isRelatedTo(oth.cls, ctx, A),
+      .Function, .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic, .Method, .Top, .Class => false,
+    };
+  }
+};
+
 pub const AliasInfo = struct {
   lhs: *Type, // alias 
   rhs: *Type, // aliasee
@@ -476,8 +563,11 @@ pub const TypeInfo = union(enum) {
   Union: Union,
   Generic: Generic,
   Function: Function,
+  Method: Method,
   Class: Class,
+  Instance: Instance,
   Recursive: Recursive,
+  Top: Top,
 };
 
 /// context for inspecting relation rules 
@@ -521,7 +611,7 @@ pub const Type = struct {
     switch (self.kind) {
       .Constant, .Concrete, .Variable, .Recursive => return self,
       .Function => |*fun| {
-        var new = Function.init(A, fun.ret.clone(A));
+        var new = Function.init(A, fun.ret.clone(A), null, fun.node);
         new.params.ensureTotalCapacity(fun.params.capacity());
         if (fun.tparams) |tparams| {
           var new_tparams = util.boxEnsureCapacity(TypeList, TypeList.init(A), A, tparams.capacity());
@@ -533,10 +623,19 @@ pub const Type = struct {
         for (fun.params.items()) |ty| {
           new.params.append(ty.clone(A));
         }
-        new.node = fun.node;
         var ret = Type.init(.{.Function = new}).box(A);
         ret.setRestFields(self);
         return ret;
+      },
+      .Method => |*mth| {
+        var new = Method.init(mth.func.clone(A), mth.cls.clone(A)).toType().box(A);
+        new.setRestFields(self);
+        return new;
+      },
+      .Top => |*tp| {
+        var new = Top.init(tp.child).toType().box(A);
+        new.setRestFields(self);
+        return new;
       },
       .Generic => |*gen| {
         var new = Generic.init(A, gen.base.clone(A));
@@ -560,14 +659,20 @@ pub const Type = struct {
         ret.setRestFields(self);
         return ret;
       },
+      .Instance => |*inst| {
+        // TODO: clone class?
+        var new = Instance.init(inst.cls).toType().box(A);
+        new.setRestFields(self);
+        return new;
+      },
       .Class => |*cls| {
         var fields = util.boxEnsureCapacity(NodeList, NodeList.init(A), A, cls.fields.capacity());
-        var methods = util.boxEnsureCapacity(NodeList, NodeList.init(A), A, cls.methods.capacity());
+        var methods = util.boxEnsureCapacity(TypeList, TypeList.init(A), A, cls.methods.capacity());
         for (cls.fields.items()) |itm| {
           fields.append(itm.AstVarDecl.clone(A));
         }
         for (cls.methods.items()) |itm| {
-          methods.append(itm.AstFun.clone(A));
+          methods.append(itm.clone(A));
         }
         var tparams: ?*TypeList = null;
         if (cls.tparams) |tp| {
@@ -577,10 +682,7 @@ pub const Type = struct {
           }
           tparams = new_tparams;
         }
-        var new = Class.init(cls.name, fields, methods);
-        new.empty = cls.empty;
-        new.node = cls.node;
-        new.tparams = tparams;
+        var new = Class.init(cls.name, fields, methods, tparams, cls.node, cls.empty, cls.builtin);
         var ret = Type.init(.{.Class = new}).box(A);
         ret.setRestFields(self);
         return ret;
@@ -626,7 +728,19 @@ pub const Type = struct {
   }
 
   pub fn newFunction(allocator: std.mem.Allocator, ret: *Self) Self {
-    return Self.init(.{.Function = Function.init(allocator, ret)});
+    return Self.init(.{.Function = Function.init(allocator, ret, null, null)});
+  }
+
+  pub fn newMethod(func: *Type, cls: *Type) Self {
+    return Self.init(.{.Method = Method.init(func, cls)});
+  }
+
+  pub fn newTop(child: *Type) Self {
+    return Self.init(.{.Top = Top.init(child)});
+  }
+
+  pub fn newInstance(cls: *Type) Self {
+    return Self.init(.{.Instance = Instance.init(cls)});
   }
 
   pub fn newClass(name: []const u8, allocator: std.mem.Allocator) Self {
@@ -742,6 +856,22 @@ pub const Type = struct {
     };
   }
 
+  /// a method type
+  pub inline fn isMethod(self: *Self) bool {
+    return switch (self.kind) {
+      .Method => true,
+      else => false,
+    };
+  }
+
+  /// an instance type
+  pub inline fn isInstance(self: *Self) bool {
+    return switch (self.kind) {
+      .Instance => true,
+      else => false,
+    };
+  }
+
   /// a class type
   pub inline fn isClass(self: *Self) bool {
     return switch (self.kind) {
@@ -754,6 +884,14 @@ pub const Type = struct {
   pub inline fn isRecursive(self: *Self) bool {
     return switch (self.kind) {
       .Recursive => true,
+      else => false,
+    };
+  }
+
+  /// a top type
+  pub inline fn isTop(self: *Self) bool {
+    return switch (self.kind) {
+      .Top => true,
       else => false,
     };
   }
@@ -829,9 +967,6 @@ pub const Type = struct {
     return self.isConcreteTypeEq(.TyAny);
   }
 
-  pub inline fn isTypeTy(self: *Self) bool {
-    return self.isConcreteTypeEq(.TyType);
-  }
 
   pub fn isListTy(self: *Self) bool {
     return self.isXClassTy("list");
@@ -878,6 +1013,18 @@ pub const Type = struct {
     return &self.kind.Function;
   }
 
+  pub inline fn method(self: *Self) *Method {
+    return &self.kind.Method;
+  }
+
+  pub inline fn instance(self: *Self) *Instance {
+    return &self.kind.Instance;
+  }
+
+  pub inline fn top(self: *Self) *Top {
+    return &self.kind.Top;
+  }
+
   pub inline fn klass(self: *Self) *Class {
     return &self.kind.Class;
   }
@@ -905,7 +1052,6 @@ pub const Type = struct {
           .TyVoid     => self.tid = 9 << ID_HASH,
           .TyNoReturn => self.tid = 10 << ID_HASH,
           .TyAny      => self.tid = 11 << ID_HASH,
-          .TyType     => self.tid = 12 << ID_HASH,
         }
       },
       .Generic => |*gen| {
@@ -927,9 +1073,12 @@ pub const Type = struct {
         for (cls.fields.items()) |nd| {
           self.tid += nd.getType().?.typeid();
         }
-        for (cls.methods.items()) |nd| {
-          self.tid += nd.getType().?.typeid();
-        }
+        // TODO: method type may not be available at the
+        //       time this typeid is being computed
+        // for (cls.methods.items()) |nd| {
+        //   self.tid += nd.getType().?.typeid();
+        // }
+        self.tid += @intCast(u32, cls.methods.len());
         self.tid += @boolToInt(cls.empty);
       },
       .Union => |*uni| {
@@ -954,6 +1103,18 @@ pub const Type = struct {
           self.tid += ty.typeid();
         }
         self.tid += fun.ret.typeid();
+      },
+      .Method => |*mth| {
+        self.tid = 14 << ID_HASH;
+        self.tid += mth.func.typeid();
+        self.tid += mth.cls.typeid();
+      },
+      .Instance => |*inst| {
+        self.tid = 15 << ID_HASH;
+        self.tid += inst.cls.typeid();
+      },
+      .Top => {
+        self.tid = 12 << ID_HASH;
       },
       .Variable => |*vr| {
         for (vr.tokens.items()) |tok| {
@@ -984,13 +1145,17 @@ pub const Type = struct {
     return self.typeid() == other.typeid();
   }
 
+  pub inline fn ptrEql(t1: *Type, t2: *Type) bool {
+    return t1 == t2;
+  }
+
   fn _unfoldRecursive(typ: *Self, step: usize, list: *TypeList, visited: *TypeHashSet) void {
     if (step > 0 and typ.isRecursive() and visited.get(typ.typeid()) != null) {
       return;
     }
     switch (typ.kind) {
-      // TODO: unfold function like generic
-      .Concrete, .Variable, .Constant, .Function => list.append(typ),
+      // TODO: unfold function & method like generic
+      .Concrete, .Variable, .Constant, .Top, .Function, .Method, .Instance => list.append(typ),
       .Generic => |*gen| {
         gen.base._unfoldRecursive(step + 1, list, visited);
         for (gen.tparams.items()) |param| {
@@ -1015,10 +1180,8 @@ pub const Type = struct {
           }
         }
         // methods
-        for (cls.methods.items()) |method| {
-          if (method.getType()) |ty| {
-            ty._unfoldRecursive(step + 1, list, visited);
-          }
+        for (cls.methods.items()) |mth| {
+          mth._unfoldRecursive(step + 1, list, visited);
         }
       },
       .Union => |*uni| {
@@ -1035,8 +1198,8 @@ pub const Type = struct {
 
   fn _unfold(self: *Self, list: *TypeList) void {
     switch (self.kind) {
-      // TODO: unfold function like generic
-      .Concrete, .Constant, .Variable, .Function => list.append(self),
+      // TODO: unfold function & method like generic
+      .Concrete, .Constant, .Variable, .Top, .Function, .Method, .Instance => list.append(self),
       .Generic => |*gen| {
         gen.base._unfold(list);
         for (gen.tparams.items()) |param| {
@@ -1061,10 +1224,8 @@ pub const Type = struct {
           }
         }
         // methods
-        for (cls.methods.items()) |method| {
-          if (method.getType()) |ty| {
-            ty._unfold(list);
-          }
+        for (cls.methods.items()) |mth| {
+          mth._unfold(list);
         }
       },
       .Union => |*uni| {
@@ -1128,6 +1289,15 @@ pub const Type = struct {
       },
       .Function => |*fun| {
         return fun.isRelatedTo(other, ctx, A);
+      },
+      .Method => |*mth| {
+        return mth.isRelatedTo(other, ctx, A);
+      },
+      .Instance => |*inst| {
+        return inst.isRelatedTo(other, ctx, A);
+      },
+      .Top => |*tp| {
+        return tp.isRelatedTo(other, ctx, A);
       },
       .Recursive => |*rec| {
         return rec.isRelatedTo(other, ctx, A);
@@ -1261,6 +1431,15 @@ pub const Type = struct {
     return false;
   }
 
+  pub fn toInstance(self: *Self, al: std.mem.Allocator) *Self {
+    switch (self.kind) {
+      .Class => {
+        return Self.newInstance(self).box(al);
+      },
+      else => unreachable,
+    }
+  }
+
   fn writeName(allocator: std.mem.Allocator, tokens: *ds.ArrayList(Token)) ![]const u8 {
     var writer = @constCast(&ds.ArrayList(u8).init(allocator)).writer();
     for (tokens.items(), 0..) |tok, i| {
@@ -1285,15 +1464,9 @@ pub const Type = struct {
         .TyVoid     => "void",
         .TyNoReturn => "noreturn",
         .TyAny      => "any",
-        .TyType     => "Type",
       },
       .Constant => |*cons| {
-        if (cons.kind != .TyString) return cons.val;
-        var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
-        _ = try writer.write("\"");
-        _ = try writer.write(cons.val);
-        _ = try writer.write("\"");
-        return writer.context.items;
+        return cons.val;
       },
       .Generic => |*gen| {
         const name = try gen.base._typename(allocator, depth);
@@ -1376,6 +1549,18 @@ pub const Type = struct {
           _ = try writer.write(try fun.ret._typename(allocator, depth));
         }
         return writer.context.items;
+      },
+      .Method => |*mth| {
+        return try mth.func._typename(allocator, depth);
+      },
+      .Instance => |*inst| {
+        var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
+        _ = try writer.write(try inst.cls._typename(allocator, depth));
+        _ = try writer.write(" instance");
+        return writer.context.items;
+      },
+      .Top => {
+        return "Type";
       },
       .Variable => |*vr| try writeName(allocator, &vr.tokens),
       .Recursive => "{...}"
@@ -1567,7 +1752,7 @@ pub const Type = struct {
         }
         return Self.compressTypes(&new_uni, null);
       },
-      .Constant, .Concrete, .Generic, .Variable, .Function, .Class => return error.Negation,
+      .Constant, .Concrete, .Generic, .Variable, .Top, .Function, .Method, .Class, .Instance => return error.Negation,
       // TODO: c'est fini?
       .Recursive => return t1,
     }
@@ -1628,6 +1813,24 @@ pub const Type = struct {
           }
         }
       },
+      .Method => |*mth| {
+        if (t2.isMethod()) {
+          if (
+            is(mth.func, t2.method().func, al) != null and 
+            is(mth.cls, t2.method().cls, al) != null
+          ) {
+            return t1;
+          }
+        }
+      },
+      .Instance => |*inst| {
+        if (t2.isClass()) {
+          if (is(inst.cls, t2, al) != null) {
+            return t1;
+          }
+        }
+      },
+      .Top => {},
       // TODO:
       .Recursive => return t1,
     }

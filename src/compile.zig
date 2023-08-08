@@ -18,8 +18,8 @@ const Inst = value.Inst;
 const ObjFn = value.ObjFn;
 const TypeKind = parse.TypeKind;
 const Diagnostic = diagnostics.Diagnostic;
-const FnInfo = check.TypeChecker.FnInfo;
-const FnInfoMap = ds.ArrayHashMap(*Node, *ds.ArrayList(FnInfo));
+const GenInfo = check.TypeChecker.GenInfo;
+const GenInfoMap = ds.ArrayHashMap(*Node, *ds.ArrayList(GenInfo));
 const TypeList = check.TypeList;
 
 const VRegister = struct {
@@ -201,7 +201,7 @@ pub const Compiler = struct {
   scope: i32 = GLOBAL_SCOPE, // defaults to global scope
   rk_bx: RkBxPair = RkBxPair{},
   diag: *Diagnostic,
-  generics: *FnInfoMap,
+  generics: *GenInfoMap,
   _prelude: *Node,
   skip_gsyms: bool = false,
   
@@ -224,7 +224,7 @@ pub const Compiler = struct {
   };
   const CompileError = error{CompileError};
 
-  pub fn init(diag: *Diagnostic, vm: *VM, fun: *ObjFn, info: *FnInfoMap, allocator: *CnAllocator, prel: *Node) Self {
+  pub fn init(diag: *Diagnostic, vm: *VM, fun: *ObjFn, info: *GenInfoMap, allocator: *CnAllocator, prel: *Node) Self {
     var al = allocator.getArenaAllocator();
     var gsyms = std.MultiArrayList(GSymVar){};
     var locals = std.MultiArrayList(LocalVar){};
@@ -722,7 +722,7 @@ pub const Compiler = struct {
       }
     };
     self.vreg.releaseReg(dst2);
-    self.fun.code.write3ArgsInst(OpCode.Is, dst, rk1, (rk2 - 1), @intCast(u32, node.line()), self.vm);
+    self.fun.code.write3ArgsInst(OpCode.Is, dst, rk1, rk2, @intCast(u32, node.line()), self.vm);
     self.deoptimizeConstRK();
     return dst;
   }
@@ -1187,14 +1187,16 @@ pub const Compiler = struct {
   fn cFunGeneric(self: *Self, node: *Node, reg: u32) CompileError!u32 {
     if (self.generics.get(node)) |list| {
       for (list.items()) |itm| {
-        var fun = &itm.instance.AstFun;
-        if (fun.is_builtin) continue;
-        // only attach names in the local scope since if we're in the global scope,
-        // the name has already been attached in preallocateGlobals()
-        if (self.inLocalScope()) {
-          fun.name = itm.synth_name;
+        if (itm.instance.isFun()) {
+          var fun = &itm.instance.AstFun;
+          if (fun.is_builtin) continue;
+          // only attach names in the local scope since if we're in the global scope,
+          // the name has already been attached in preallocateGlobals()
+          if (self.inLocalScope()) {
+            fun.name = itm.synth_name;
+          }
+          _ = try self.cFun(fun, itm.instance, reg);
         }
-        _ = try self.cFun(fun, itm.instance, reg);
       }
     }
     return reg;
@@ -1285,7 +1287,7 @@ pub const Compiler = struct {
     // alt-end:
     var rx = try self.c(node.ok, reg);
     var tmp = try self.getReg(node.ok.getToken());
-    var rk2 = ((TypeKind.TyClass + 3) - 1);
+    var rk2 = (TypeKind.TyClass + 3);
     self.fun.code.write3ArgsInst(.Is, tmp, rx, rk2, self.lastLine(), self.vm);
     var ok_to_alt = self.fun.code.write2ArgsJmp(.Jt, tmp, self.lastLine(), self.vm);
     var ok_to_end = self.fun.code.write2ArgsJmp(.Jf, tmp, self.lastLine(), self.vm);

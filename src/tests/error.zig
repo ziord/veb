@@ -635,6 +635,41 @@ test "simple-classes-1" {
   });
 }
 
+test "simple-classes-2" {
+  var src =
+  \\ class Fox
+  \\    x: num
+  \\    u = 12
+  \\    def init(): void
+  \\      self.x = 0
+  \\    end
+  \\    def pulse()
+  \\      return self
+  \\    end
+  \\ end
+  \\ class Racoon
+  \\    x: num
+  \\    u = 12
+  \\    def init(): void
+  \\      self.x = self.u
+  \\      return
+  \\    end
+  \\    def pulse()
+  \\      return self
+  \\    end
+  \\ end
+  \\ let f = Fox()
+  \\ f.pulse = f.pulse
+  \\ let r = Racoon()
+  \\ r.x
+  
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "Cannot modify immutable type 'fn (): Fox'",
+    "illegal return statement in `init` method"
+  });
+}
+
 test "generic-classes-1" {
   var src =
   \\ let p = {'a': 5}

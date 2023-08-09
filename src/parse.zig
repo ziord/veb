@@ -20,10 +20,14 @@ const TypeList = types.TypeList;
 const NodeList = ast.AstNodeList;
 const Diagnostic = diagnostics.Diagnostic;
 
-// maximum number of elements of a list literal 
+/// maximum number of elements of a list literal 
 const MAX_LISTING_ELEMS = 0xff;
+/// maximum number of callable parameters
 const MAX_PARAMS = 0xff;
-
+/// maximum number of class fields
+const MAX_FIELDS = 0xc8;
+/// maximum number of class methods
+const MAX_METHODS = 0xc8;
 
 pub const Parser = struct {
   current_tok: lex.Token,
@@ -1320,6 +1324,9 @@ pub const Parser = struct {
           self.softErrMsg(self.previous_tok, "illegal duplicate field");
           self.softErrMsg(tok, "field also declared here");
         }
+        if (fields.len() > MAX_FIELDS) {
+          self.softErrMsg(self.previous_tok, "maximum number of field declarations exceeded");
+        }
         var id = ast.VarNode.init(self.previous_tok).box(self.allocator);
         var val: *Node = undefined;
         var has_default = false;
@@ -1354,6 +1361,9 @@ pub const Parser = struct {
         }
         if (method.AstFun.isGeneric()) {
           self.softErrMsg(method.AstFun.name.?.token, "generic methods are unsupported");
+        }
+        if (methods.len() > MAX_METHODS) {
+          self.softErrMsg(method.getToken(), "maximum number of method declarations exceeded");
         }
         methods.append(method);
         mdisamb.put(method.AstFun.name.?.token.value, method.AstFun.name.?.token) catch {};

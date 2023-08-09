@@ -451,11 +451,31 @@ pub const Class = struct {
     return null;
   }
 
+  pub fn getFieldIndex(self: *@This(), name: []const u8) ?usize {
+    for (self.fields.items(), 0..) |field, i| {
+      if (std.mem.eql(u8, field.AstVarDecl.ident.token.value, name)) {
+        return i;
+      }
+    }
+    return null;
+  }
+
   pub fn getMethod(self: *@This(), name: []const u8) ?*Node {
     if (self.node) |node| {
       for (node.AstClass.methods.items()) |mth| {
         if (std.mem.eql(u8, mth.AstFun.name.?.token.value, name)) {
           return mth;
+        }
+      }
+    }
+    return null;
+  }
+
+  pub fn getMethodIndex(self: *@This(), name: []const u8) ?usize {
+    if (self.node) |node| {
+      for (node.AstClass.methods.items(), 0..) |mth, i| {
+        if (std.mem.eql(u8, mth.AstFun.name.?.token.value, name)) {
+          return i;
         }
       }
     }

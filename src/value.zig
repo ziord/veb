@@ -186,6 +186,9 @@ pub const ObjId = enum(u8) {
   objzfn,
   objfiber,
   objerror,
+  objclass,
+  objinstance,
+  objbmethod,
 };
 
 pub const Obj = extern struct {
@@ -198,6 +201,10 @@ pub const ObjString = extern struct {
   hash: u64,
   len: usize,
   str: [*]const u8,
+
+  pub inline fn string(this: *@This()) []const u8 {
+    return this.str[0..this.len];
+  }
 };
 
 pub const ObjList = extern struct {
@@ -232,7 +239,7 @@ pub const ObjFn = extern struct {
 
   pub fn getName(self: *ObjFn) []const u8 {
     if (self.name) |name| {
-      return name.str[0..name.len];
+      return name.string();
     }
     return "<lambda>";
   }
@@ -265,6 +272,35 @@ pub const ObjUpvalue = extern struct {
 pub const ObjError = extern struct {
   obj: Obj,
   val: Value,
+};
+
+pub const ObjClass = extern struct {
+  obj: Obj,
+  name: *ObjString,
+  mlen: usize,
+  methods: [*]Value,
+
+  pub inline fn getInitMethod(self: *@This()) ?Value {
+    for (self.methods[0..self.mlen]) |mtd| {
+      if (std.mem.eql(u8, asClosure(mtd).fun.getName(), "init")) {
+        return mtd;
+      }
+    }
+    return null;
+  }
+};
+
+pub const ObjInstance = extern struct {
+  obj: Obj,
+  cls: *ObjClass,
+  flen: usize,
+  fields: [*]Value,
+};
+
+pub const ObjBMethod = extern struct {
+  obj: Obj,
+  instance: Value,
+  closure: *ObjClosure,
 };
 
 pub const ObjFiber = extern struct {
@@ -440,6 +476,18 @@ pub inline fn isError(val: Value) bool {
   return isObjType(val, .objerror);
 }
 
+pub inline fn isClass(val: Value) bool {
+  return isObjType(val, .objclass);
+}
+
+pub inline fn isMethod(val: Value) bool {
+  return isObjType(val, .objbmethod);
+}
+
+pub inline fn isInstance(val: Value) bool {
+  return isObjType(val, .objinstance);
+}
+
 pub fn isStringNoInline(val: Value) bool {
   return isString(val);
 }
@@ -520,6 +568,18 @@ pub inline fn asError(val: Value) *ObjError {
   return @ptrCast(*ObjError, asObj(val));
 }
 
+pub inline fn asClass(val: Value) *ObjClass {
+  return @ptrCast(*ObjClass, asObj(val));
+}
+
+pub inline fn asInstance(val: Value) *ObjInstance {
+  return @ptrCast(*ObjInstance, asObj(val));
+}
+
+pub inline fn asMethod(val: Value) *ObjBMethod {
+  return @ptrCast(*ObjBMethod, asObj(val));
+}
+
 pub inline fn valueEqual(a: Value, b: Value) bool {
   if (isNumber(a) and isNumber(b)) return asNumber(a) == asNumber(b);
   return a == b;
@@ -539,7 +599,7 @@ pub inline fn valueFalsy(val: Value) bool {
 pub fn display(val: Value) void {
   if (isString(val)) {
     var tmp = asString(val);
-    util.print("\"{s}\"", .{tmp.str[0..tmp.len]});
+    util.print("\"{s}\"", .{tmp.string()});
   } else {
     printValue(val);
   }
@@ -561,8 +621,7 @@ pub fn printObject(val: Value) void {
   const obj = asObj(val);
   switch (obj.id) {
     .objstring => {
-      var tmp = asString(val);
-      util.print("{s}", .{tmp.str[0..tmp.len]});
+      util.print("{s}", .{asString(val).string()});
     },
     .objlist => {
       var list = asList(val);
@@ -602,6 +661,15 @@ pub fn printObject(val: Value) void {
     },
     .objvalmap => {
       asMap(val).meta.display();
+    },
+    .objclass => {
+      util.print("{s}", .{asClass(val).name.string()});
+    },
+    .objinstance => {
+      util.print("{{{s} instance}}", .{asInstance(val).cls.name.string()});
+    },
+    .objbmethod => {
+      util.print("{{method {s}}}", .{asMethod(val).closure.fun.getName()});
     },
     .objclosure => {
       util.print("{{fn {s}}}", .{asClosure(val).fun.getName()});
@@ -656,6 +724,19 @@ pub fn objectToString(val: Value, vm: *VM) Value {
     },
     .objfiber => {
       return createStringV(vm, &vm.strings, "<fiber>", false);
+    },
+    .objinstance => {
+      var buff: [100]u8 = undefined;
+      var fmt = std.fmt.bufPrint(&buff, "{{{s} instance}}", .{asInstance(val).cls.name.string()}) catch "instance";
+      return createStringV(vm, &vm.strings, fmt, false);
+    },
+    .objbmethod => {
+      var buff: [100]u8 = undefined;
+      var fmt = std.fmt.bufPrint(&buff, "{{method {s}}}", .{asMethod(val).closure.fun.getName()}) catch "method";
+      return createStringV(vm, &vm.strings, fmt, false);
+    },
+    .objclass => {
+      return objVal(asClass(val).name);
     },
     .objupvalue, .objfn => unreachable,
   }
@@ -818,6 +899,31 @@ pub fn createError(vm: *VM, val: Value) *ObjError {
   var err = @call(.always_inline, createObject, .{vm, .objerror, ObjError});
   err.val = val;
   return err;
+}
+
+pub fn createClass(vm: *VM, mlen: usize) *ObjClass {
+  var methods = vm.mem.allocBuf(Value, mlen, vm);
+  var cls = @call(.always_inline, createObject, .{vm, .objclass, ObjClass});
+  cls.mlen = mlen;
+  cls.methods = methods.ptr;
+  cls.name = undefined;
+  return cls;
+}
+
+pub fn createInstance(vm: *VM, cls: *ObjClass, flen: usize) *ObjInstance {
+  var fields = vm.mem.allocBuf(Value, flen, vm);
+  var inst = @call(.always_inline, createObject, .{vm, .objinstance, ObjInstance});
+  inst.cls = cls;
+  inst.fields = fields.ptr;
+  inst.flen = flen;
+  return inst;
+}
+
+pub fn createBMethod(vm: *VM, instance: Value, closure: *ObjClosure) *ObjBMethod {
+  var meth = @call(.always_inline, createObject, .{vm, .objbmethod, ObjBMethod});
+  meth.instance = instance;
+  meth.closure = closure;
+  return meth;
 }
 
 pub fn createFiber(vm: *VM, clo: ?*ObjClosure, origin: FiberOrigin, caller: ?*ObjFiber) *ObjFiber {

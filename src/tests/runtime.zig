@@ -1988,3 +1988,60 @@ test "errors-6" {
   ;
   _ = try doRuntimeTest(src);
 }
+
+test "simple-classes-1" {
+  var src =
+  \\ class Fox
+  \\    x: num
+  \\    u = 12
+  \\    def init(): void
+  \\      self.x = 0
+  \\    end
+  \\    def pulse()
+  \\      return self
+  \\    end
+  \\ end
+  \\
+  \\ let f = Fox()
+  \\ let p = f.x + 5
+  \\ assert(f.pulse() == f, "instances should be the same")
+  \\ assert(f.pulse().x + 5 == p, "field should be equal")
+  \\ assert(5 == p, "p should be 5")
+  \\ let j: Fox = f
+  \\ assert(j is Fox, "j should be type Fox")
+  \\ assert(j.u == 12, 'field "u" should be 12')
+  ;
+  _ = try doRuntimeTest(src);
+}
+
+test "simple-classes-2" {
+  var src =
+  \\ class Fox
+  \\    x: num
+  \\    u = 12
+  \\    def init(): void
+  \\      self.x = 0
+  \\    end
+  \\    def pulse()
+  \\      return self
+  \\    end
+  \\ end
+  \\ class Racoon
+  \\    x: num
+  \\    u = 12
+  \\    def init(): void
+  \\      self.x = self.u
+  \\    end
+  \\    def pulse()
+  \\      return self
+  \\    end
+  \\ end
+  \\ let f = Fox()
+  \\ let r = Racoon()
+  \\ r.x
+  \\ assert(r.x == 12, 'r should be 12')
+  \\ assert(r.x == r.u, 'fields x and u should be equal')
+  \\ assert(f.u == r.x, 'should be equal')
+  ;
+  _ = try doRuntimeTest(src);
+}

@@ -24,7 +24,7 @@ const RelationContext = types.RelationContext;
 const TypeKind = link.TypeKind;
 const TypeInfo = link.TypeInfo;
 const Union = link.Union;
-const Class = types.Class;
+pub const Class = types.Class;
 const TContext = link.TContext;
 const Node = link.Node;
 const TypeLinker = link.TypeLinker;
@@ -239,8 +239,8 @@ pub const TypeChecker = struct {
   const MAX_STRING_SYNTH_LEN = 0xc;
   const TypeCheckError = error{CheckError, TypeLinkError, SynthFailure, SynthTooLarge, DeadCode};
 
-  const SelfVar = "self";
-  const InitVar = "init";
+  pub const SelfVar = "self";
+  pub const InitVar = "init";
   const _BuiltinsItf = prelude._BuiltinsItf;
 
   pub fn init(allocator: std.mem.Allocator, diag: *Diagnostic) @This() {
@@ -1244,6 +1244,19 @@ pub const TypeChecker = struct {
           }
         }
       },
+      .AstDotAccess => |*da| {
+        if (lhsTy.isFunction()) {
+          if (da.lhs.getType()) |_ty| {
+            var ty = if (_ty.isInstance()) _ty.instance().cls else _ty;
+            if (ty.klass().getMethodTy(da.rhs.AstVar.token.value).? == lhsTy) {
+              return self.error_(true, node.op.token,
+                "Cannot modify immutable type '{s}'",
+                .{self.getTypename(lhsTy)}
+              );
+            }
+          }
+        }
+      },
       else => {}
     }
     return typ;
@@ -1572,7 +1585,9 @@ pub const TypeChecker = struct {
       }
       return ret_ty;
     }
-    return inf_ret_ty.box(self.ctx.allocator());
+    var ty = inf_ret_ty.box(self.ctx.allocator());
+    node.AstFun.ret = @as(Node, .{.AstNType = ast.TypeNode.init(ty, node.getToken())}).box(self.ctx.allocator());
+    return ty;
   }
 
   fn createClsType(self: *Self, node: *Node) *Type {
@@ -1587,6 +1602,23 @@ pub const TypeChecker = struct {
       cls.name.token.value, cls.fields, methods,
       cls.tparams, node, false, cls.is_builtin
     ).toType().box(self.ctx.allocator());
+  }
+
+  fn forbidReturnInInit(self: *Self, node: *Node) !void {
+    // we do not any return statements in an init method, to aid
+    // auto-returning of the self parameter after init() is called
+    var list = self.getPrevFlowNodes(self.cfg.lookupFunc(node).?.exit);
+    var errors = false;
+    for (list.items()) |nd| {
+      if (nd.node.isRet()) {
+        errors = true;
+        self.softError(
+          nd.node.getToken(),
+          "illegal return statement in `init` method", .{}
+        );
+      }
+    }
+    if (errors) return error.CheckError;
   }
 
   fn inferClassPartial(self: *Self, node: *Node) !*Type {
@@ -1619,6 +1651,9 @@ pub const TypeChecker = struct {
           for (cls.methods.items(), 0..) |itm, i| {
             var fun_ty = try self.inferFun(itm, ty.klass().methods.itemAt(i));
             ty.klass().methods.items()[i] = (fun_ty);
+          }
+          if (ty.klass().getMethod(InitVar)) |mtd| {
+            try self.forbidReturnInInit(mtd);
           }
         }
       } else {
@@ -1850,6 +1885,7 @@ pub const TypeChecker = struct {
     var synth_name = self.createFunSynthName(fun, &args_inf, node.targs);
     if (self.findGenInfo(old_fun_node, synth_name)) |info| {
       node.expr.setType(info.typ);
+      node.typ = info.typ.function().ret;
       return info.typ.function().ret;
     }
     var new_fun_node = fun.clone(self.ctx.allocator());

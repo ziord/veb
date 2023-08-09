@@ -84,6 +84,7 @@ test "simple-classes-1" {
   var src =
   \\ class Fox
   \\    x: num
+  \\    u = 12
   \\    def init(): void
   \\      self.x = 0
   \\    end
@@ -98,6 +99,7 @@ test "simple-classes-1" {
   \\ assert(f.pulse().x + 5 == p, "field should be equal")
   \\ let j: Fox = f
   \\ assert(j is Fox, "j should be type Fox")
+  \\ assert(j.u == 12, 'field "u" should be 12')
   ;
   try doStaticTest(src);
 }

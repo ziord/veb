@@ -8,155 +8,159 @@ pub const OpCode = enum (u8) {
 
   // sub rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Sub,
+  Sub, // subtract
 
   // div rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Div,
+  Div, // divide
 
   // mul rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Mul,
+  Mul, // multiply
 
   // mod rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Mod,
+  Mod, // modulus
 
   // xor rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Xor,
+  Xor, // bitwise xor
 
   // or rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Or,
+  Or, // bitwise or
 
   // and rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  And,
+  And, // bitwise and
 
   // is rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Is,
+  Is, // type check
+
+  // iscls rx, rk(x), rk(y)
+  // [6]  [8]  [9]    [9]
+  Iscls, // type check
 
   // shr rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Shr,
+  Shr, // bitwise right-shift
 
   // shl rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Shl,
+  Shl, // bitwise left-shift
 
   // cles rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Cles,
+  Cles, // cmp less
 
   // cgrt rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Cgrt,
+  Cgrt, // cmp greater
 
   // cleq rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Cleq,
+  Cleq, // cmp less-or-equal
 
   // cgeq rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Cgeq,
+  Cgeq, // cmp greater-or-equal
 
   // ceqq rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Ceqq,
+  Ceqq, // cmp equal-to
 
   // cneq rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
-  Cneq,
+  Cneq, // cmp not-equal-to
 
   // inv rx, rk(x)
   // [6] [8]  [18]
-  Inv,
+  Inv, // bitwise invert
 
   // bcst rx, rk(x)
   // [6] [8]  [18]
-  Bcst,
+  Bcst, // bool cast
 
   // jt rx, bx
   // [6] [8]  [18]
-  Jt,
+  Jt, // jump if true
 
   // jf rx, bx
   // [6] [8]  [18]
-  Jf,
+  Jf, // jump if false
 
   // jmp d, bx as jmp rx, bx
   //  `---------> [6] [8]  [18]
-  Jmp,
+  Jmp, // jump
 
   // not rx, bx
   // [6] [8] [18]
-  Not,
+  Not, // logic not
 
   // nerr rx, val
   // [6] [8] [18]
-  Nerr,
+  Nerr, // new error
 
   // nlst rx, size
   // [6] [8] [18]
-  Nlst,
+  Nlst, // new list
 
   // slst rx, rk(idx), rk(val)
   // [6]  [8]   [9]      [9]
-  Slst,
+  Slst, // set list
 
   // glst rx, rk(idx), rk(val)
   // [6]  [8]   [9]      [9]
-  Glst,
+  Glst, // get list
 
   // ntup rx, size
   // [6] [8] [18]
-  Ntup,
+  Ntup, // new tuple
 
   // stup rx, rk(idx), rk(val)
   // [6]  [8]   [9]      [9]
-  Stup,
+  Stup, // set tuple
 
   // gtup rx, rk(idx), rk(val)
   // [6]  [8]   [9]      [9]
-  Gtup,
+  Gtup, // get tuple
 
   // nmap rx, size
   // [6] [8] [18]
-  Nmap,
+  Nmap, // new map
 
   // smap rx, rk(key), rk(val)
   // [6]  [8]   [9]      [9]
-  Smap,
+  Smap, // set map
 
   // gmap rx, rk(key), rk(val)
   // [6]  [8]   [9]      [9]
-  Gmap,
+  Gmap, // get map
 
   // gglb rx, bx -> r(x) = G[K(bx)]
   // [6] [8] [18]
-  Gglb,
+  Gglb, // get global
 
   // sglb rx, bx -> G[K(bx)] = r(x)
   // [6] [8] [18]
-  Sglb,
+  Sglb, // set global
 
   // ggsym rx, bx -> r(x) = GS[bx]
   // [6] [8] [18]
-  Ggsym,
+  Ggsym, // get global sym
 
   // sgsym rx, bx -> GS[bx] = r(x)
   // [6] [8] [18]
-  Sgsym,
+  Sgsym, // set global sym
 
   // mov rx, ry
   // [6] [8]  [9]
-  Mov,
+  Mov, // move
 
   // asrt rx (1-arg using 2-arg fmt)
   // [6] [8]
-  Asrt,
+  Asrt,  // assert
 
   // load rx, bx
   //  [6] [8]  [18]
@@ -164,7 +168,7 @@ pub const OpCode = enum (u8) {
 
   // bclo rx, bx
   // [6] [8] [18]
-  Bclo,
+  Bclo,  // build closure
 
   // call rx, bx
   // [6] [8] [18]
@@ -172,15 +176,43 @@ pub const OpCode = enum (u8) {
 
   // gupv rx, bx
   // [6] [8] [18]
-  Gupv,
+  Gupv, // get upvalue
 
   // supv rx, bx
   // [6] [8] [18]
-  Supv,
+  Supv, // set upvalue
 
   // cupv rx (1-arg using 2-arg fmt)
   // [6] [8]
-  Cupv,
+  Cupv, // close upvalue
+
+  // callc rx, argc, flen
+  // [6]  [8] [9]    [9]
+  Callc, // call class
+
+  // finc rx (1-arg using 2-arg fmt)
+  // [6]  [8]
+  Finc, // finish class
+
+  // smtd rx(mth), rk(cls), idx
+  // [6]    [8]     [9]    [9]
+  Smtd, // set method
+
+  // gmtd rx, rk(inst), rk(prop.idx)
+  // [6]   [8]    [9]         [9]
+  Gmtd, // get method
+
+  // jmtd rx, rk(inst), rk(prop.idx) | call rx, bx
+  // [6]   [8]    [9]         [9]
+  Jmtd, // super instruction for get mtd & call mtd
+
+  // sfd rx(inst), prop.idx, rk(value)
+  // [6]   [8]    [9]         [9]
+  Sfd, // set field
+
+  // gfd rx, rk(inst), prop.idx
+  // [6]   [8]    [9]         [9]
+  Gfd, // get field
 
   // ret rx  (1-arg using 2-arg fmt)
   // [6] [8]

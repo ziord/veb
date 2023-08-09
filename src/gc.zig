@@ -97,5 +97,20 @@ pub fn freeObject(self: *Self, obj: *Obj, vm: *VM) void {
       vm.mem.freeBuf(value.Value, vm, fiber.stack[0..fiber.stack_cap]);
       vm.mem.free(T, vm, fiber);
     },
+    .objclass => {
+      const T = value.ObjClass;
+      var cls = @ptrCast(*T, obj);
+      vm.mem.freeBuf(value.Value, vm, cls.methods[0..cls.mlen]);
+      vm.mem.free(T, vm, cls);
+    },
+    .objinstance => {
+      const T = value.ObjInstance;
+      var inst = @ptrCast(*T, obj);
+      vm.mem.freeBuf(value.Value, vm, inst.fields[0..inst.flen]);
+      vm.mem.free(T, vm, inst);
+    },
+    .objbmethod => {
+      vm.mem.free(value.ObjBMethod, vm, @ptrCast(*value.ObjBMethod, obj));
+    },
   }
 }

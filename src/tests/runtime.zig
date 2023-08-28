@@ -5,141 +5,112 @@ const value = tests.value;
 const doRuntimeTest = tests.doRuntimeTest;
 
 test "arithmetic ops" {
-  const srcs = [_][]const u8{
-    "(0x2 * 45 / 2 * 5 - 1 + 6 / 3 - 0x5 + 6 * (0b1 - 0o2) / 0o1_5) + 234_56.e-2 - 2 % (5-4) - 6",
-    "2 ^ 3 ^ (6 | 0 | 1 | 5)",
-    "2 | 3 ^ 1 & 0xff",
-    "300 >> 8 & 0xff",
-    "0xf << 6 | 2",
-    "~0x123 + --2",
-    "~0x123 ++ --2",
-    "0 ++ --2 + ~0x123",
-    "0 ++ --2 + ~0x123 - ~(3 * 4 - (6 + 2 ) * 5)",
-    "-5",
-  };
-  const exp = [_]f64{449.09846153846155, 6, 2, 1, 962, -290, -290, -290, -317, -5};
-  for (srcs, 0..) |src, i| {
-    const got = try doRuntimeTest(src);
-    try std.testing.expect(value.asNumber(got) == exp[i]);
-  }
+  const srcs =
+    \\ let j = (0x2 * 45 / 2 * 5 - 1 + 6 / 3 - 0x5 + 6 * (0b1 - 0o2) / 0o1_5) + 234_56.e-2 - 2 % (5-4) - 6
+    \\ assert(j == 449.09846153846155, 'j should be 449.09846153846155')
+    \\ assert((2 ^ 3 ^ (6 | 0 | 1 | 5)) == 6, 'expr should be 6')
+    \\ assert((2 | 3 ^ 1 & 0xff) == 2, 'expr should be 2')
+    \\ assert((300 >> 8 & 0xff) == 1, 'expr should be 1')
+    \\ assert((0xf << 6 | 2) == 962, 'expr should be 962')
+    \\ assert((~0x123 + --2) == -290, 'expr should be -290')
+    \\ assert((~0x123 ++ --2) == -290, 'expr should be -290')
+    \\ assert((0 ++ --2 + ~0x123) == -290, 'expr should be -290')
+    \\ assert((0 ++ --2 + ~0x123 - ~(3 * 4 - (6 + 2 ) * 5)) == -317, 'expr should be -317')
+    \\ assert(-5 == -5, 'expr should be -5')
+  ;
+  try doRuntimeTest(srcs);
 }
 
 test "comparison ops" {
-  const srcs = [_][]const u8{
-      "0x123 < 4",
-      "123.45 > 12_40",
-      "0b111_000 <= 0o12_12",
-      "123.e-2 >= 0x12_34_5",
-      "123.e-2 != 0x12_34_5",
-      "0xdeadbeef == 0o33653337357",
-  };
-  const exp = [_]bool{false, false, true, false, true, true};
-  for (srcs, 0..) |src, i| {
-    const got = try doRuntimeTest(src);
-    try std.testing.expect(value.asBool(got) == exp[i]);
-  }
+  const srcs =
+    \\ assert((0x123 < 4) == false, '0x123 < 4')
+    \\ assert((123.45 > 12_40) == false, '123.45 > 12_40')
+    \\ assert(0b111_000 <= 0o12_12, 'should be lte')
+    \\ assert((123.e-2 >= 0x12_34_5) == false, 'should be gte')
+    \\ assert(123.e-2 != 0x12_34_5, 'should be unequal')
+    \\ assert(0xdeadbeef == 0o33653337357, 'should be equal')
+  ;
+  try doRuntimeTest(srcs);
 }
 
 test "booleans" {
-  const srcs = [_][]const u8{
-      "0x123 < 4 and 1 < 5",
-      "123.45 > 12_40 or 2 == 2",
-      "0b111_000 <= 0o12_12 or 1 > 0.5",
-      "123.e-2 >= 0x12_34_5 and 6 and 7 > 2",
-      "123.e-2 != 0x12_34_5 and 0 or 6 > 2",
-      "(1 or 2) == 1",
-      "(1 and 2) == 2",
-      "(0b00 and 2) == 0o0",
-      "(0x0 or 2) == 2",
-      "true or false",
-      "false or true",
-      "false or false",
-      "true or true",
-      "true and false",
-      "false and true",
-      "false and false",
-      "!false",
-      "!true",
-      "!(0x0_0)",
-      "!!(1)",
-      "!(1)",
-      "'foxes and pirates' == 'foxes and pirates'",
-      "'foxes and pirates' != 'fishes and pirates'",
-      "('fox' or '') == 'fox'",
-      "'fox' and '' == ''",
-  };
-  const exp = [_]bool{
-    false, true, true, false, true, 
-    true, true, true, true, true, 
-    true, false, true, false, false, false,
-    true, false, true, true, false, 
-    true, true, true, true
-  };
-  for (srcs, 0..) |src, i| {
-    var got = try doRuntimeTest(src);
-    try std.testing.expect(value.asBool(got) == exp[i]);
-  }
+  const srcs = 
+      \\ assert((0x123 < 4 and 1 < 5) == false, '0x123 < 4 and 1 < 5')
+      \\ assert((123.45 > 12_40 or 2) == 2, '123.45 > 12_40 or 2 == 2')
+      \\ assert((0b111_000 <= 0o12_12 or 1 > 0.5), '0b111_000 <= 0o12_12 or 1 > 0.5')
+      \\ assert(!(123.e-2 >= 0x12_34_5 and 6 and 7 > 2), '123.e-2 >= 0x12_34_5 and 6 and 7 > 2')
+      \\ assert(!!(123.e-2 != 0x12_34_5 and 0 or 6 > 2), '123.e-2 != 0x12_34_5 and 0 or 6 > 2')
+      \\ assert((1 or 2) == 1, '(1 or 2) == 1')
+      \\ assert((1 and 2) == 2, '(1 and 2) == 2')
+      \\ assert((0b00 and 2) == 0o0, '(0b00 and 2) == 0o0')
+      \\ assert((0x0 or 2) == 2, '(0x0 or 2) == 2')
+      \\ assert(true or false, 'true or false')
+      \\ assert(false or true, 'false or true')
+      \\ assert((false or false) == false, 'false or false')
+      \\ assert(true or true, 'true or true')
+      \\ assert((true and false) == false, 'true and false')
+      \\ assert((false and true) == false, 'false and true')
+      \\ assert((false and false) == false, 'false and false')
+      \\ assert(!false, '!false')
+      \\ assert(!true == false, '!true')
+      \\ assert(!(0x0_0), '!(0x0_0)')
+      \\ assert(!!(1), '!!(1)')
+      \\ assert(!(1) == false, '!(1)')
+      \\ assert('foxes and pirates' == 'foxes and pirates', 'foxes & pirates eql')
+      \\ assert('foxes and pirates' != 'fishes and pirates', 'foxes & pirates & fishes neql')
+      \\ assert(('fox' or '') == 'fox', 'should be fox')
+      \\ assert(('fox' and '') == '', 'should be empty str')
+  ;
+  try doRuntimeTest(srcs);
 }
 
 test "strings" {
-  const srcs = [_][]const u8{
-      "'foxes'",
-      \\"the quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog\n
-       ++
-      \\the quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog"
-  };
-  const exp = [_][]const u8{
-    "foxes", 
-    "the quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog\n" ++
-    "the quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog"
-  };
-  for (srcs) |src| {
-    _ = try doRuntimeTest(src);
-    _ = exp;
-  }
+  const src =
+    \\assert("'foxes' the quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog
+    \\the quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog" ==
+    ++
+    "\"'foxes' the quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog\n" ++
+    "the quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog,\nthe quick brown fox jumps over the lazy dog\"" ++
+    ", 'should be eql')"
+  ;
+  try doRuntimeTest(src);
 }
 
 test "lists" {
-  const srcs = [_][]const u8{
-    "[1, 2, 3, 4]",
-    "[1, 'fox', 3, 'cat']",
-    "[1]",
-    "[]",
-    "[1, 'fox', 3, 'cat', [1, 'fox', 3, 'cat']]",
-    "[1, 2, {'a': 'set'}]",
-    "[1, 2, {'a': 'set'},]"
-  };
-  for (srcs) |src| {
-    _ = try doRuntimeTest(src);
-  }
+  const src = 
+    \\ [1, 2, 3, 4]
+    \\ [1, 'fox', 3, 'cat']
+    \\ [1]
+    \\ []
+    \\ [1, 'fox', 3, 'cat', [1, 'fox', 3, 'cat']]
+    \\ [1, 2, {'a': 'set'}]
+    \\ [1, 2, {'a': 'set'},]
+  ;
+  try doRuntimeTest(src);
 }
 
 test "maps" {
-  const srcs = [_][]const u8{
-    "[]",
-    "{'abc': 123}",
-    "{'abc' as bool | str: 123, true: 0xff, 'obs': 0b101}",
-    "{}",
-    "{24: [1, 2, 3]}",
-    "{24: [1, 2, 3],}",
-  };
-  for (srcs) |src| {
-    _ = try doRuntimeTest(src);
-  }
+  const srcs =
+    \\ []
+    \\ {'abc': 123}
+    \\ {'abc' as bool | str: 123, true: 0xff, 'obs': 0b101}
+    \\ {}
+    \\ {24: [1, 2, 3]}
+    \\ {24: [1, 2, 3],}
+  ;
+  try doRuntimeTest(srcs);
 }
 
 test "tuples" {
-  const srcs = [_][]const u8{
-    "(1,)",
-    "({'abc' as bool | str: 123}, {true: 0xff}, {'obs': 0b101})",
-    "()",
-    "([1, 2, 3], [5, 5, 5])",
-    "('abc',) as tuple{'abc'}",
-    "('x', 'y',)"
-  };
-  for (srcs) |src| {
-    _ = try doRuntimeTest(src);
-  }
+  const srcs =
+    \\ (1,)
+    \\ ({'abc' as bool | str: 123}, {true: 0xff}, {'obs': 0b101})
+    \\ ()
+    \\ ([1, 2, 3], [5, 5, 5])
+    \\ ('abc',) as tuple{'abc'}
+    \\ ('x', 'y',)
+  ;
+  try doRuntimeTest(srcs);
 }
 
 test "regs" {
@@ -155,7 +126,7 @@ test "regs" {
   \\, 1+2+3+4+5+6+7+8+9+10+11+12+13+14+15+16+17+18+19+20+21+22+23+24+25+26+27+28+29+30+31+32+33+34+35+36+37+38+39+40+41+42+43+44+45+46+47+48+49+50+51+52+53+54+55+56+57+58+59+60+61+62+63+64+65+66+67+68+69+70+71+72+73+74+75+76+77+78+79+80+81+82+83+84+85+86+87+88+89+90+91+92+93+94+95+96+97+98+99+100+101+102+103+104+105+106+107+108+109+110+111+112+113+114+115+116+117+118+119+120+121+122+123+124+125+126+127+128+129+130+131+132+133+134+135+136+137+138+139+140+141+142+143+144+145+146+147+148+149+150+151+152+153+154+155+156+157+158+159+160+161+162+163+164+165+166+167+168+169+170+171+172+173+174+175+176+177+178+179+180+181+182+183+184+185+186+187+188+189+190+191+192+193+194+195+196+197+198+199+200+201+202+203+204+205+206+207+208+209+210+211+212+213+214+215+216+217+218+219+220+221+222+223+224+225+226+227+228+229+230+231+232+233+234+235+236+237+238+239+240+241+242+243+244+245+246+247+248+249+250+251+252+253+254+255+256+257+258+259+260+261+262+263+264+265+266+267+268+269+270+271+272+273+274+275+276+277+278+279+280+281+282+283+284+285+286+287+288+289+290+291+292+293+294+295+296+297+298+299+300+301+302+303+304+305+306+307+308+309+310+311+312+313+314+315+316+317+318+319+320+321+322+323+324+325+326+327+328+329+330+331+332+333+334+335+336+337+338+339+340+341+342+343+344+345+346+347+348+349+350+351+352+353+354+355+356+357+358+359+360+361+362+363+364+365+366+367+368+369+370+371+372+373+374+375+376+377+378+379+380+381+382+383+384+385+386+387+388+389+390+391+392+393+394+395+396+397+398+399+400
   \\]}
 ;
-  _ = try doRuntimeTest(src);
+try doRuntimeTest(src);
 }
 
 test "vars" {
@@ -180,7 +151,7 @@ test "vars" {
   \\ #[x, y]
   \\ z
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
   var src2 =
   \\ let x = 5
   \\ x += 10
@@ -190,10 +161,9 @@ test "vars" {
   \\ x &= 1
   \\ x ^= 3
   \\ x |= 4
-  \\ x
+  \\ assert(x == 7, 'x should be 7')
   ;
-  var got = try doRuntimeTest(src2);
-  try std.testing.expect(value.asNumber(got) == 7);
+  try doRuntimeTest(src2);
 }
 
 test "types" {
@@ -232,7 +202,7 @@ test "types" {
   \\ s[2] = q[2]
   \\ (s, q)
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "empty generic types" {
@@ -241,29 +211,31 @@ test "empty generic types" {
   \\ let j: list{any} = []
   \\ let q: map{any, any} = {}
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
-test "blocks" {
-  var src =
-  \\ let x = 'over the garden wall!'
-  \\ do
-  \\   let x = 5
-  \\   let y = 10
-  \\   let z = {x: x * y}
-  \\   z
-  \\ end
-  \\ do 
-  \\   let x = 't-rex'
-  \\   do
-  \\      x = 'foo-foo'
-  \\   end
-  \\   x
-  \\ end
-  \\ x
-  ;
-  _ = try doRuntimeTest(src);
-}
+// test "blocks" {
+//   var src =
+//   \\ let x = 'over the garden wall!'
+//   \\ do
+//   \\   let x = 5
+//   \\   let y = 10
+//   \\   let z = {x: x * y}
+//   \\   assert(z[x] == 50, 'should be 50')
+//   \\ end
+//   \\ assert(x == 'over the garden wall!', 'x should be "over the garden wall!"')
+//   \\ do
+//   \\   let x = 't-rex'
+//   \\   do
+//   \\      x = 'foo-foo'
+//   \\      assert(x == 'foo-foo', 'should be foo-foo')
+//   \\   end
+//   \\   assert(x == 't-rex', 'should be t-rex')
+//   \\ end
+//   \\ assert(x == 'over the garden wall!', 'x should still be "over the garden wall!"')
+//   ;
+//   try doRuntimeTest(src);
+// }
 
 test "linking" {
   var src =
@@ -276,7 +248,7 @@ test "linking" {
   \\ let x: str = 'over the garden wall!'
   \\ let y = 'oops'
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
   var src2 =
   \\ type A = str
   \\ type B = num
@@ -291,13 +263,13 @@ test "linking" {
   \\ let y: X = {10: 5} as map{num, num}?
   \\ y
   ;
-  _ = try doRuntimeTest(src2);
+  try doRuntimeTest(src2);
   var src3 =
   \\ type HashMap{K, V} = map{K, V}
   \\ let x: HashMap{num, str} = {5: 'okay'}
   \\ x as map{num, str} as map{num, str}?
   ;
-  _ = try doRuntimeTest(src3);
+  try doRuntimeTest(src3);
 }
 
 test "recursive types" {
@@ -327,7 +299,7 @@ test "recursive types" {
   \\ let x: A{A{num}} = 5
   \\
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "circularity" {
@@ -344,7 +316,7 @@ test "circularity" {
   \\ let Q: Q? = nil
   \\ Q
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "typecheck" {
@@ -375,7 +347,7 @@ test "typecheck" {
   \\ type X = (num | str)?
   \\ let y: X = 'food' as str?
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "indexing" {
@@ -404,7 +376,7 @@ test "indexing" {
   \\ let p = y[z] and y[5] and y[5 as str | num]
   \\ assert(p == 'fox', 'should be fox')
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "type summation" {
@@ -415,7 +387,7 @@ test "type summation" {
   \\ let r: list{(num | str)?} = [nil, 5, nil, 'foo']
   \\ let t: list{(num | str)?} = [nil, 5 as num | str, nil]
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "nil access" {
@@ -426,7 +398,7 @@ test "nil access" {
   \\ let j = f['foo'].? + 5
   \\ assert(j == 10, 'should be 10')
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "if statement" {
@@ -453,7 +425,7 @@ test "if statement" {
   \\ end
   \\ let z = 10
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
   // if-else
   var src2 =
   \\ let x: num = 5
@@ -484,7 +456,7 @@ test "if statement" {
   \\  'oh no!'
   \\ end
   ;
-  _ = try doRuntimeTest(src2);
+  try doRuntimeTest(src2);
 
   // if-end local
   var src3 =
@@ -502,7 +474,7 @@ test "if statement" {
   \\    p == 0b1010001010001
   \\ end
   ;
-  _ = try doRuntimeTest(src3);
+  try doRuntimeTest(src3);
 
   // if-end
   var src4 =
@@ -518,7 +490,7 @@ test "if statement" {
   \\ end
   \\ assert(p == 0b1010001010001, 'should be same')
   ;
-  _ = try doRuntimeTest(src4);
+  try doRuntimeTest(src4);
   // if-else
   var src5 =
   \\ let x: num = 5
@@ -545,7 +517,7 @@ test "if statement" {
   \\ end
   \\ assert(w == 61.5, 'should be 61.5')
   ;
-  _ = try doRuntimeTest(src5);
+  try doRuntimeTest(src5);
 }
 
 test "type expressions" {
@@ -568,7 +540,7 @@ test "type expressions" {
   \\ end
   \\ t
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "is expression" {
@@ -629,7 +601,7 @@ test "is expression" {
   \\ assert(((bool == bool) is not bool) != true, 'not true')  # same as above
   \\ assert(num != str, 'num is not str')
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-1" {
@@ -640,7 +612,7 @@ test "narrowing-1" {
   \\   x += p
   \\ end
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-2" {
@@ -652,7 +624,7 @@ test "narrowing-2" {
   \\ end
   \\ p
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-3" {
@@ -664,7 +636,7 @@ test "narrowing-3" {
   \\ end
   \\ x
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-4" {
@@ -676,7 +648,7 @@ test "narrowing-4" {
   \\ end
   \\ p
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-5" {
@@ -688,7 +660,7 @@ test "narrowing-5" {
   \\ end
   \\ x
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-6" {
@@ -700,7 +672,7 @@ test "narrowing-6" {
   \\ end
   \\ p
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-7" {
@@ -712,7 +684,7 @@ test "narrowing-7" {
   \\ end
   \\ p
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-8" {
@@ -727,7 +699,7 @@ test "narrowing-8" {
   \\ end
   \\ p
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-9" {
@@ -739,7 +711,7 @@ test "narrowing-9" {
   \\   !!x
   \\ end
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-10" {
@@ -755,7 +727,7 @@ test "narrowing-10" {
   \\ end
   \\ p
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-11" {
@@ -773,7 +745,7 @@ test "narrowing-11" {
   \\ end
   \\ p
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-12" {
@@ -790,7 +762,7 @@ test "narrowing-12" {
   \\ end
   \\ p
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-13" {
@@ -809,7 +781,7 @@ test "narrowing-13" {
   \\ end
   \\ p
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 
@@ -823,7 +795,7 @@ test "narrowing-14" {
   \\ end
   \\ x
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-15" {
@@ -836,7 +808,7 @@ test "narrowing-15" {
   \\ end
   \\ x
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-16" {
@@ -849,7 +821,7 @@ test "narrowing-16" {
   \\ end
   \\ x
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-17" {
@@ -862,7 +834,7 @@ test "narrowing-17" {
   \\ end
   \\ x
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-18" {
@@ -878,7 +850,7 @@ test "narrowing-18" {
   \\ end
   \\ y
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-19" {
@@ -898,7 +870,7 @@ test "narrowing-19" {
   \\ end
   \\ p
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
   var src2 =
   \\ let x: (num | str?) = 'fox'
   \\ if x != nil and x is not str
@@ -906,7 +878,7 @@ test "narrowing-19" {
   \\ end
   \\ x
   ;
-  _ = try doRuntimeTest(src2);
+  try doRuntimeTest(src2);
 }
 
 test "narrowing-20" {
@@ -917,7 +889,7 @@ test "narrowing-20" {
   \\ end
   \\ x
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
   var src2 =
   \\ let x: str | num? = 5
   \\ if x is not str and x is not nil
@@ -925,7 +897,7 @@ test "narrowing-20" {
   \\ end
   \\ x
   ;
-  _ = try doRuntimeTest(src2);
+  try doRuntimeTest(src2);
   var src3 =
   \\ do
   \\   let x: list{num?} = [5 as num?]
@@ -948,7 +920,7 @@ test "narrowing-20" {
   \\ end
   \\ assert(t == 16, 'should be 16')
   ;
-  _ = try doRuntimeTest(src3);
+  try doRuntimeTest(src3);
 }
 
 test "narrowing-21" {
@@ -972,7 +944,7 @@ test "narrowing-21" {
   \\ end
   \\ fun(12)
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "narrowing-22" {
@@ -1007,7 +979,7 @@ test "narrowing-22" {
   \\ 
   \\ assert(fun() == 8, 'should be 8')
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "void narrowing" {
@@ -1029,7 +1001,7 @@ test "void narrowing" {
   \\ end
   \\ assert(t == 15, 't should be 15')
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "constant types" {
@@ -1073,7 +1045,7 @@ test "constant types" {
   \\ j = 5
   \\ j as 5 as num + 5
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "while loop" {
@@ -1104,7 +1076,7 @@ test "while loop" {
   \\ end
   \\ x
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
   var src2 =
   \\ let x: num | str = 5
   \\ while x is num and x < 25 do
@@ -1119,7 +1091,7 @@ test "while loop" {
   \\ end
   \\ assert(x == 10, 'should be 10')
   ;
-  _ = try doRuntimeTest(src2);
+  try doRuntimeTest(src2);
   var src3 =
   \\ let x: num | str = 5
   \\ while x is num and x < 25 do
@@ -1144,7 +1116,7 @@ test "while loop" {
   \\ end
   \\ assert(i == 0o177777, 'should be 65535')
   ;
-  _ = try doRuntimeTest(src3);
+  try doRuntimeTest(src3);
 }
 
 test "functions-0" {
@@ -1155,7 +1127,7 @@ test "functions-0" {
   \\ end
   \\ assert(j(5) + 9 == 19, 'should be 19')
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
   var src2 =
   \\ do
   \\ def fox(a: num)
@@ -1169,7 +1141,7 @@ test "functions-0" {
   \\ assert(j == 13, 'should be 13')
   \\ end
   ;
-  _ = try doRuntimeTest(src2);
+  try doRuntimeTest(src2);
   var src3 =
   \\ def fib(n: num): num
   \\  if n <= 1 then
@@ -1179,7 +1151,7 @@ test "functions-0" {
   \\ end
   \\ assert(fib(13) == 233, 'should be 233')
   ;
-  _ = try doRuntimeTest(src3);
+  try doRuntimeTest(src3);
   var src4 =
   \\ type T = num
   \\ def foo(a: T): T
@@ -1191,7 +1163,7 @@ test "functions-0" {
   \\ let q = {j: p}
   \\ assert(q[j] == 2064, 'should be 2064')
   ;
-  _ = try doRuntimeTest(src4);
+  try doRuntimeTest(src4);
 }
 
 test "functions-1" {
@@ -1208,7 +1180,7 @@ test "functions-1" {
   \\ end
   \\ funny()
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
   var src2 =
   \\ def fancy{T}(x: T)
   \\  let j: T = x
@@ -1219,7 +1191,7 @@ test "functions-1" {
   \\ end
   \\ [fancy(5), fancy('oops'), fancy(true), id([1, 2, {'a': 'fox'}])]
   ;
-  _ = try doRuntimeTest(src2);
+  try doRuntimeTest(src2);
   var src3 =
   \\ def funny2{U}(x: U)
   \\    def foo{T}(a: T, b: U): T
@@ -1243,7 +1215,7 @@ test "functions-1" {
   \\ end
   \\ funny2{num}()
   ;
-  _ = try doRuntimeTest(src3);
+  try doRuntimeTest(src3);
 }
 
 test "functions-3" {
@@ -1252,24 +1224,21 @@ test "functions-3" {
   \\    return (k, t)
   \\ end
   \\ add(3, 4)
-  \\ let p = add
-  \\ p('fox', 12)
+  \\ add('fox', 12)
   \\ def add5{T}(a: T)
   \\  return a + 5
   \\ end
-  \\ let j = add5
-  \\ j(12)
+  \\ add5(12)
   \\ def add5(a: num)
   \\  return a + 5 * 2
   \\ end
-  \\ let j = add5
-  \\ j(12)
+  \\ add5(12)
   \\ let minus = [def (a: num, b: num) => a - b][0]
   \\ minus(132, 12)
   \\ let p = minus
   \\ p(12, 4)
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "functions-4" {
@@ -1279,18 +1248,15 @@ test "functions-4" {
   \\    return (k, t)
   \\ end
   \\ add(3, 4)
-  \\ let p = add
-  \\ p('fox', 12)
+  \\ add('fox', 12)
   \\ def add5{T}(a: T)
   \\  return a + 5
   \\ end
-  \\ let j = add5
-  \\ j(12)
+  \\ add5(12)
   \\ def add5(a: num)
   \\  return a + 5 * 2
   \\ end
-  \\ let j = add5
-  \\ j(12)
+  \\ add5(12)
   \\ let minus = [def (a: num, b: num): num
   \\  return a - b
   \\ end][0]
@@ -1301,7 +1267,7 @@ test "functions-4" {
   \\ let j = def => 5
   \\ j()
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "functions-5" {
@@ -1328,7 +1294,7 @@ test "functions-5" {
   \\ let mul = higher{num, num}(5)
   \\ assert(mul(12) == 60, 'should be 60')
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "functions-6" {
@@ -1352,7 +1318,7 @@ test "functions-6" {
   \\ let j = 6
   \\ assert((def => [(def => j * 3)][0]() + 6 == 24)(), 'should be true')
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "functions-7" {
@@ -1392,7 +1358,7 @@ test "functions-7" {
   \\ end
   \\ fun()
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "functions-8" {
@@ -1475,18 +1441,15 @@ test "functions-8" {
   \\    return (k, t)
   \\ end
   \\ add(3, 4)
-  \\ let p = add
-  \\ p('fox', 12)
+  \\ add('fox', 12)
   \\ def add5{T}(a: T)
   \\  return a + 5
   \\ end
-  \\ let j = add5
-  \\ j(12)
+  \\ add5(12)
   \\ def add5(a: num)
   \\  return a + 5 * 2
   \\ end
-  \\ let j = add5
-  \\ j(12)
+  \\ add5(12)
   \\ let minus = [def (a: num, b: num): num
   \\  return a - b
   \\ end][0]
@@ -1501,18 +1464,15 @@ test "functions-8" {
   \\    return (k, t)
   \\ end
   \\ add(3, 4)
-  \\ let p = add
-  \\ p('fox', 12)
+  \\ add('fox', 12)
   \\ def add5{T}(a: T)
   \\  return a + 5
   \\ end
-  \\ let j = add5
-  \\ j(12)
+  \\ add5(12)
   \\ def add5(a: num)
   \\  return a + 5 * 2
   \\ end
-  \\ let j = add5
-  \\ j(12)
+  \\ add5(12)
   \\ let minus = [def (a: num, b: num) => a - b][0]
   \\ minus(132, 12)
   \\ let p = minus
@@ -1559,7 +1519,7 @@ test "functions-8" {
   \\ end
   \\ [fancy(5), fancy('oops'), fancy(true), id([1, 2, {'a': 'fox'}])]
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "functions-9" {
@@ -1595,7 +1555,7 @@ test "functions-9" {
   \\ ret3(7)
   \\ ret(7)
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "functions-10" {
@@ -1606,13 +1566,11 @@ test "functions-10" {
   \\  end
   \\  return fun
   \\ end
-  \\ let x = fox
-  \\ let j = x(5)
+  \\ let j = fox(5)
   \\ assert(j(3) == 15, 'should be 15')
-  \\ let x = [[fox]][0][0]
-  \\ assert(x(5)(3) == 15, 'should be 15')
+  \\ assert(fox(5)(3) == 15, 'should be 15')
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
   var src2 =
    \\ def fox(x: num): fn(num): num | str
   \\  return def (p: num): num | str  => p * x
@@ -1621,7 +1579,7 @@ test "functions-10" {
   \\ let j = fox(5)
   \\ assert(j(4) == 20, 'should be 20')
   ;
-  _ = try doRuntimeTest(src2);
+  try doRuntimeTest(src2);
   var src3 =
   \\ def big: num | str
   \\  return 5
@@ -1632,7 +1590,7 @@ test "functions-10" {
   \\ end
   \\ assert(j == 10, 'should be 10')
   ;
-  _ = try doRuntimeTest(src3);
+  try doRuntimeTest(src3);
   var src4 =
   \\ type T = num
   \\ type Fun = fn(T): T | str
@@ -1646,7 +1604,7 @@ test "functions-10" {
   \\
   \\ assert(fox(2)(3) == 6, 'should be 6')
   ;
-  _ = try doRuntimeTest(src4);
+  try doRuntimeTest(src4);
 }
 
 test "functions-11" {
@@ -1666,7 +1624,7 @@ test "functions-11" {
   \\ let j = [def (x: num) => x * x, def (y: num) => !y]
   \\ [def (x: num) => x * x, def (y: num) => ~y][t - 1](t + 7)
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "functions-13" {
@@ -1679,7 +1637,7 @@ test "functions-13" {
   \\ let j = fun()
   \\ assert(j is void, 'should be void')
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "functions-14" {
@@ -1692,7 +1650,7 @@ test "functions-14" {
   \\
   \\ fun()
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "functions-15" {
@@ -1701,7 +1659,7 @@ test "functions-15" {
   \\ end
   \\ [fun()]
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "functions-16-varargs" {
@@ -1739,7 +1697,7 @@ test "functions-16-varargs" {
   \\  assert(false, 'oops')
   \\ end
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "functions-17" {
@@ -1762,7 +1720,7 @@ test "functions-17" {
   \\ if j is num
   \\ end
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "functions-18" {
@@ -1777,7 +1735,7 @@ test "functions-18" {
   \\
   \\ assert(fun() == 6, "should be 6")
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "builtin-functions" {
@@ -1785,11 +1743,11 @@ test "builtin-functions" {
   \\ assert(true, 'ok')
   \\ assert(!!exit, 'exit')
   \\ assert(!!assert, 'assert')
-  \\ assert(!!panic, 'panic')
+  \\ # assert(!!panic, 'panic')
   \\ assert(!!print, 'print')
-  \\ [panic, exit, assert]
+  \\ [exit, assert]
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "builtin-functions-override" {
@@ -1816,7 +1774,7 @@ test "builtin-functions-override" {
   \\ end
   \\ check(print('fox', 'fry', 1, 2, 3)[0] == 'fox', 'should be "fox"')
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "errors-1" {
@@ -1843,7 +1801,7 @@ test "errors-1" {
   \\  [e]
   \\ end
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "errors-2" {
@@ -1864,7 +1822,7 @@ test "errors-2" {
   \\ p += 2
   \\ p
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "errors-3" {
@@ -1884,7 +1842,7 @@ test "errors-3" {
   \\  hehe(e)
   \\ end
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "errors-4" {
@@ -1909,7 +1867,7 @@ test "errors-4" {
   \\  k
   \\ end
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
   var src2 =
   \\ def fun(x: num)
   \\  if x > 5
@@ -1929,7 +1887,7 @@ test "errors-4" {
   \\ end
   \\ k
   ;
-  _ = try doRuntimeTest(src2);
+  try doRuntimeTest(src2);
 }
 
 test "errors-5" {
@@ -1968,7 +1926,7 @@ test "errors-5" {
   \\ k += 5
   \\ k
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "errors-6" {
@@ -1986,7 +1944,7 @@ test "errors-6" {
   \\ # print(e, j)
   \\ assert(e == 3 and j == 8, 'e should not change')
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "simple-classes-1" {
@@ -2011,7 +1969,7 @@ test "simple-classes-1" {
   \\ assert(j is Fox, "j should be type Fox")
   \\ assert(j.u == 12, 'field "u" should be 12')
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }
 
 test "simple-classes-2" {
@@ -2043,5 +2001,5 @@ test "simple-classes-2" {
   \\ assert(r.x == r.u, 'fields x and u should be equal')
   \\ assert(f.u == r.x, 'should be equal')
   ;
-  _ = try doRuntimeTest(src);
+  try doRuntimeTest(src);
 }

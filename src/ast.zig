@@ -45,6 +45,7 @@ pub const AstType = enum {
   AstOrElse,
   AstClass,
   AstDotAccess,
+  AstScope,
   AstProgram,
 };
 
@@ -319,6 +320,11 @@ pub const BlockNode = struct {
 
   pub fn getLast(self: *BlockNode) ?*AstNode {
     if (self.nodes.len() > 0) return self.nodes.getLast();
+    return null;
+  }
+
+  pub fn getSecondLast(self: *BlockNode) ?*AstNode {
+    if (self.nodes.len() > 1) return self.nodes.itemAt(self.nodes.len() - 2);
     return null;
   }
 
@@ -785,6 +791,15 @@ pub const RetNode = struct {
   }
 };
 
+pub const ScopeNode = struct {
+  enter: bool,
+  leave: bool,
+
+  pub fn init(enter: bool, leave: bool) @This() {
+    return @This() {.enter = enter, .leave = leave};
+  }
+};
+
 // TODO: refactor to BlockNode if no other useful info needs to be added.
 pub const ProgramNode = struct {
   decls: AstNodeList,
@@ -834,6 +849,7 @@ pub const AstNode = union(AstType) {
   AstOrElse: OrElseNode,
   AstClass: ClassNode,
   AstDotAccess: DotAccessNode,
+  AstScope: ScopeNode,
   AstProgram: ProgramNode,
 
   pub inline fn isComptimeConst(self: *@This()) bool {
@@ -955,6 +971,13 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn isScope(self: *@This()) bool {
+    return switch (self.*) {
+      .AstScope => true,
+      else => false,
+    };
+  }
+
   pub inline fn isFun(self: *@This()) bool {
     return switch (self.*) {
       .AstFun => true,
@@ -1027,7 +1050,7 @@ pub const AstNode = union(AstType) {
       .AstClass => |*cls| cls.typ,
       .AstDotAccess => |*dot| dot.typ,
       .AstBlock, .AstIf, .AstElif,
-      .AstWhile, .AstControl => null,
+      .AstWhile, .AstControl, .AstScope => null,
       else => unreachable,
     };
   }
@@ -1050,6 +1073,7 @@ pub const AstNode = union(AstType) {
         if (der.narrowed) |nrw| nrw.typ = typ
         else der.typ = typ;
       },
+      .AstScope => {},
       else => {
         std.log.debug("Attempt to set type on node: {}\n", .{self});
       },
@@ -1166,7 +1190,7 @@ pub const AstNode = union(AstType) {
       .AstExprStmt => |*nd| nd.clone(al),
       .AstVarDecl => |*nd| nd.clone(al),
       .AstControl => |*ctr| ctr.clone(al),
-      .AstEmpty => self,
+      .AstEmpty, .AstScope => self,
       .AstIf => |*if_| if_.clone(al),
       .AstElif => |*elif| elif.clone(al),
       .AstSimpleIf => unreachable,

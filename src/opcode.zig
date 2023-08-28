@@ -202,9 +202,9 @@ pub const OpCode = enum (u8) {
   // [6]   [8]    [9]         [9]
   Gmtd, // get method
 
-  // jmtd rx, rk(inst), rk(prop.idx) | call rx, bx
+  // jmtdc rx, rk(inst), rk(prop.idx) | call rx, bx
   // [6]   [8]    [9]         [9]
-  Jmtd, // super instruction for get mtd & call mtd
+  Jmtdc, // super instruction for get mtd & call mtd
 
   // sfd rx(inst), prop.idx, rk(value)
   // [6]   [8]    [9]         [9]

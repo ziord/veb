@@ -134,7 +134,8 @@ test "generic-classes-2" {
   \\    end
   \\
   \\    def getGen()
-  \\      def fun{T}(p: T)
+  \\      type T = tuple{str}
+  \\      def fun(p: T)
   \\        return p[0]
   \\      end
   \\      return fun

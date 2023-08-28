@@ -752,7 +752,7 @@ pub const TypeLinker = struct {
 
   fn link(self: *Self, node: *Node) TypeLinkError!void {
     switch (node.*) {
-      .AstNumber, .AstString, .AstBool, .AstControl, .AstNil => {},
+      .AstNumber, .AstString, .AstBool, .AstControl, .AstNil, .AstScope => {},
       .AstUnary => |*nd| try self.linkUnary(nd),
       .AstBinary => |*nd| try self.linkBinary(nd),
       .AstList, .AstTuple => |*nd| try self.linkList(nd),

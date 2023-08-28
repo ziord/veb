@@ -11,7 +11,7 @@ pub const ast = @import("../ast.zig");
 pub const diagnostics = @import("../diagnostics.zig");
 pub const VebAllocator = @import("../allocator.zig");
 
-pub fn doRuntimeTest(src: []const u8) !value.Value {
+pub fn doRuntimeTest(src: []const u8) !void {
   var cna = VebAllocator.init(std.heap.ArenaAllocator.init(std.heap.page_allocator));
   defer cna.deinit();
   const filename = @as([]const u8, "test.veb");
@@ -23,7 +23,7 @@ pub fn doRuntimeTest(src: []const u8) !value.Value {
   var cpu = vm.VM.init(&cna);
   defer cpu.deinit();
   var fun = value.createFn(&cpu, 0);
-  var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych._prelude);
+  var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych._prelude, null, null);
   try compiler.compile(node);
   debug.Disassembler.disCode(&fun.code, "test");
   var start = std.time.milliTimestamp();
@@ -33,12 +33,10 @@ pub fn doRuntimeTest(src: []const u8) !value.Value {
   std.debug.print("took: {}ms\n", .{end - start});
   value.printValue(cpu.fiber.fp.stack[0]);
   std.debug.print("\n", .{});
-  // TODO: refactor testing, as it currently uses invalidated data
-  return cpu.fiber.fp.stack[0]; // !!invalidated!!
 }
 
 pub fn doStaticTest(src: []const u8) !void {
-  var cna = VebAllocator.init(std.heap.ArenaAllocator.init(std.heap.page_allocator));
+  var cna = VebAllocator.init(std.heap.ArenaAllocator.init(std.testing.allocator));
   defer cna.deinit();
   const filename = @as([]const u8, "test.veb");
   var al = cna.getArenaAllocator();
@@ -49,7 +47,7 @@ pub fn doStaticTest(src: []const u8) !void {
   var cpu = vm.VM.init(&cna);
   defer cpu.deinit();
   var fun = value.createFn(&cpu, 0);
-  var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych._prelude);
+  var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych._prelude, null, null);
   try compiler.compile(node);
   debug.Disassembler.disCode(&fun.code, "test");
 }

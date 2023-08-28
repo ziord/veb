@@ -412,6 +412,13 @@ pub const Class = struct {
     return self.tparams != null;
   }
 
+  pub inline fn isInstantiatedGeneric(self: *@This()) bool {
+    if (self.tparams) |tparams| {
+      return (tparams.len() > 0 and !tparams.itemAt(0).isVariable());
+    }
+    return false;
+  }
+
   pub inline fn tparamsLen(self: *@This()) usize {
     return if (self.tparams) |tp| tp.len() else 0;
   }

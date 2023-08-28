@@ -944,8 +944,7 @@ pub fn createFiber(vm: *VM, clo: ?*ObjClosure, origin: FiberOrigin, caller: ?*Ob
   fiber.fp = undefined;
   if (clo) |closure| {
     stack[0] = objVal(closure);
-    // + 1 for closure
-    fiber.appendFrame(closure, stack.ptr + 1);
+    fiber.appendFrame(closure, stack.ptr);
   }
   return fiber;
 }

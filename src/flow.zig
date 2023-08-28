@@ -213,6 +213,13 @@ pub const CFGBuilder = struct {
     return node;
   }
 
+  fn createScopeNode(self: *Self, allocator: std.mem.Allocator, enter: bool) *Node {
+    _ = self;
+    var node = util.alloc(Node, allocator);
+    node.* = .{.AstScope = ast.ScopeNode.init(enter, !enter)};
+    return node;
+  }
+
   fn getFlowNode(self: *Self, node: *Node, tag: FlowTag) *FlowNode {
     var flow = FlowNode.init(tag, node, self.alloc());
     self.nodes.put(node, flow) catch |e| {
@@ -279,33 +286,41 @@ pub const CFGBuilder = struct {
     return flow.toList(self.alloc());
   }
 
-  fn linkNodeList(self: *Self, nodes: *ast.AstNodeList, cond: ?*Node, prev: FlowList, edge: FlowEdge) FlowList {
+  fn linkNodeList(self: *Self, nodes: *ast.AstNodeList, cond: ?*Node, prev: FlowList, edge: FlowEdge, inc_scope: bool) FlowList {
     // cond indicates whether this block is from a branching entry or a normal do..end block
-    var _prev = prev;
+    var _prev = (
+      if (inc_scope) self.link(self.createScopeNode(self.alloc(), true), prev, edge)
+      else prev
+    );
+    // var _prev = prev;
     for (nodes.items(), 0..) |item, i| {
       if (item.isTypeAlias()) {
         continue;
       } else if (item.isControl()) {
         var is_last = if (cond != null) i + 1 == nodes.len() else false;
         _prev = self.linkControl(item, _prev, edge, is_last);
-        continue;
       } else if (item.isRet()) {
         var is_last = if (cond != null) i + 1 == nodes.len() else false;
         _prev = self.linkRet(item, _prev, edge, is_last);
-        continue;
       } else if (item.isWhile()) {
         if (i + 1 < nodes.len()) {
           self.after_while = nodes.itemAt(i + 1);
         }
+        _prev = self.link(item, _prev, edge);
+      } else {
+        _prev = self.link(item, _prev, edge);
       }
-      _prev = self.link(item, _prev, edge);
     }
-    return _prev;
+    // _prev = self.link(self.createScopeNode(self.alloc(), false), _prev, edge);
+    return (
+      if (inc_scope) self.link(self.createScopeNode(self.alloc(), false), _prev, edge)
+      else _prev
+    );
   }
   
   fn linkBlock(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
     var block = &node.AstBlock;
-    return self.linkNodeList(&block.nodes, block.cond, prev, edge);
+    return self.linkNodeList(&block.nodes, block.cond, prev, edge, false);
   }
 
   fn linkSimpleIf(self: *Self, ast_node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
@@ -422,7 +437,7 @@ pub const CFGBuilder = struct {
     }
     synth.nodes.extend(&fun.body.AstBlock.nodes);
     var body = @as(Node, .{.AstBlock = synth});
-    var flo = builder.buildBlock(self.cfg, &body);
+    var flo = builder.buildBlock(self.cfg, &body, false);
     // save node for future lookup()s
     flo.entry.node = node;
     self.cfg.putFunc(flo);
@@ -442,7 +457,7 @@ pub const CFGBuilder = struct {
     synth.nodes.extend(cls.fields);
     synth.nodes.extend(cls.methods);
     var body = @as(Node, .{.AstBlock = synth});
-    var flo = builder.buildBlock(self.cfg, &body);
+    var flo = builder.buildBlock(self.cfg, &body, false);
     // save node for future lookup()s
     flo.entry.node = node;
     self.cfg.putClass(flo);
@@ -451,7 +466,7 @@ pub const CFGBuilder = struct {
 
   fn linkProgram(self: *Self, ast_node: *Node, prev: FlowList, edge: FlowEdge) void {
     var node = &ast_node.AstProgram;
-    var _prev = self.linkNodeList(&node.decls, null, prev, edge);
+    var _prev = self.linkNodeList(&node.decls, null, prev, edge, false);
     self.connectVertices(_prev, self.exit);
     self.cfg.program = FlowMeta.init(self.entry, self.exit, self.dead);
   }
@@ -498,10 +513,10 @@ pub const CFGBuilder = struct {
     _ = self.linkClass(node, self.entry.toList(self.alloc()), .ESequential);
   }
 
-  pub fn buildBlock(self: *Self, cfg: *CFG, ast_node: *Node) FlowMeta {
+  pub fn buildBlock(self: *Self, cfg: *CFG, ast_node: *Node, inc_scope: bool) FlowMeta {
     self.cfg = cfg;
     var node = &ast_node.AstBlock;
-    var _prev = self.linkNodeList(&node.nodes, node.cond, self.entry.toList(self.alloc()), .ESequential);
+    var _prev = self.linkNodeList(&node.nodes, node.cond, self.entry.toList(self.alloc()), .ESequential, inc_scope);
     self.connectVertices(_prev, self.exit);
     return FlowMeta.init(self.entry, self.exit, self.dead);
   }

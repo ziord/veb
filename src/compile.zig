@@ -204,6 +204,7 @@ pub const Compiler = struct {
   diag: *Diagnostic,
   generics: *GenInfoMap,
   _prelude: *Node,
+  _prelude_len: usize = 0,
   skip_gsyms: bool = false,
   
   const Self = @This();
@@ -225,7 +226,10 @@ pub const Compiler = struct {
   };
   const CompileError = error{CompileError};
 
-  pub fn init(diag: *Diagnostic, vm: *VM, fun: *ObjFn, info: *GenInfoMap, allocator: *CnAllocator, prel: *Node) Self {
+  pub fn init(
+    diag: *Diagnostic, vm: *VM, fun: *ObjFn, info: *GenInfoMap,
+    allocator: *CnAllocator, prel: *Node, prev: ?*@This(), mtd_token: ?Token
+  ) Self {
     var al = allocator.getArenaAllocator();
     var gsyms = std.MultiArrayList(GSymVar){};
     var locals = std.MultiArrayList(LocalVar){};
@@ -247,8 +251,22 @@ pub const Compiler = struct {
       .generics = info,
       ._prelude = prel,
     };
-    self.loadBuiltinsPrelude();
+    if (prev) |p| {
+      self.adoptBuiltinsPrelude(p);
+    } else {
+      self.loadBuiltinsPrelude();
+    }
+    if (mtd_token) |token| {
+      self.appendSelfParam(token) catch unreachable;
+    } else {
+      var loc = ast.VarNode.init(Token.getDefault());
+      _ = self.initLocal(&loc) catch unreachable;
+    }
     return self;
+  }
+
+  fn softError(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
+    self.diag.addDiagnostics(.DiagError, token, "CompileError: " ++ fmt ++ "\n", args);
   }
 
   fn compileError(self: *Self, token: Token, comptime fmt: []const u8, msg: anytype) CompileError {
@@ -267,6 +285,11 @@ pub const Compiler = struct {
       else 
         1
     );
+  }
+
+  inline fn isSelfVar(self: *Self, node: *ast.VarNode) bool {
+    _ = self;
+    return std.mem.eql(u8, node.token.value, check.TypeChecker.SelfVar);
   }
 
   inline fn incScope(self: *Self) void {
@@ -516,7 +539,7 @@ pub const Compiler = struct {
 
   /// load prelude
   fn loadBuiltinsPrelude(self: *Self) void {
-    var glb_len = self.globals.len;
+    util.assert(self.globals.len == 0, "globals len should be zero at startup");
     self.skip_gsyms = true;
     self.preallocateGlobals(&self._prelude.AstProgram.decls);
     self.skip_gsyms = false;
@@ -524,10 +547,24 @@ pub const Compiler = struct {
     var patchs = slice.items(.patched);
     var inits = slice.items(.initialized);
     // patch and initialize all builtin globals:
-    for (glb_len..patchs.len) |i| {
+    for (0..patchs.len) |i| {
       patchs[i] = true;
       inits[i] = true;
     }
+    self._prelude_len = patchs.len;
+  }
+
+  /// adopt prelude
+  fn adoptBuiltinsPrelude(self: *Self, other: *Self) void {
+    var slice = other.globals.slice();
+    var al = self.alloc();
+    for (0..other._prelude_len) |i| {
+      // store the global refs
+      self.globals.append(al, slice.get(i)) catch unreachable;
+      // store the actual global values
+      _ = self.fun.code.writeValue(other.fun.code.values.items[i], self.vm);
+    }
+    self._prelude_len = other._prelude_len;
   }
 
   /// preallocate all globals in `gsyms` or `globals`
@@ -823,9 +860,27 @@ pub const Compiler = struct {
     if (node.typ != null and node.typ.?.isFunction()) {
       var fun = node.typ.?.function();
       if (fun.isGeneric()) {
-        return self.cConst(dst, value.numberVal(@intToFloat(f64, node.typ.?.typeid())), node.token.line);
+        self.softError(node.token, "cannot generate code for an uninstantiated generic type", .{});
+        return dst;
       } else if (fun.node != null and fun.node.?.AstFun.name != null) {
-        return try self.cVar(fun.node.?.AstFun.name.?, dst);
+        var last = self.diag.count();
+        var reg = self.cVar(fun.node.?.AstFun.name.?, dst) catch undefined;
+        // we use this indirection because for some reason zig generates bad
+        // code for the above `catch` when used for handling this error
+        if (self.diag.count() == last) return reg;
+        // clear last error generated
+        self.diag.popUntil(last);
+      }
+    }
+    if (node.typ != null and node.typ.?.isClass() and !self.isSelfVar(node)) {
+      var cls = node.typ.?.klass();
+      if (cls.isGeneric()) {
+        if (!cls.isInstantiatedGeneric()) {
+          self.softError(node.token, "cannot generate code for an uninstantiated generic type", .{});
+          return dst;
+        } else if (cls.node) |nd| {
+          return try self.cVar(nd.AstClass.name, dst);
+        }
       }
     }
     if (self.findLocalVar(node)) |lvar| {
@@ -858,7 +913,7 @@ pub const Compiler = struct {
       op = .Gfd;
     } else if (ty.getMethodIndex(prop.value)) |idx| {
       prop_idx = @intCast(u32, idx);
-      op = if (is_call) .Jmtd else .Gmtd;
+      op = if (is_call) .Jmtdc else .Gmtd;
     } else {
       return self.compileError(prop, "No such field/method '{s}'", .{prop.value});
     }
@@ -1218,11 +1273,12 @@ pub const Compiler = struct {
       std.debug.assert(_reg != VRegister.DummyReg);
       reg = _reg;
     }
-    var compiler = Compiler.init(self.diag, self.vm, new_fn, self.generics, self.allocator, self._prelude);
+    var compiler = Compiler.init(
+      self.diag, self.vm, new_fn, self.generics,
+      self.allocator, self._prelude, self,
+      if (is_method) token else null,
+    );
     compiler.enclosing = self;
-    if (is_method) {
-      try compiler.appendSelfParam(token);
-    }
     // localize params
     compiler.incScope();
     for (node.params.items()) |param| {
@@ -1513,7 +1569,7 @@ pub const Compiler = struct {
       .AstAssign => |*nd| try self.cAssign(nd, reg),
       .AstBlock => |*nd| try self.cBlock(nd, reg),
       .AstNType => |*nd| self.cNType(nd, reg),
-      .AstAlias => reg, // TODO
+      .AstAlias, .AstScope => reg,
       .AstNil => |*nd| self.cNil(nd, reg),
       .AstCast => |*nd| try self.cCast(nd, reg),
       .AstSubscript => |*nd| try self.cSubscript(nd, reg),

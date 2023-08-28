@@ -5,6 +5,7 @@ const Mem = @import("mem.zig");
 const GC = @import("gc.zig");
 const VebAllocator = @import("allocator.zig");
 const native = @import("native.zig");
+const debug = @import("debug.zig");
 
 const Value = vl.Value;
 const Code = vl.Code;
@@ -15,6 +16,7 @@ const ObjClosure = vl.ObjClosure;
 const ObjUpvalue = vl.ObjUpvalue;
 const CallFrame = vl.CallFrame;
 const StringHashMap = vl.StringHashMap;
+const Dis = debug.Disassembler;
 
 pub const VM = struct {
   fiber: *ObjFiber,
@@ -229,8 +231,9 @@ pub const VM = struct {
     std.debug.print(fmt ++ "\n", args);
   }
 
-  pub inline fn printStack(self: *Self) void {
-    for (self.fiber.stack[0..self.fiber.stack_cap]) |val| {
+  pub inline fn printStack(self: *Self, max: ?usize) void {
+    var len = max orelse self.fiber.stack_cap;
+    for (self.fiber.stack[0..len]) |val| {
       std.debug.print("[ ", .{});
       vl.printValue(val);
       std.debug.print(" ]", .{});
@@ -428,13 +431,14 @@ pub const VM = struct {
           try self.ensureFrameCapacity(&fp, &fiber);
           var val = fp.stack[rx];
           if (vl.isClosure(val)) {
-            fiber.appendFrame(vl.asClosure(val), fp.stack + rx + 1);
+            fiber.appendFrame(vl.asClosure(val), fp.stack + rx);
             fp = fiber.fp;
             continue;
           } else if (vl.isMethod(val)) {
             var mtd = vl.asMethod(val);
-            fiber.appendFrame(mtd.closure, fp.stack + rx + 1);
-            (fp.stack + rx + 1)[0] = mtd.instance;
+            fiber.appendFrame(mtd.closure, fp.stack + rx);
+            @setRuntimeSafety(false);
+            fp.stack[rx] = mtd.instance;
             fp = fiber.fp;
             continue;
           } else {
@@ -445,9 +449,9 @@ pub const VM = struct {
             continue;
           }
         },
-        .Jmtd => {
+        .Jmtdc => {
           // super instruction for get mtd & call mtd
-          // jmtd rx, rk(inst), rk(prop.idx) | call rx, bx
+          // jmtdc rx, rk(inst), rk(prop.idx) | call rx, bx
           var rx: u32 = undefined;
           var rk1: u32 = undefined;
           var idx: u32 = undefined;
@@ -456,8 +460,9 @@ pub const VM = struct {
           var closure = vl.asClosure(vl.asInstance(inst).cls.methods[idx]);
           var next = @call(.always_inline, Self.readWord, .{self, fp});
           self.read2Args(next, &rx, &rk1);
-          fiber.appendFrame(closure, fp.stack + rx + 1);
-          (fp.stack + rx + 1)[0] = inst;
+          fiber.appendFrame(closure, fp.stack + rx);
+          @setRuntimeSafety(false);
+          fp.stack[rx] = inst;
           fp = fiber.fp;
           continue;
         },
@@ -470,6 +475,7 @@ pub const VM = struct {
           try self.ensureFrameCapacity(&fp, &fiber);
           var cls = vl.asClass(fp.stack[rx]);
           var inst = vl.createInstance(self, cls, flen);
+          @setRuntimeSafety(false);
           fp.stack[rx] = vl.objVal(inst);
           continue;
         },
@@ -487,7 +493,7 @@ pub const VM = struct {
             // TODO: handle resuming fibers
           } else {
             // place result where future instructions expect it; at the function's slot
-            (frame.stack - 1)[0] = res;
+            frame.stack[0] = res;
           }
           continue;
         },
@@ -668,10 +674,8 @@ pub const VM = struct {
           var tmp: u32 = undefined;
           self.read2Args(code, &rx, &tmp);
           try self.ensureFrameCapacity(&fp, &fiber);
-          var inst = fp.stack[rx];
-          var init_mtd = vl.asInstance(inst).cls.getInitMethod().?;
-          fiber.appendFrame(vl.asClosure(init_mtd), fp.stack + rx + 1);
-          (fp.stack + rx + 1)[0] = inst;
+          var init_mtd = vl.asInstance(fp.stack[rx]).cls.getInitMethod().?;
+          fiber.appendFrame(vl.asClosure(init_mtd), fp.stack + rx);
           fp = fiber.fp;
           continue;
         },
@@ -681,6 +685,7 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var idx: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &idx);
+          @setRuntimeSafety(false);
           vl.asClass(self.RK(rk1, fp)).methods[idx] = fp.stack[rx];
           continue;
         },
@@ -692,6 +697,7 @@ pub const VM = struct {
           self.read3Args(code, &rx, &rk1, &idx);
           var inst = self.RK(rk1, fp);
           var mtd = vl.createBMethod(self, inst, vl.asClosure(vl.asInstance(inst).cls.methods[idx]));
+          @setRuntimeSafety(false);
           fp.stack[rx] = vl.objVal(mtd);
           continue;
         },
@@ -701,6 +707,7 @@ pub const VM = struct {
           var idx: u32 = undefined;
           var rk: u32 = undefined;
           self.read3Args(code, &rx, &idx, &rk);
+          @setRuntimeSafety(false);
           vl.asInstance(fp.stack[rx]).fields[idx] = self.RK(rk, fp);
           continue;
         },
@@ -710,6 +717,7 @@ pub const VM = struct {
           var rk: u32 = undefined;
           var idx: u32 = undefined;
           self.read3Args(code, &rx, &rk, &idx);
+          @setRuntimeSafety(false);
           fp.stack[rx] = vl.asInstance(self.RK(rk, fp)).fields[idx];
           continue;
         },

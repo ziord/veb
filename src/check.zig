@@ -225,6 +225,7 @@ pub const TypeChecker = struct {
     var tyBool: Type = Type.init(.{.Concrete = bol});
     var tyNil: Type = Type.init(.{.Concrete = nil});
     var tyAny: Type = Type.newConcrete(.TyAny);
+    var tyVoid: Type = Type.newConcrete(.TyVoid);
     var TyTy: Type = Type.init(.{.Top = tyty});
   };
   pub const GenInfo = struct {
@@ -939,7 +940,11 @@ pub const TypeChecker = struct {
       self.resolving.append(typ);
       var ty = if (_ty.isTop()) _ty.top().child else _ty;
       typ.* = (try self.synthInferClsType(typ, ty)).*;
-      typ.klass().setAsResolved();
+      if (typ.isClass()) {
+        typ.klass().setAsResolved();
+      } else {
+        typ.instance().cls.klass().setAsResolved();
+      }
       _ = self.resolving.pop();
     }
   }
@@ -1352,6 +1357,15 @@ pub const TypeChecker = struct {
     self.ctx.leaveScope();
     node.checked = true;
     return self.void_ty;
+  }
+
+  fn inferScope(self: *Self, node: *ast.ScopeNode) !*Type {
+    if (node.enter) {
+      self.ctx.enterScope();
+    } else {
+      self.ctx.leaveScope();
+    }
+    return &UnitTypes.tyVoid;
   }
 
   fn inferWhile(self: *Self, node: *ast.WhileNode) !*Type {
@@ -2110,7 +2124,7 @@ pub const TypeChecker = struct {
     // lookup node using inferred args.
     // - if found just return the type found
     // - else, do the stuff below, and cache the node
-    var synth_name = self.createSynthName(cls_ty.name, false, &args_inf, node.targs);
+    var synth_name = self.createSynthName(cls_ty.name, false, &_targs, null);
     if (self.findGenInfo(old_cls_node, synth_name)) |info| {
       node.expr.setType(info.typ);
       return info.typ;
@@ -2360,8 +2374,8 @@ pub const TypeChecker = struct {
     node.typ = expr_ty.subtype(self.ctx.allocator());
   }
 
-  fn checkDotAccess(self: *Self, node: *ast.DotAccessNode, cls_ty: *Type, prop: *ast.VarNode) !void {
-    var cls = cls_ty.klass();
+  fn checkDotAccess(self: *Self, node: *ast.DotAccessNode, ty: *Type, prop: *ast.VarNode) !void {
+    var cls = if (ty.isClass()) ty.klass() else ty.instance().cls.klass();
     if (cls.getField(prop.token.value)) |field| {
       node.typ = field.AstVarDecl.ident.typ;
     } else if (cls.getMethodTy(prop.token.value)) |mth_ty| {
@@ -2369,7 +2383,7 @@ pub const TypeChecker = struct {
     } else {
       return self.error_(
         true, prop.token, "{s} has no property '{s}'",
-        .{self.getTypename(cls_ty), prop.token.value}
+        .{self.getTypename(ty), prop.token.value}
       );
     }
   }
@@ -2478,6 +2492,7 @@ pub const TypeChecker = struct {
       .AstOrElse => try self.inferOrElse(node),
       .AstClass => try self.inferClass(node, null),
       .AstDotAccess => |*nd| try self.inferDotAccess(nd),
+      .AstScope => |*nd| try self.inferScope(nd),
       .AstProgram => |*nd| try self.inferProgram(nd),
       .AstIf, .AstElif, .AstSimpleIf,
       .AstCondition, .AstEmpty, .AstControl => return undefined,

@@ -319,7 +319,7 @@ pub const BlockNode = struct {
   }
 
   pub fn getLast(self: *BlockNode) ?*AstNode {
-    if (self.nodes.len() > 0) return self.nodes.getLast();
+    if (self.nodes.isNotEmpty()) return self.nodes.getLast();
     return null;
   }
 
@@ -572,7 +572,7 @@ pub const CallNode = struct {
     tuple.appendSlice(self.args.items()[self.va_start..]);
     var node = util.alloc(AstNode, al);
     node.* = .{.AstTuple = .{.elems = tuple}};
-    if (self.args.len() > 0) {
+    if (self.args.isNotEmpty()) {
       self.args.items()[self.va_start] = node;
     } else {
       self.args.append(node);
@@ -957,6 +957,13 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn isSimpleIf(self: *@This()) bool {
+    return switch (self.*) {
+      .AstSimpleIf => true,
+      else => false,
+    };
+  }
+
   pub inline fn isWhile(self: *@This()) bool {
     return switch (self.*) {
       .AstWhile => true,
@@ -1131,10 +1138,10 @@ pub const AstNode = union(AstType) {
         if (fun.name) |name| {
           return name.token;
         }
-        if (fun.params.len() > 0) {
+        if (fun.params.isNotEmpty()) {
           return fun.params.itemAt(0).ident.token;
         }
-        if (fun.body.AstBlock.nodes.len() > 0) {
+        if (fun.body.AstBlock.nodes.isNotEmpty()) {
           return fun.body.AstBlock.nodes.itemAt(0).getToken();
         }
         // std.debug.print("Could not obtain token from node: {}", .{self});
@@ -1143,22 +1150,22 @@ pub const AstNode = union(AstType) {
       else => {
         switch (self.*) {
           .AstList, .AstTuple => |*col| {
-            if (col.elems.len() > 0) {
+            if (col.elems.isNotEmpty()) {
               return col.elems.itemAt(0).getToken();
             }
           },
           .AstMap => |*map| {
-            if (map.pairs.len() > 0) {
+            if (map.pairs.isNotEmpty()) {
               return map.pairs.itemAt(0).key.getToken();
             }
           },
           .AstBlock => |*blk| {
-            if (blk.nodes.len() > 0) {
+            if (blk.nodes.isNotEmpty()) {
               return blk.nodes.itemAt(0).getToken();
             }
           },
           .AstProgram => |*prog| {
-            if (prog.decls.len() > 0) {
+            if (prog.decls.isNotEmpty()) {
               return prog.decls.itemAt(0).getToken();
             }
           },

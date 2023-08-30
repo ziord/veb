@@ -446,7 +446,7 @@ pub const Parser = struct {
     try self.consume(.TkLSqrBracket);
     var list = &node.*.AstList.elems;
     while (!self.check(.TkEof) and !self.check(.TkRSqrBracket)) {
-      if (list.len() > 0) {
+      if (list.isNotEmpty()) {
         try self.consume(.TkComma);
         if (self.check(.TkRSqrBracket)) {
           break;
@@ -472,7 +472,7 @@ pub const Parser = struct {
     var pairs = &node.*.AstMap.pairs;
     const max_items: usize = MAX_LISTING_ELEMS / 2;
     while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
-      if (pairs.len() > 0) {
+      if (pairs.isNotEmpty()) {
         try self.consume(.TkComma);
         if (self.check(.TkRCurly)) {
           break;
@@ -550,7 +550,7 @@ pub const Parser = struct {
     if (self.match(.TkLCurly)) {
       var list = NodeList.init(self.allocator);
       while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
-        if (list.len() > 0) try self.consume(.TkComma);
+        if (list.isNotEmpty()) try self.consume(.TkComma);
         try self.assertMaxTParams(list.len());
         list.append(try self.typing(false));
       }
@@ -561,7 +561,7 @@ pub const Parser = struct {
     try self.consume(.TkLBracket);
     var args = NodeList.init(self.allocator);
     while (!self.check(.TkEof) and !self.check(.TkRBracket)) {
-      if (args.len() > 0) try self.consume(.TkComma);
+      if (args.isNotEmpty()) try self.consume(.TkComma);
       args.append(try self.parseExpr());
     }
     try self.consume(.TkRBracket);
@@ -746,7 +746,7 @@ pub const Parser = struct {
     try self.consume(.TkLCurly);
     var gen = Generic.init(self.allocator, typ);
     while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
-      if (gen.tparams.len() > 0) try self.consume(.TkComma);
+      if (gen.tparams.isNotEmpty()) try self.consume(.TkComma);
       try self.assertMaxTParams(gen.tparamsLen());
       var param = try self.aliasParam();
       try self.assertUniqueTParams(&gen, &param);
@@ -831,7 +831,7 @@ pub const Parser = struct {
     try self.consume(.TkLBracket);
     var fun = Function.init(self.allocator, undefined, tparams, null);
     while (!self.check(.TkEof) and !self.check(.TkRBracket)) {
-      if (fun.params.len() > 0) try self.consume(.TkComma);
+      if (fun.params.isNotEmpty()) try self.consume(.TkComma);
       fun.params.append((try self.tExpr()).box(self.allocator));
     }
     try self.consume(.TkRBracket);
@@ -850,7 +850,7 @@ pub const Parser = struct {
     }
     gen = ret.generic();
     while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
-      if (gen.tparams.len() > 0) try self.consume(.TkComma);
+      if (gen.tparams.isNotEmpty()) try self.consume(.TkComma);
       try self.assertMaxTParams(gen.tparamsLen());
       var param = try self.tExpr();
       gen.append(param.box(self.allocator));
@@ -1156,7 +1156,7 @@ pub const Parser = struct {
     var disamb = std.StringHashMap(u32).init(self.allocator);
     if (self.match(.TkLBracket)) {
       while (!self.check(.TkEof) and !self.check(.TkRBracket)) {
-        if (params.len() > 0) {
+        if (params.isNotEmpty()) {
           try self.consume(.TkComma);
         }
         try self.consume(.TkIdent);

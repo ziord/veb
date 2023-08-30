@@ -1141,7 +1141,7 @@ pub const Compiler = struct {
     };
     var elifs_then_to_end: ds.ArrayList(usize) = undefined;
     // elifs-
-    if (node.elifs.len() > 0) {
+    if (node.elifs.isNotEmpty()) {
       // first, patch cond_to_elif_or_else here
       self.fun.code.patch2ArgsJmp(cond_to_elif_or_else);
       elifs_then_to_end = ds.ArrayList(usize).init(self.alloc());
@@ -1164,7 +1164,7 @@ pub const Compiler = struct {
     }
     // else-
     _ = try self.cBlock(&node.els.AstBlock, reg);
-    if (node.elifs.len() > 0) {
+    if (node.elifs.isNotEmpty()) {
       // patch up elif_then_to_end 
       for (elifs_then_to_end.items()) |idx| {
         self.fun.code.patch2ArgsJmp(idx);

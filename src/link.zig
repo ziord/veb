@@ -129,7 +129,7 @@ pub fn GenScope(comptime K: type, comptime V: type) type {
     }
 
     pub fn clear(self: *@This()) void {
-      while (self.decls.len() > 0) {
+      while (self.decls.isNotEmpty()) {
         _ = self.decls.pop();
       }
     }

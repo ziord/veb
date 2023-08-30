@@ -54,9 +54,9 @@ const TypeEnv = struct {
     std.debug.print("------------Globals------------\n", .{});
     var i: usize = self.global.len();
     while (i > 0): (i -= 1) {
-      var itr = glob.items[i - 1].map.iterator();
+      var itr = glob.itemAt(i - 1).map.iterator();
       while (itr.next()) |entry| {
-        std.debug.print("name: '{s}', ty: '{s}'\n", .{entry.key_ptr.*, entry.value_ptr.*.typename(self.global.allocator)});
+        std.debug.print("name: '{s}', ty: '{s}'\n", .{entry.key_ptr.*, entry.value_ptr.*.typename(self.global.allocator())});
       }
       std.debug.print("-------------------------------\n", .{});
     }
@@ -64,7 +64,7 @@ const TypeEnv = struct {
     var itr_n = self.narrowed.iterator();
     while (itr_n.next()) |entry| {
       var ty = entry.value_ptr.*;
-      std.debug.print("name: '{s}', ty: '{s}'\n", .{entry.key_ptr.*, ty.typename(self.global.allocator)});
+      std.debug.print("name: '{s}', ty: '{s}'\n", .{entry.key_ptr.*, ty.typename(self.global.allocator())});
     }
     std.debug.print("-------------------------------\n", .{});
   }
@@ -787,27 +787,25 @@ pub const TypeChecker = struct {
     std.debug.assert(node.prev_next.count(FlowNode.isNext) == 0);
   }
 
-  fn flowInferMeta(self: *Self, node: *FlowNode) !void {
-    if (node.res.isResolved()) return;
-    if (node.tag == .CfgEntry) {
-      return try self.flowInferEntry(node);
+  fn flowInferMeta(self: *Self, flo_node: *FlowNode, ast_node: *Node) !void {
+    if (flo_node.res.isResolved()) return;
+    if (flo_node.tag == .CfgEntry) {
+      return try self.flowInferEntry(flo_node);
     }
-    if (node.tag == .CfgExit) {
-      return try self.flowInferExit(node);
+    if (flo_node.tag == .CfgExit) {
+      return try self.flowInferExit(flo_node);
     }
-    return self.flowInferNode(node);
+    return self.flowInferNode(flo_node, ast_node);
   }
 
-  fn flowInferNode(self: *Self, node: *FlowNode) !void {
-    if (node.res.isResolved()) return;
-    // resolve first, so in case of error, we skip this node
-    node.res = .Resolved;
-    _ = try self.infer(node.node);
+  fn flowInferNode(self: *Self, flo_node: *FlowNode, ast_node: *Node) !void {
+    if (flo_node.res.isResolved()) return;
+    _ = try self.infer(ast_node);
   }
 
-  fn flowInferCondition(self: *Self, node: *FlowNode) !void {
-    if (node.res.isResolved()) return;
-    node.res = .Processing;
+  fn flowInferCondition(self: *Self, flo_node: *FlowNode, ast_node: *Node) !void {
+    if (flo_node.res.isResolved()) return;
+    flo_node.res = .Processing;
     // TODO: is there a need to explicitly merge types from incoming edges?
     self.ctx.varScope.pushScope();
     errdefer self.ctx.varScope.popScope();
@@ -817,11 +815,11 @@ pub const TypeChecker = struct {
     // on the condition expression.
     var env = TypeEnv.init(self.ctx.allocator(), null);
     env.global.pushScope();
-    self.narrow(node.node.AstCondition.cond, &env, true) catch |e| return e;
+    self.narrow(ast_node.AstCondition.cond, &env, true) catch |e| return e;
     // TODO: rework token extraction for better error reporting
-    try self.checkCondition(node.node.getType().?, node.node.AstCondition.cond.getToken());
+    try self.checkCondition(ast_node.getType().?, ast_node.AstCondition.cond.getToken());
     // get all nodes on the true edges & flowInfer with env
-    var out_nodes = node.getOutgoingNodes(.ETrue, self.ctx.allocator());
+    var out_nodes = flo_node.getOutgoingNodes(.ETrue, self.ctx.allocator());
     self.copyEnv(&env);
     for (out_nodes.items()) |nd| {
       try self.flowInfer(nd, false);
@@ -829,12 +827,12 @@ pub const TypeChecker = struct {
     self.ctx.varScope.popScope();
     self.ctx.varScope.pushScope();
     // get all nodes on the false edges & flowInfer with not\env
-    out_nodes = node.getOutgoingNodes(.EFalse, self.ctx.allocator());
+    out_nodes = flo_node.getOutgoingNodes(.EFalse, self.ctx.allocator());
     env.clear();
     env.global.pushScope();
     // TODO: finetune
     var last = self.diag.count();
-    self.narrow(node.node.AstCondition.cond, &env, false) catch {
+    self.narrow(ast_node.AstCondition.cond, &env, false) catch {
       self.diag.popUntil(last);
       env.narrowed.clearRetainingCapacity();
     };
@@ -842,13 +840,13 @@ pub const TypeChecker = struct {
     for (out_nodes.items()) |nd| {
       try self.flowInfer(nd, false);
     }
-    node.res = .Resolved;
+    flo_node.res = .Resolved;
     // when type checking conditions along the false path, check the first sequential node
     // after the nodes on the false path. If that node has only one incoming edge,
     // then don’t pop the type information gathered on the false path
     if (out_nodes.len() == 0) {
       var edges: usize = 0;
-      for (node.prev_next.items()) |itm| {
+      for (flo_node.prev_next.items()) |itm| {
         // get the first sequential node after the nodes on the false path
         if (itm.next and itm.flo.edge == .ESequential) {
           // track the number of incoming edges from this node
@@ -873,8 +871,47 @@ pub const TypeChecker = struct {
     self.ctx.varScope.popScope();
   }
 
-  fn flowInfer(self: *Self, node: *FlowNode, inferNext: bool) TypeCheckError!void {
-    for (node.prev_next.items()) |item| {
+  inline fn resolveNode(self: *Self, flo_node: *FlowNode, ast_node: *Node) !void {
+    switch (ast_node.*) {
+      .AstCondition => try self.flowInferCondition(flo_node, ast_node),
+      .AstEmpty => try self.flowInferMeta(flo_node, ast_node),
+      .AstControl => {},
+      .AstFun => |*fun| {
+        // the entry flow-node sometimes stores a FunNode in its basic block (for future ref).
+        // so we check if this flow-node is actually an entry node, or just a regular flow-node
+        if (flo_node.isEntryNode()) {
+          try self.flowInferEntry(flo_node);
+        } else {
+          // Some functions may be mutually recursive, or may depend on some other
+          // functions not yet known at the time of inference of this current one.
+          // So only partially infer this function. Full inference is done by need.
+          if (!fun.isAnonymous()) {
+            _ = try self.inferFunPartial(ast_node);
+          } else {
+            _ = try self.inferFun(ast_node, null);
+          }
+        }
+      },
+      .AstClass => {
+        if (flo_node.isEntryNode()) {
+          try self.flowInferEntry(flo_node);
+        } else {
+          _ = try self.inferClassPartial(ast_node);
+        }
+      },
+      else => try self.flowInferNode(flo_node, ast_node),
+    }
+  }
+
+  inline fn resolveBB(self: *Self, flo_node: *FlowNode) void {
+    for (flo_node.bb.items()) |ast_node| {
+      self.resolveNode(flo_node, ast_node) catch continue;
+    }
+    flo_node.res = .Resolved;
+  }
+
+  fn flowInfer(self: *Self, flo_node: *FlowNode, inferNext: bool) TypeCheckError!void {
+    for (flo_node.prev_next.items()) |item| {
       // we can only proceed to resolve this node when all 
       // incoming edges have been resolved or when we're resolving 
       // all nodes on the true edges of a Condition.
@@ -884,41 +921,10 @@ pub const TypeChecker = struct {
         }
       }
     }
-    switch (node.node.*) {
-      .AstCondition => try self.flowInferCondition(node),
-      .AstEmpty => try self.flowInferMeta(node),
-      .AstControl => {},
-      .AstFun => {
-        if (node.isEntryNode()) {
-          try self.flowInferEntry(node);
-        } else {
-          // Some functions may be mutually recursive, or may depend on some other
-          // functions not yet known at the time of inference of this current one.
-          // So only partially infer this function. Full inference is done by need.
-          if (!node.node.AstFun.isAnonymous()) {
-            _ = try self.inferFunPartial(node.node);
-          } else {
-            _ = try self.inferFun(node.node, null);
-          }
-          node.res = .Resolved;
-        }
-      },
-      .AstClass => {
-        if (node.isEntryNode()) {
-          try self.flowInferEntry(node);
-        } else {
-          _ = try self.inferClassPartial(node.node);
-          node.res = .Resolved;
-        }
-      },
-      else => try self.flowInferNode(node),
-    }
+    self.resolveBB(flo_node);
     if (!inferNext) return;
-    for (node.prev_next.items()) |item| {
+    for (flo_node.prev_next.items()) |item| {
       if (item.next) {
-        // FIXME: this is just a hack, don't know how to fix this yet.
-        //        temporarily fixes cycles arising from while loops
-        if (item.flo.node.isCondition() and item.flo.res.isResolved()) continue;
         try self.flowInfer(item.flo, inferNext);
       }
     }
@@ -1461,10 +1467,12 @@ pub const TypeChecker = struct {
     var prev_nodes = self.getPrevFlowNodes(flo.exit);
     // unionify all return types at exit
     var uni = Union.init(self.ctx.allocator());
-    for (prev_nodes.items()) |nd| {
-      if (nd.node.isRet()) {
-        if (nd.node.getType()) |ty| {
-          uni.set(ty);
+    for (prev_nodes.items()) |flo_nd| {
+      if (flo_nd.bb.getLast()) |nd| {
+        if (nd.isRet()) {
+          if (nd.getType()) |ty| {
+            uni.set(ty);
+          }
         }
       }
     }
@@ -1481,41 +1489,40 @@ pub const TypeChecker = struct {
       // builtin function types are fully well-typed
       return node.AstFun.ret.?.AstNType.typ;
     }
-    // TODO: improve error message token - nd.node.getToken()
-    var prev_nodes = self.getPrevFlowNodes(flo.exit);
+    var prev_flo_nodes = self.getPrevFlowNodes(flo.exit);
     var has_void_ty = false;
     var has_rec_ty = false;
     var has_non_void_ty = false;
     var has_noreturn_ty = false;
     var has_return_node = false;
-    for (prev_nodes.items()) |nd| {
+    for (prev_flo_nodes.items()) |flo_nd| {
       // skip dead node, since it's most likely at exit
-      if (nd.isDeadNode()) {
-        continue;
-      }
-      if (nd.node.isRet()) {
-        has_return_node = true;
-        if (nd.node.getType()) |ty| {
-          if (ty.isRecursive()) {
-            has_rec_ty = true;
-          } else if (ty.isVoidTy()) {
+      if (flo_nd.isDeadNode()) continue;
+      if (flo_nd.bb.getLast()) |nd| {
+        if (nd.isRet()) {
+          has_return_node = true;
+          if (nd.getType()) |ty| {
+            if (ty.isRecursive()) {
+              has_rec_ty = true;
+            } else if (ty.isVoidTy()) {
+              has_void_ty = true;
+            } else if (ty.isNoreturnTy()) {
+              has_noreturn_ty = true;
+            } else {
+              has_non_void_ty = true;
+            }
+          } else {
             has_void_ty = true;
-          } else if (ty.isNoreturnTy()) {
+          }
+        } else if (nd.getType()) |ty| {
+          if (ty.isNoreturnTy()) {
             has_noreturn_ty = true;
           } else {
-            has_non_void_ty = true;
+            has_void_ty = true;
           }
         } else {
           has_void_ty = true;
         }
-      } else if (nd.node.getType()) |ty| {
-        if (ty.isNoreturnTy()) {
-          has_noreturn_ty = true;
-        } else {
-          has_void_ty = true;
-        }
-      } else {
-        has_void_ty = true;
       }
     }
     // if we find the function has type noreturn, and there's no return node in the function,
@@ -1528,54 +1535,56 @@ pub const TypeChecker = struct {
     var void_ty: *Type = self.void_ty;
     var nvr_ty: *Type = if (has_rec_ty) Type.newNever(self.ctx.allocator()) else undefined;
     // unionify all return types at exit
-    for (prev_nodes.items()) |nd| {
+    for (prev_flo_nodes.items()) |flo_nd| {
       // skip dead node, since it's most likely at exit
-      if (nd.isDeadNode()) {
-        continue;
-      }
-      var typ = if (!nd.node.isRet()) void_ty else nd.node.getType() orelse void_ty;
-      if (!has_void_ty and typ.isVoidTy()) {
-        continue;
-      }
-      if (has_rec_ty) {
-        if (has_non_void_ty) {
-          if (typ.isRecursive()) {
-            continue;
-          }
-        } else if (has_void_ty or typ.isRecursive()) {
-          typ = nvr_ty;
+      if (flo_nd.isDeadNode()) continue;
+      if (flo_nd.bb.getLast()) |nd| {
+        var typ = if (!nd.isRet()) void_ty else nd.getType() orelse void_ty;
+        if (!has_void_ty and typ.isVoidTy()) {
+          continue;
         }
+        if (has_rec_ty) {
+          if (has_non_void_ty) {
+            if (typ.isRecursive()) {
+              continue;
+            }
+          } else if (has_void_ty or typ.isRecursive()) {
+            typ = nvr_ty;
+          }
+        }
+        uni.set(typ);
       }
-      uni.set(typ);
     }
     if (has_noreturn_ty) uni.set(Type.newConcrete(.TyNoReturn).box(self.ctx.allocator()));
     var inf_ret_ty = uni.toType();
     if (node.AstFun.ret) |ret| {
       var ret_ty = ret.AstNType.typ;
-      for (prev_nodes.items()) |nd| {
-        if (nd.isDeadNode()) continue;
-        if (nd.node.isRet()) {
-          if (nd.node.AstRet.typ) |typ| {
-            if (typ.isRecursive()) {
-              continue;
+      for (prev_flo_nodes.items()) |flo_nd| {
+        if (flo_nd.isDeadNode()) continue;
+        if (flo_nd.bb.getLast()) |nd| {
+          if (nd.isRet()) {
+            if (nd.AstRet.typ) |typ| {
+              if (typ.isRecursive()) {
+                continue;
+              }
+              if (!ret_ty.isRelatedTo(typ, .RCAny, self.ctx.allocator())) {
+                return self.error_(
+                  true, nd.getToken(),
+                  "Expected return type '{s}', but got '{s}'",
+                  .{self.getTypename(ret_ty), self.getTypename(typ)}
+                );
+              }
             }
-            if (!ret_ty.isRelatedTo(typ, .RCAny, self.ctx.allocator())) {
-              return self.error_(
-                true, nd.node.getToken(),
-                "Expected return type '{s}', but got '{s}'",
-                .{self.getTypename(ret_ty), self.getTypename(typ)}
-              );
-            }
+            // TODO: else { what happens here? }
+          } else if (!ret_ty.isLikeVoid() and !ret_ty.isNoreturnTy()) {
+            // control reaches exit from this node (`nd`), although this node
+            // doesn't return anything hence (void), but return type isn't void
+            return self.error_(
+              true, nd.getToken(),
+              "Control flow reaches exit from this point without returning type '{s}'",
+              .{self.getTypename(ret_ty)}
+            );
           }
-          // TODO: else { what happens here? }
-        } else if (!ret_ty.isLikeVoid() and !ret_ty.isNoreturnTy()) {
-          // control reaches exit from this node (`nd`), although this node
-          // doesn't return anything hence (void), but return type isn't void
-          return self.error_(
-            true, nd.node.getToken(),
-            "Control flow reaches exit from this point without returning type '{s}'",
-            .{self.getTypename(ret_ty)}
-          );
         }
       }
       if (!ret_ty.isRelatedTo(&inf_ret_ty, .RCAny, self.ctx.allocator())) {
@@ -1587,7 +1596,7 @@ pub const TypeChecker = struct {
           );
         } else {
           var token = (
-            if (prev_nodes.len() > 0) prev_nodes.itemAt(0).node.getToken()
+            if (prev_flo_nodes.isNotEmpty()) prev_flo_nodes.itemAt(0).bb.nodes.itemAt(0).getToken()
             else node.getToken()
           );
           return self.error_(
@@ -1623,13 +1632,15 @@ pub const TypeChecker = struct {
     // auto-returning of the self parameter after init() is called
     var list = self.getPrevFlowNodes(self.cfg.lookupFunc(node).?.exit);
     var errors = false;
-    for (list.items()) |nd| {
-      if (nd.node.isRet()) {
-        errors = true;
-        self.softError(
-          nd.node.getToken(),
-          "illegal return statement in `init` method", .{}
-        );
+    for (list.items()) |flo_nd| {
+      for (flo_nd.bb.items()) |nd| {
+        if (nd.isRet()) {
+          errors = true;
+          self.softError(
+            nd.getToken(),
+            "illegal return statement in `init` method", .{}
+          );
+        }
       }
     }
     if (errors) return error.CheckError;
@@ -1656,7 +1667,7 @@ pub const TypeChecker = struct {
           _ = try self.inferVarDecl(&itm.AstVarDecl);
         }
         ty.klass().fields = cls.fields;
-        if (cls.methods.len() > 0) {
+        if (cls.methods.isNotEmpty()) {
           self.insertVar(SelfVar, ty);
           defer self.deleteVar(SelfVar);
           for (cls.methods.items()) |itm| {
@@ -2012,7 +2023,7 @@ pub const TypeChecker = struct {
       node.variadic = _nd.AstFun.variadic;
       var fun_ty = try self.createFunType(_nd, null);
       try self.validateCallArgCount(fun_ty.function(), node);
-    } else if (node.args.len() > 0) {
+    } else if (node.args.isNotEmpty()) {
       // if the class has no init method, it shouldn't be called with arguments
       return self.error_(
         true, node.expr.getToken(),
@@ -2526,18 +2537,7 @@ pub const TypeChecker = struct {
     };
     self.linker = &linker;
     try self.buildProgramFlow(node, display_diag);
-    self.flowInferEntry(self.cfg.program.entry) catch |e| {
-      if (e != error.DeadCode) {
-        // just stack up as much errors as we can from here.
-        var nodes = self.cfg.program.entry.getOutgoingNodes(.ESequential, self.ctx.allocator());
-        for (nodes.items()) |flo| {
-          if (flo.res.isResolved()) continue;
-          self.flowInfer(flo, false) catch {
-            flo.res = .Resolved;
-          };
-        }
-      }
-    };
+    self.flowInferEntry(self.cfg.program.entry) catch  {};
     self.analyzer.analyzeDeadCodeWithTypes(self.cfg.program.entry) catch {};
     if (self.diag.hasAny()) {
       var has_error = self.diag.hasErrors();

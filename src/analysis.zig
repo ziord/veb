@@ -25,7 +25,7 @@ pub const Analysis = struct {
       if (itm.next and !itm.flo.isExitNode()) {
         self.diag.addDiagnostics(
           .DiagError,
-          itm.flo.node.getToken(),
+          itm.flo.bb.nodes.itemAt(0).getToken(),
           "Dead code: control flow never reaches this code", .{}
         );
       }
@@ -40,38 +40,52 @@ pub const Analysis = struct {
     _ = self;
     for (flo.prev_next.items()) |fd| {
       if (fd.prev) {
-        if (fd.flo.node.getType()) |typ| {
-          if (!typ.isNoreturnTy()) return true;
-        } else {
-          return true;
+        if (fd.flo.bb.getLast()) |node| {
+          if (node.getType()) |typ| {
+            if (!typ.isNoreturnTy()) return true;
+          } else {
+            return true;
+          }
         }
       }
     }
     return false;
   }
 
-  fn checkDeadCodeWithTypes(self: *Self, nodes: *FlowList, start: usize) !void {
-    for (nodes.items()) |itm| {
-      if (itm.node.isEmpty()) continue;
-      if (itm.node.getType()) |typ| {
-        if (typ.isNoreturnTy() and !itm.node.isFun()) { // skip func decls
-          for (itm.prev_next.items()) |fd| {
-            if (fd.next and !fd.flo.isExitNode() and !self.hasAtLeastOneIncomingEdgeWithTypeNotNoreturn(fd.flo)) {
+  fn checkDeadCodeWithTypes(self: *Self, flo_nodes: *FlowList, start: usize) !void {
+    for (flo_nodes.items()) |flo_node| {
+      for (flo_node.bb.items(), 0..) |node, i| {
+        if (node.isEmpty()) continue;
+        if (node.getType()) |typ| {
+          if (typ.isNoreturnTy() and !node.isFun()) { // skip func decls
+            if (node != flo_node.bb.getLast().?) {
+              var next = flo_node.bb.nodes.itemAt(i + 1);
               self.diag.addDiagnostics(
                 .DiagError,
-                fd.flo.node.getToken(),
+                next.getToken(),
                 "Dead code: control flow never reaches this code", .{}
               );
-              break;
+            } else {
+              for (flo_node.prev_next.items()) |fln| {
+                // hasAtLeastOneIncomingEdgeWithTypeNotNoreturn() <- ensure the code is not reachable from other parts
+                if (fln.next and !fln.flo.isExitNode() and !self.hasAtLeastOneIncomingEdgeWithTypeNotNoreturn(fln.flo)) {
+                  self.diag.addDiagnostics(
+                    .DiagError,
+                    fln.flo.bb.nodes.itemAt(0).getToken(),
+                    "Dead code: control flow never reaches this code", .{}
+                  );
+                  break;
+                }
+              }
             }
           }
         }
-      }
-      if (itm.node.isCondition()) {
-        var tmp = itm.getOutgoingNodes(.ETrue, self.diag.data.allocator);
-        try self.checkDeadCodeWithTypes(&tmp, start);
-        tmp = itm.getOutgoingNodes(.EFalse, self.diag.data.allocator);
-        try self.checkDeadCodeWithTypes(&tmp, start);
+        if (node.isCondition()) {
+          var tmp = flo_node.getOutgoingNodes(.ETrue, self.diag.data.allocator);
+          try self.checkDeadCodeWithTypes(&tmp, start);
+          tmp = flo_node.getOutgoingNodes(.EFalse, self.diag.data.allocator);
+          try self.checkDeadCodeWithTypes(&tmp, start);
+        }
       }
     }
     if (self.diag.count() > start) {

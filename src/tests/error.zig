@@ -765,3 +765,23 @@ test "generic-classes-3" {
     "Cannot initialize type 'Poo{miah}' with type 'Fox{mia} instance'"
   });
 }
+
+test "loopy" {
+  var src =
+  \\ let x: num | str = 5
+  \\ while x is num and x < 25 do
+  \\  let j = 0
+  \\  while j < x
+  \\    j += '1'
+  \\    continue
+  \\  end
+  \\  x += j
+  \\  break
+  \\ end
+  \\ x + 5
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "Expected type 'num' + 'num', but got 'num' + 'str'",
+    "Expected type 'num' + 'num', but got 'num | str' + 'num'",
+  });
+}

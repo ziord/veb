@@ -1061,7 +1061,7 @@ test "while loop" {
   \\     continue
   \\     # x += 5
   \\    end
-  \\    x
+  \\    assert(x == 40, 'x should be 40')
   \\ end
   \\ let x: num | str = 5
   \\ while x is num and x < 25 do
@@ -1074,7 +1074,7 @@ test "while loop" {
   \\  break
   \\  # x += 5
   \\ end
-  \\ x
+  \\ assert(x == 10, 'x should be 10')
   ;
   try doRuntimeTest(src);
   var src2 =

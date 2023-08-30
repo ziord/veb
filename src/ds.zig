@@ -11,12 +11,26 @@ pub fn ArrayList(comptime T: type) type {
       return @This() {.list = std.ArrayList(T).init(al)};
     }
 
+    pub inline fn initWith(al: Allocator, item: T) @This() {
+      var list = @This() {.list = std.ArrayList(T).init(al)};
+      list.append(item);
+      return list;
+    }
+
     pub inline fn items(self: *@This()) []T {
       return self.list.items;
     }
 
     pub inline fn itemAt(self: *@This(), pos: usize) T {
       return self.list.items[pos];
+    }
+
+    pub inline fn isEmpty(self: *@This()) bool {
+      return self.list.items.len == 0;
+    }
+
+    pub inline fn isNotEmpty(self: *@This()) bool {
+      return self.list.items.len > 0;
     }
 
     pub inline fn append(self: *@This(), item: T) void {

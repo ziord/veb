@@ -414,7 +414,7 @@ pub const Class = struct {
 
   pub inline fn isInstantiatedGeneric(self: *@This()) bool {
     if (self.tparams) |tparams| {
-      return (tparams.len() > 0 and !tparams.itemAt(0).isVariable());
+      return (tparams.isNotEmpty() and !tparams.itemAt(0).isVariable());
     }
     return false;
   }

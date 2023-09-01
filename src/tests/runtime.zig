@@ -214,28 +214,28 @@ test "empty generic types" {
   try doRuntimeTest(src);
 }
 
-// test "blocks" {
-//   var src =
-//   \\ let x = 'over the garden wall!'
-//   \\ do
-//   \\   let x = 5
-//   \\   let y = 10
-//   \\   let z = {x: x * y}
-//   \\   assert(z[x] == 50, 'should be 50')
-//   \\ end
-//   \\ assert(x == 'over the garden wall!', 'x should be "over the garden wall!"')
-//   \\ do
-//   \\   let x = 't-rex'
-//   \\   do
-//   \\      x = 'foo-foo'
-//   \\      assert(x == 'foo-foo', 'should be foo-foo')
-//   \\   end
-//   \\   assert(x == 't-rex', 'should be t-rex')
-//   \\ end
-//   \\ assert(x == 'over the garden wall!', 'x should still be "over the garden wall!"')
-//   ;
-//   try doRuntimeTest(src);
-// }
+test "blocks" {
+  var src =
+  \\ let x = 'over the garden wall!'
+  \\ do
+  \\   let x = 5
+  \\   let y = 10
+  \\   let z = {x: x * y}
+  \\   assert(z[x] == 50, 'should be 50')
+  \\ end
+  \\ assert(x == 'over the garden wall!', 'x should be "over the garden wall!"')
+  \\ do
+  \\   let x = 't-rex'
+  \\   do
+  \\      x = 'foo-foo'
+  \\      assert(x == 'foo-foo', 'should be foo-foo')
+  \\   end
+  \\   assert(x == 'foo-foo', 'should be foo-foo')
+  \\ end
+  \\ assert(x == 'over the garden wall!', 'x should still be "over the garden wall!"')
+  ;
+  try doRuntimeTest(src);
+}
 
 test "linking" {
   var src =
@@ -733,17 +733,19 @@ test "narrowing-10" {
 test "narrowing-11" {
   var src =
   \\ let x: list{num | list{num}} | num = [9 as num | list{num}]
-  \\ let p = 0
+  \\ let p = 10
   \\ if x is list
   \\    if x[0] is list
   \\        p /= 5
+  \\    else
+  \\        p *= x[0]
   \\    end
   \\ elif x is num
   \\    p += x
   \\ else
   \\    x  # never
   \\ end
-  \\ p
+  \\ assert(p == 90, 'p should be 90')
   ;
   try doRuntimeTest(src);
 }
@@ -760,7 +762,7 @@ test "narrowing-12" {
   \\ else
   \\    p = x * x
   \\ end
-  \\ p
+  \\ assert(p == 25, 'p should be 25')
   ;
   try doRuntimeTest(src);
 }
@@ -779,7 +781,7 @@ test "narrowing-13" {
   \\ else
   \\    x # never
   \\ end
-  \\ p
+  \\ assert(p == 0, 'p should be 0')
   ;
   try doRuntimeTest(src);
 }

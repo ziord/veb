@@ -1050,13 +1050,25 @@ pub const Parser = struct {
     return try self._parse(.Assignment);
   }
 
-  fn blockStmt(self: *Self, skip_do: bool, skip_nl: bool) anyerror!*Node {
+  fn blockStmt(self: *Self, skip_do: bool, skip_nl: bool, add_scope: bool) anyerror!*Node {
     if (!skip_do) try self.consume(.TkDo);
     try self.consume(.TkNewline);
     var node = self.newNode();
     node.* = .{.AstBlock = ast.BlockNode.init(self.allocator, null)};
+    if (add_scope) {
+      // enter scope
+      var tmp = self.newNode();
+      tmp.* = .{.AstScope = ast.ScopeNode.init(true, false)};
+      node.AstBlock.nodes.append(tmp);
+    }
     while (!self.check(.TkEof) and !self.check(.TkEnd)) {
       try self.addStatement(&node.AstBlock.nodes);
+    }
+    if (add_scope) {
+      // leave scope
+      var tmp = self.newNode();
+      tmp.* = .{.AstScope = ast.ScopeNode.init(false, true)};
+      node.AstBlock.nodes.append(tmp);
     }
     try self.consume(.TkEnd);
     // eat newline if present
@@ -1142,7 +1154,7 @@ pub const Parser = struct {
     // while cond do? ... end
     self.incLoop();
     var cond = try self.parseExpr();
-    var then = try self.blockStmt(!self.check(.TkDo), false);
+    var then = try self.blockStmt(!self.check(.TkDo), false, true);
     self.decLoop();
     var node = self.newNode();
     node.* = .{.AstWhile = ast.WhileNode.init(cond, then)};
@@ -1233,7 +1245,7 @@ pub const Parser = struct {
       ret = try self.returnSig();
     }
     var body = blk: {
-      if (!lambda) break :blk try self.blockStmt(true, lambda);
+      if (!lambda) break :blk try self.blockStmt(true, lambda, false);
       if (self.match(.TkEqGrt)) {
         var expr = try self.parseExpr();
         var block = self.newNode();
@@ -1416,7 +1428,7 @@ pub const Parser = struct {
     } else if (self.match(.TkType)) {
       return try self.typeAlias();
     } else if (self.check(.TkDo)) {
-      return try self.blockStmt(false, false);
+      return try self.blockStmt(false, false, true);
     } else if (self.match(.TkNewline)) {
       return error.EmptyStatement;
     } else if (self.match(.TkIf)) {

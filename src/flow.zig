@@ -231,13 +231,6 @@ pub const CFGBuilder = struct {
     return node;
   }
 
-  fn createScopeNode(self: *Self, allocator: std.mem.Allocator, enter: bool) *Node {
-    _ = self;
-    var node = util.alloc(Node, allocator);
-    node.* = .{.AstScope = ast.ScopeNode.init(enter, !enter)};
-    return node;
-  }
-
   fn getFlowNode(self: *Self, nodes: NodeList, tag: FlowTag) *FlowNode {
     return FlowNode.init(tag, nodes, self.alloc);
   }
@@ -299,8 +292,7 @@ pub const CFGBuilder = struct {
     return flow.toList(self.alloc);
   }
 
-  fn linkNodeList(self: *Self, nodes: *NodeList, cond: ?*Node, prev: FlowList, edge: FlowEdge, inc_scope: bool) FlowList {
-    _ = inc_scope;
+  fn linkNodeList(self: *Self, nodes: *NodeList, cond: ?*Node, prev: FlowList, edge: FlowEdge) FlowList {
     // cond indicates whether this block is from a branching entry or a normal do..end block
     var _prev = prev;
     var i: usize = 0;
@@ -352,7 +344,10 @@ pub const CFGBuilder = struct {
             bb_nodes.append(item);
             _prev = self.linkAtomic(bb_nodes, _prev, edge, .CfgOther);
             if (!is_last) {
-              _prev.append(self.dead);
+              // if the next thing after this ControlNode thing isn't a ScopeNode, then it's def dead
+              if (!nodes.itemAt(i + 1).isScope()) {
+                _prev.append(self.dead);
+              }
             }
             atomic = false;
           },
@@ -394,7 +389,7 @@ pub const CFGBuilder = struct {
   
   fn linkBlock(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge) FlowList {
     var block = &node.AstBlock;
-    return self.linkNodeList(&block.nodes, block.cond, prev, edge, false);
+    return self.linkNodeList(&block.nodes, block.cond, prev, edge);
   }
 
   fn linkSimpleIf(self: *Self, ast_node: *Node, bb_nodes: *NodeList, prev: FlowList, edge: FlowEdge) FlowList {
@@ -440,7 +435,7 @@ pub const CFGBuilder = struct {
     }
     synth.nodes.extend(&fun.body.AstBlock.nodes);
     var body = @as(Node, .{.AstBlock = synth});
-    var flo_meta = builder.buildBlock(self.cfg, &body, false);
+    var flo_meta = builder.buildBlock(self.cfg, &body);
     // save node for future lookup()s
     flo_meta.entry.bb.appendNode(node);
     self.cfg.putFunc(flo_meta);
@@ -460,7 +455,7 @@ pub const CFGBuilder = struct {
     synth.nodes.extend(cls.fields);
     synth.nodes.extend(cls.methods);
     var body = @as(Node, .{.AstBlock = synth});
-    var flo_meta = builder.buildBlock(self.cfg, &body, false);
+    var flo_meta = builder.buildBlock(self.cfg, &body);
     // save node for future lookup()s
     flo_meta.entry.bb.appendNode(node);
     self.cfg.putClass(flo_meta);
@@ -469,7 +464,7 @@ pub const CFGBuilder = struct {
 
   fn linkProgram(self: *Self, ast_node: *Node, prev: FlowList, edge: FlowEdge) void {
     var node = &ast_node.AstProgram;
-    var _prev = self.linkNodeList(&node.decls, null, prev, edge, false);
+    var _prev = self.linkNodeList(&node.decls, null, prev, edge);
     self.connectVertices(_prev, self.exit);
     self.cfg.program = FlowMeta.init(self.entry, self.exit, self.dead);
   }
@@ -509,10 +504,10 @@ pub const CFGBuilder = struct {
     _ = self.linkClass(node, self.entry.toList(self.alloc), .ESequential);
   }
 
-  pub fn buildBlock(self: *Self, cfg: *CFG, ast_node: *Node, inc_scope: bool) FlowMeta {
+  pub fn buildBlock(self: *Self, cfg: *CFG, ast_node: *Node) FlowMeta {
     self.cfg = cfg;
     var node = &ast_node.AstBlock;
-    var _prev = self.linkNodeList(&node.nodes, node.cond, self.entry.toList(self.alloc), .ESequential, inc_scope);
+    var _prev = self.linkNodeList(&node.nodes, node.cond, self.entry.toList(self.alloc), .ESequential);
     self.connectVertices(_prev, self.exit);
     return FlowMeta.init(self.entry, self.exit, self.dead);
   }

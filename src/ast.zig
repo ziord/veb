@@ -1025,6 +1025,7 @@ pub const AstNode = union(AstType) {
       .AstVar => |*vr| vr,
       .AstSubscript => |*sub| sub.narrowed,
       .AstDeref => |*der| der.narrowed,
+      .AstDotAccess => |*da| da.narrowed,
       else => null,
     };
   }

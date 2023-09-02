@@ -668,8 +668,8 @@ pub const VM = struct {
           fp.stack[rx] = vl.boolVal(vl.valueFalsy(self.RK(rk, fp)));
           continue;
         },
-        .Finc => {
-          // finc rx (1-arg using 2-arg fmt)
+        .Fcls => {
+          // fcls rx (1-arg using 2-arg fmt)
           var rx: u32 = undefined;
           var tmp: u32 = undefined;
           self.read2Args(code, &rx, &tmp);

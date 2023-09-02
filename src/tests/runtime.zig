@@ -984,6 +984,54 @@ test "narrowing-22" {
   try doRuntimeTest(src);
 }
 
+test "narrowing-23" {
+  var src =
+  \\ class Fox
+  \\    x: num | str = 5
+  \\    u = 12
+  \\ end
+  \\
+  \\ let f = [Fox(), 5]
+  \\ let t = 0
+  \\ let x = 0
+  \\ if f[0] is Fox
+  \\   if f[0].x is num
+  \\     f[0].x += f[0].u
+  \\     t = f[0].x
+  \\     x = f[0].u
+  \\   end
+  \\ else
+  \\   t += f[0]
+  \\ end
+  \\ assert(t == 17, 't should be 17')
+  \\ assert(x == 12, 'x should be 12')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "narrowing-24" {
+  var src =
+  \\ class Fox
+  \\    x: num | str = 5
+  \\    u = 12
+  \\ end
+  \\ class Foo
+  \\    x = 'ok'
+  \\    u = 13
+  \\ end
+  \\
+  \\ let f: Fox | Foo = Fox()
+  \\ if f is Foo
+  \\  assert(f.u == 13, 'this should be Foo.u')
+  \\ elif f is Fox
+  \\  assert(f.u == 12, 'this should be Fox.u')
+  \\ else
+  \\  print(f) # never
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
 test "void narrowing" {
   var src =
   \\ def fox(x: bool)
@@ -2005,3 +2053,130 @@ test "simple-classes-2" {
   ;
   try doRuntimeTest(src);
 }
+
+test "simple-classes-3" {
+  var src =
+  \\ class Foo
+  \\  x: num = 10
+  \\ end
+  \\
+  \\ let j = Foo()
+  \\ assert(j.x == 10, 'j.x should be 10')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "simple-classes-4" {
+  var src =
+  \\ class Fox
+  \\    x: num | str = 5
+  \\    u = 12
+  \\ end
+  \\
+  \\ let f = [Fox(), 5]
+  \\ let t = 0
+  \\ let x = 0
+  \\ if f[0] is Fox
+  \\  if f[0].x is num
+  \\    f[0].x += f[0].u
+  \\    t = f[0].x
+  \\    x = f[0].u
+  \\  end
+  \\  assert(t == 17, 't should be 17')
+  \\  assert(x == 12, 'x should be 12')
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
+test "generic-classes-1" {
+  var src =
+  \\ class Fox{T}
+  \\    x: tuple{T}
+  \\    def init(x*: T): void
+  \\      self.x = x
+  \\    end
+  \\    def pulse()
+  \\      return self
+  \\    end
+  \\
+  \\    def getGen()
+  \\      type T = tuple{str}
+  \\      def fun(p: T)
+  \\        return p[0]
+  \\      end
+  \\      return fun
+  \\    end
+  \\ end
+  \\ let x = Fox{num}(6, 7, 8)
+  \\ let t: Fox{num} = x
+  \\ assert(t.pulse().x[0] == 6, 'first arg is 6')
+  \\ assert(t.pulse().x[1] == 7, 'first arg is 7')
+  \\ assert(t.pulse().x[2] == 8, 'first arg is 8')
+  \\ # print(t.x)
+  \\ assert(t.x[0] == 6, 'first arg is 6')
+  \\ assert(t.x[1] == 7, 'second arg is 7')
+  \\ assert(t.x[2] == 8, 'third arg is 8')
+  \\ let z = Fox{'mia'}('mia')
+  \\ assert(z.x[0] == 'mia', 'index 0 gives mia')
+  ;
+  try doRuntimeTest(src);
+}
+
+// test "generic-classes-1" {
+//   var src =
+//   \\ let j = [1, 2, 3]
+//   \\ let p = (j.pop() orelse 0) + 4
+//   \\ j.append(4)
+//   \\ let k = (j, p)
+//   \\ p += k.len()
+//   \\ 
+//   \\ let x = {'a': 5, 'b': 6}
+//   \\ x.keys().len()
+//   \\ x.values().len()
+//   \\ x.get('a').? + 12
+//   \\ let j = [1, 2, 3]
+//   \\ let p = (j.pop() orelse 0) + 4
+//   ;
+//   try doRuntimeTest(src);
+// }
+// 
+// test "generic-classes-2" {
+//   var src =
+//   \\ class Fox{T}
+//   \\    x: tuple{T}
+//   \\    def init(x*: T): void
+//   \\      self.x = x
+//   \\    end
+//   \\    def pulse()
+//   \\      return self
+//   \\    end
+//   \\
+//   \\    def getGen()
+//   \\      type T = tuple{str}
+//   \\      def fun(p: T)
+//   \\        return p[0]
+//   \\      end
+//   \\      return fun
+//   \\    end
+//   \\ end
+//   \\ let x = Fox{num}(6, 7, 8)
+//   \\ let t: Fox{num} = x
+//   \\ t.pulse().x[0] + 12
+//   \\ t.pulse().getGen()(('starters',))
+//   \\ t.pulse().pulse().x.len()
+//   \\
+//   \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
+//   \\ let j: Fox{'mia'} = w
+//   \\ j.pulse().x
+//   \\
+//   \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
+//   \\ let j = Fox{'mia'}('mia')
+//   \\ j = w
+//   \\
+//   \\ type Poo{T} = Fox{T}
+//   \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
+//   \\ let j:Poo{'mia'} = Fox{'mia'}('mia')
+//   ;
+//   try doRuntimeTest(src);
+// }

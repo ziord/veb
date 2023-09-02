@@ -569,7 +569,8 @@ pub const Instance = struct {
   pub fn isRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
     return switch (other.kind) {
       .Instance => |*oth| this.cls.isRelatedTo(oth.cls, ctx, A),
-      .Function, .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic, .Method, .Top, .Class => false,
+      .Class => if (ctx == .RCIs) this.cls.isRelatedTo(other, ctx, A) else false,
+      .Function, .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic, .Method, .Top => false,
     };
   }
 };
@@ -923,6 +924,14 @@ pub const Type = struct {
     };
   }
 
+  /// a top type with a 'child' class type
+  pub inline fn isClassFromTop(self: *Self) bool {
+    return switch (self.kind) {
+      .Top => |*tp| tp.child.isClass(),
+      else => false,
+    };
+  }
+
   /// a type that may be generic (from annotation usage)
   pub inline fn isLikeXTy(self: *Self, comptime check: fn(s: *Self) callconv(.Inline) bool) bool {
     if (check(self)) return true;
@@ -1050,6 +1059,10 @@ pub const Type = struct {
 
   pub inline fn top(self: *Self) *Top {
     return &self.kind.Top;
+  }
+
+  pub inline fn classfromtop(self: *Self) *Class {
+    return self.kind.Top.child.klass();
   }
 
   pub inline fn klass(self: *Self) *Class {
@@ -1817,6 +1830,10 @@ pub const Type = struct {
           if (std.mem.eql(u8, cls1.name, t2.klass().name)) {
             return t1;
           }
+        } else if (t2.isClassFromTop()) {
+          if (std.mem.eql(u8, cls1.name, t2.classfromtop().name)) {
+            return t1;
+          }
         }
       },
       .Union => |*uni| {
@@ -1853,6 +1870,10 @@ pub const Type = struct {
       .Instance => |*inst| {
         if (t2.isClass()) {
           if (is(inst.cls, t2, al) != null) {
+            return t1;
+          }
+        } else if (t2.isClassFromTop()) {
+          if (is(inst.cls, t2.top().child, al) != null) {
             return t1;
           }
         }

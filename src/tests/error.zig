@@ -333,6 +333,31 @@ test "narrowing-11" {
   });
 }
 
+test "narrowing-12" {
+    var src =
+    \\ class Fox
+    \\    x: num | str = 5
+    \\    u = 12
+    \\ end
+    \\ class Foo
+    \\    x = 'ok'
+    \\    u = 13
+    \\ end
+    \\
+    \\ let f: Fox | Foo = Foo()
+    \\ if f is Foo
+    \\  assert(f.u == 13, 'this should be Foo.u')
+    \\ elif f is Fox
+    \\  assert(f.u == 12, 'this should be Fox.u')
+    \\ else
+    \\  f += 5 # never
+    \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Expected type 'num' + 'num', but got 'never' + 'num'",
+  });
+}
+
 test "dca-1" {
   var src =
   \\ def fun(n: num | str)

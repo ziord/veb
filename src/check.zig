@@ -467,30 +467,43 @@ pub const TypeChecker = struct {
   //***********  narrowing  ***********************************//
   //***********************************************************//
 
+  fn _synth(self: *Self,  vr: *ast.VarNode, value: []const u8, env: *TypeEnv) TypeCheckError!*ast.VarNode {
+    var token = ast.Token.tokenFrom(&vr.token);
+    token.value = std.fmt.allocPrint(
+      self.ctx.allocator(), "{s}.{s}",
+      .{vr.token.value, value}
+    ) catch return error.SynthFailure;
+    var ret = ast.VarNode.init(token);
+    var last = self.diag.count();
+    _ = self.narrowVariable(&ret, env) catch {
+      self.diag.popUntil(last);
+    };
+    return ret.box(self.ctx.allocator());
+  }
+
   fn synthesizeVar(self: *Self, vr: *ast.VarNode, other: ?*Node, env: *TypeEnv) TypeCheckError!*ast.VarNode {
     if (vr.typ == null) _ = try self.inferVar(vr, false);
-    if (other == null) return vr;
-    switch (other.?.*) {
-      .AstNumber, .AstString, .AstBool, .AstNil => |lit| {
-        if (lit.token.value.len > MAX_STRING_SYNTH_LEN) {
-          return error.SynthTooLarge;
+    if (other) |oth| {
+      switch (oth.*) {
+        .AstNumber, .AstString, .AstBool, .AstNil => |lit| {
+          if (lit.token.value.len > MAX_STRING_SYNTH_LEN) {
+            return error.SynthTooLarge;
+          }
+          return try self._synth(vr, lit.token.value, env);
+        },
+        .AstVar => |*id| {
+          if (id.token.value.len > MAX_STRING_SYNTH_LEN) {
+            return error.SynthTooLarge;
+          }
+          return try self._synth(vr, id.token.value, env);
+        },
+        else => |els| {
+          std.debug.print("unexpected ast type for synth {}", .{els});
+          return error.SynthFailure;
         }
-        var token = ast.Token.tokenFrom(&vr.token);
-        token.value = std.fmt.allocPrint(
-          self.ctx.allocator(), "{s}.{s}",
-          .{vr.token.value, lit.token.value}
-        ) catch return error.SynthFailure;
-        var ret = ast.VarNode.init(token);
-        var last = self.diag.count();
-        _ = self.narrowVariable(&ret, env) catch {
-          self.diag.popUntil(last);
-        };
-        return ret.box(self.ctx.allocator());
-      },
-      else => |els| {
-        std.debug.print("unexpected ast type for synth {}", .{els});
-        return error.SynthFailure;
       }
+    } else {
+      return vr;
     }
   }
 
@@ -541,11 +554,33 @@ pub const TypeChecker = struct {
     return narrowed;
   }
 
+  fn synthesizeDotAccess(self: *Self, node: *ast.DotAccessNode, env: *TypeEnv, assume_true: bool) TypeCheckError!*ast.VarNode {
+    // synthesize node.expr
+    try self.narrow(node.lhs, env, assume_true);
+    // similar to what inferSubscript() does here.
+    var change = (node.narrowed == null);
+    if (change) {
+      // similar to what inferSubscript() does here.
+      node.narrowed = @constCast(&.{.token = undefined, .typ = null});
+    }
+    var ty = try self.inferDotAccess(node);
+    var narrowed = try self.synthesize(node.lhs, env, assume_true);
+    narrowed = try self.synthesizeVar(narrowed, node.rhs, env);
+    if (narrowed.typ == null) {
+      narrowed.typ = ty;
+    }
+    if (change) {
+      node.narrowed = narrowed;
+    }
+    return narrowed;
+  }
+
   fn synthesize(self: *Self, node: *Node, env: *TypeEnv, assume_true: bool) TypeCheckError!*ast.VarNode {
     return switch (node.*) {
       .AstVar => |*vr| try self.synthesizeVar(vr, null, env),
       .AstSubscript => |*sub| try self.synthesizeSubscript(sub, env, assume_true),
       .AstDeref => |*der| try self.synthesizeDeref(der, env, assume_true),
+      .AstDotAccess => |*da| try self.synthesizeDotAccess(da, env, assume_true),
       else => error.SynthFailure,
     };
   }
@@ -558,11 +593,16 @@ pub const TypeChecker = struct {
     return self.canNarrow(node.expr);
   }
 
+  inline fn canNarrowDotAccess(self: *Self, node: *ast.DotAccessNode) bool {
+    return self.canNarrow(node.lhs);
+  }
+
   fn canNarrow(self: *Self, node: *Node) bool {
     return switch (node.*) {
       .AstVar => true,
       .AstSubscript => |*sub| self.canNarrowSubscript(sub),
       .AstDeref => |*der| self.canNarrowDeref(der),
+      .AstDotAccess => |*da| self.canNarrowDotAccess(da),
       else => false,
     };
   }
@@ -622,6 +662,21 @@ pub const TypeChecker = struct {
     }
   }
 
+  fn narrowDotAccess(self: *Self, node: *ast.DotAccessNode, env: *TypeEnv, assume_true: bool) !void {
+    if (self.canNarrowDotAccess(node)) {
+      var vr = try self.synthesizeDotAccess(node, env, assume_true);
+      if (self.findName(vr.token.value)) |_| {
+        try self.narrowVariable(vr, env);
+        node.typ = env.getGlobal(vr.token.value);
+      } else {
+        self.insertVar(vr.token.value, vr.typ.?);
+      }
+    } else {
+      try self.narrow(node.lhs, env, assume_true);
+      _ = try self.inferDotAccess(node);
+    }
+  }
+
   inline fn isNarrowableLiteral(self: *Self, node: *ast.BinaryNode) bool {
     return (
       (node.op.optype == .OpEqq or node.op.optype == .OpNeq)
@@ -635,9 +690,8 @@ pub const TypeChecker = struct {
       if (node.left.isVariable()) {
         try self.narrowVariable(&node.left.AstVar, env);
         _ = try self.inferBinary(node);
-        // if we get here, then right must be a TypeNode
         var ty = try self.lookupName(&node.left.AstVar, true);
-        if (Type.is(ty, node.right.AstNType.typ, self.ctx.allocator())) |is_ty| {
+        if (Type.is(ty, node.right.getType().?, self.ctx.allocator())) |is_ty| {
           env.putNarrowed(node.left.AstVar.token.value, is_ty);
           if (!assume_true) {
             if (!try env.not_(node.left.AstVar.token.value, self)) {
@@ -754,6 +808,7 @@ pub const TypeChecker = struct {
       .AstSubscript => |*sub| try self.narrowSubscript(sub, env, assume_true),
       .AstCast => |*cst| try self.narrowCast(cst, env, assume_true),
       .AstDeref => |*der| try self.narrowDeref(der, env, assume_true),
+      .AstDotAccess => |*da| try self.narrowDotAccess(da, env, assume_true),
       .AstNumber,
       .AstString,
       .AstBool,
@@ -988,7 +1043,7 @@ pub const TypeChecker = struct {
     } else {
       tparams = TypeList.init(self.ctx.allocator());
     }
-    var synth_name = self.createSynthName(core_cls.name, false, &tparams, null);
+    var synth_name = self.createSynthName(core_cls.name, core_cls.builtin, &tparams, null);
     if (self.findGenInfo(core_cls.node.?, synth_name)) |info| {
       return info.typ;
     }
@@ -1170,6 +1225,7 @@ pub const TypeChecker = struct {
     }
     // at this point, rhs is a TypeNode
     var ty = node.right.getType().?;
+    ty = if (ty.isClassFromTop()) ty.top().child else ty;
     if ((ty.isClsGeneric() and ty.klass().tparamsLen() != 0) or ty.isUnion() or ty.isVariable() or ty.isFunction()) {
       return self.error_(
         true, node.op.token,
@@ -1651,8 +1707,9 @@ pub const TypeChecker = struct {
     var cls = &node.AstClass;
     var ty = self.createClsType(node);
     // set the class's name to it's full type
-    self.ctx.typScope.insert(cls.name.token.value, Type.newTop(ty).box(self.ctx.allocator()));
-    self.insertVar(cls.name.token.value, ty);
+    var top = Type.newTop(ty).box(self.ctx.allocator());
+    self.ctx.typScope.insert(cls.name.token.value, top);
+    self.insertVar(cls.name.token.value, top);
     return ty;
   }
 
@@ -1772,7 +1829,19 @@ pub const TypeChecker = struct {
 
   fn inferDotAccess(self: *Self, node: *ast.DotAccessNode) !*Type {
     if (node.typ) |ty| return ty;
-    // TODO: narrowing
+    // if this node is not being narrowed (`node.narrowed == null`),
+    // try to see if we can obtain an inferred narrow type.
+    if (node.narrowed == null and self.canNarrowDotAccess(node)) {
+      var env = TypeEnv.init(self.ctx.allocator(), null);
+      env.global.pushScope();
+      node.narrowed = self.synthesizeDotAccess(node, &env, true) catch return error.CheckError;
+      if (node.narrowed) |narrowed| {
+        node.typ = self.inferVar(narrowed, false) catch null;
+        if (node.typ) |ty| {
+          return ty;
+        }
+      }
+    }
     var lhs_ty = try self.infer(node.lhs);
     var prop = &node.rhs.AstVar;
     if (!lhs_ty.isClass() and !lhs_ty.isInstance()) {
@@ -1782,7 +1851,11 @@ pub const TypeChecker = struct {
         .{self.getTypename(lhs_ty), prop.token.value}
       );
     }
-    var ty = if (lhs_ty.isInstance()) lhs_ty.instance().cls else lhs_ty;
+    var ty = (
+      if (lhs_ty.isInstance()) lhs_ty.instance().cls 
+      else if (lhs_ty.isClassFromTop()) lhs_ty.top().child
+      else lhs_ty
+    );
     try self.resolveType(ty);
     try self.checkDotAccess(node, ty, prop);
     return node.typ.?;
@@ -1790,8 +1863,8 @@ pub const TypeChecker = struct {
   
   fn inferCall(self: *Self, node: *ast.CallNode) !*Type {
     var _ty = try self.infer(node.expr);
-    if (_ty.isClass()) {
-      return try self.inferClsCall(node, _ty, null);
+    if (_ty.isClassFromTop()) {
+      return try self.inferClsCall(node, _ty.top().child, null);
     }
     // check that we're actually calling a function
     if (!_ty.isFunction() and !_ty.isMethod()) {
@@ -2002,11 +2075,19 @@ pub const TypeChecker = struct {
       }
       if (errors > 0) return error.CheckError;
     } else {
-      return self.error_(
-        true, node.expr.getToken(),
-        "class {s} have fields that are uninitialized",
-        .{cls_ty.name}
-      );
+      var inits: usize = 0;
+      for (cls_ty.fields.items()) |field| {
+        if (field.AstVarDecl.has_default) {
+          inits += 1;
+        }
+      }
+      if (inits != cls_ty.fields.len()) {
+        return self.error_(
+          true, node.expr.getToken(),
+          "class {s} have fields that are uninitialized",
+          .{cls_ty.name}
+        );
+      }
     }
   }
 

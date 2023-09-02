@@ -63,7 +63,7 @@ pub fn fnPrint(vm: *VM, argc: u32, args: u32) Value {
 /// > helpers
 /// ********************
 
-pub fn getZFnName(name: usize) []const u8 {
+pub inline fn getZFnName(name: usize) []const u8 {
   return ZFnNames[name];
 }
 

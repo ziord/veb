@@ -190,9 +190,9 @@ pub const OpCode = enum (u8) {
   // [6]  [8] [9]    [9]
   Callc, // call class
 
-  // finc rx (1-arg using 2-arg fmt)
+  // fcls rx (1-arg using 2-arg fmt)
   // [6]  [8]
-  Finc, // finish class
+  Fcls, // finish class
 
   // smtd rx(mth), rk(cls), idx
   // [6]    [8]     [9]    [9]

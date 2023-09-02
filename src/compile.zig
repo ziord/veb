@@ -769,6 +769,7 @@ pub const Compiler = struct {
     var op = OpCode.Is;
     var rk2 = tb: {
       var typ = node.right.getType().?;
+      typ = if (typ.isTop()) typ.top().child else typ;
       if (typ.isClass()) {
         break :tb (
           if (typ.isListTy()) TypeKind.TyClass
@@ -777,7 +778,7 @@ pub const Compiler = struct {
           else if (typ.isErrorTy()) TypeKind.TyClass + 3
           else if (typ.isClass() or typ.isInstance()) blk: {
             op = OpCode.Iscls;
-            var cls: *check.Class = if (typ.isInstance()) typ.instance().cls.klass() else typ.klass();
+            var cls = typ.klass();
             var reg = try self.getReg(node.right.getToken());
             var rk2 = try self.cVar(cls.node.?.AstClass.name, reg);
             self.vreg.releaseReg(reg);
@@ -857,29 +858,31 @@ pub const Compiler = struct {
     // Since the type checker guarantees that the node embedded in the function type is the
     // function being called, we can safely use the function's name for lookup
     // which if generic, should already be synthesized.
-    if (node.typ != null and node.typ.?.isFunction()) {
-      var fun = node.typ.?.function();
-      if (fun.isGeneric()) {
-        self.softError(node.token, "cannot generate code for an uninstantiated generic type", .{});
-        return dst;
-      } else if (fun.node != null and fun.node.?.AstFun.name != null) {
-        var last = self.diag.count();
-        var reg = self.cVar(fun.node.?.AstFun.name.?, dst) catch undefined;
-        // we use this indirection because for some reason zig generates bad
-        // code for the above `catch` when used for handling this error
-        if (self.diag.count() == last) return reg;
-        // clear last error generated
-        self.diag.popUntil(last);
-      }
-    }
-    if (node.typ != null and node.typ.?.isClass() and !self.isSelfVar(node)) {
-      var cls = node.typ.?.klass();
-      if (cls.isGeneric()) {
-        if (!cls.isInstantiatedGeneric()) {
+    if (node.typ) |_ty| {
+      var typ = if (_ty.isClassFromTop()) _ty.top().child else _ty;
+      if (typ.isFunction()) {
+        var fun = typ.function();
+        if (fun.isGeneric()) {
           self.softError(node.token, "cannot generate code for an uninstantiated generic type", .{});
           return dst;
-        } else if (cls.node) |nd| {
-          return try self.cVar(nd.AstClass.name, dst);
+        } else if (fun.node != null and fun.node.?.AstFun.name != null) {
+          var last = self.diag.count();
+          var reg = self.cVar(fun.node.?.AstFun.name.?, dst) catch undefined;
+          // we use this indirection because for some reason zig generates bad
+          // code for the above `catch` when used for handling this error
+          if (self.diag.count() == last) return reg;
+          // clear last error generated
+          self.diag.popUntil(last);
+        }
+      } else if (typ.isClass() and !self.isSelfVar(node)) {
+        var cls = typ.klass();
+        if (cls.isGeneric()) {
+          if (!cls.isInstantiatedGeneric()) {
+            self.softError(node.token, "cannot generate code for an uninstantiated generic type", .{});
+            return dst;
+          } else if (cls.node) |nd| {
+            return try self.cVar(nd.AstClass.name, dst);
+          }
         }
       }
     }
@@ -1385,10 +1388,11 @@ pub const Compiler = struct {
       }
     }
     self.leaveJmp();
-    if (!node.expr.getType().?.isClass()) {
+    var ty = node.expr.getType().?;
+    ty = if (ty.isTop()) ty.top().child else ty;
+    if (!ty.isClass()) {
       self.fun.code.write2ArgsInst(.Call, _dst, n, token.line, self.vm);
     } else {
-      var ty = node.expr.getType().?;
       var flen = @intCast(u32, ty.klass().fields.len());
       // after this instruction is executed, `_dst` holds the instance
       self.fun.code.write3ArgsInst(.Callc, _dst, n, flen, token.line, self.vm);
@@ -1406,7 +1410,7 @@ pub const Compiler = struct {
       self.vreg.releaseReg(tmp);
       // call init to initialize the class's instance
       if (ty.klass().getMethod(InitVar)) |_| {
-        self.fun.code.write2ArgsInst(.Finc, _dst, 0, token.line, self.vm);
+        self.fun.code.write2ArgsInst(.Fcls, _dst, 0, token.line, self.vm);
       }
     }
     if (do_move) {
@@ -1499,13 +1503,6 @@ pub const Compiler = struct {
 
   fn cClass(self: *Self, ast_node: *Node, node: *ast.ClassNode, _reg: u32) !u32 {
     if (node.isGeneric()) return self.cClassGeneric(ast_node, _reg);
-    if (!node.checked) {
-      if (self.inGlobalScope()) {
-        _ = try self.patchGlobal(node.name);
-      }
-      std.log.debug("skipping compilation of unchecked class: {}", .{node});
-      return _reg;
-    }
     var reg: u32 = undefined;
     var token = ast_node.getToken();
     var cls = value.createClass(self.vm, node.methods.len());

@@ -3,7 +3,7 @@ const util = @import("util.zig");
 const Mem = @import("mem.zig");
 const Vec = @import("vec.zig").Vec;
 const Map = @import("map.zig").Map;
-const ZFnNames = @import("native.zig").ZFnNames;
+const NativeFns = @import("native.zig").NativeFns;
 const OpCode = @import("opcode.zig").OpCode;
 pub const OpType = @import("lex.zig").OpType;
 
@@ -170,7 +170,7 @@ pub const FALSE_VAL = @as(Value, (QNAN | TAG_FALSE));
 pub const TRUE_VAL = @as(Value, (QNAN | TAG_TRUE));
 pub const NOTHING_VAL = @as(Value, (QNAN | TAG_NOTHING));
 
-pub const ZFn = *const fn (*VM, argc: u32, args: u32) Value;
+pub const NativeFn = *const fn (*VM, argc: u32, args: u32) Value;
 pub const StringNullKey = ObjString {.obj = .{.id = .objstring, .next = null}, .hash = 0, .str = "", .len = 0};
 pub const StringHashMap = Map(*const ObjString, Value);
 pub const ValueHashMap = Map(Value, Value);
@@ -183,16 +183,17 @@ pub const ObjId = enum(u8) {
   objfn,
   objclosure,
   objupvalue,
-  objzfn,
+  objnativefn,
   objfiber,
   objerror,
   objclass,
   objinstance,
-  objbmethod,
+  objmethod,
 };
 
 pub const Obj = extern struct {
   id: ObjId,
+  cls: ?*ObjClass = null,
   next: ?*Obj,
 };
 
@@ -212,6 +213,20 @@ pub const ObjList = extern struct {
   len: usize,
   capacity: usize,
   items: [*]Value,
+
+  inline fn allocatedSlice(self: *@This()) []Value {
+    return self.items[0..self.capacity];
+  }
+
+  pub fn append(self: *@This(), vm: *VM, item: Value) void {
+    if (self.len >= self.capacity) {
+      const new_capacity = Mem.growCapacity(self.capacity);
+      self.items = vm.mem.resizeBuf(Value, vm, self.allocatedSlice(), self.capacity, new_capacity).ptr;
+      self.capacity = new_capacity;
+    }
+    self.items[self.len] = item;
+    self.len += 1;
+  }
 };
 
 pub const ObjTuple = extern struct {
@@ -245,14 +260,46 @@ pub const ObjFn = extern struct {
   }
 };
 
-pub const ObjZFn = extern struct {
+pub const MethodType = enum(u8) {
+  BoundNativeMethod,
+  BoundUserMethod,
+};
+
+pub const ObjMethod = extern struct {
+  obj: Obj,
+  typ: MethodType,
+  as: extern union {
+    native: BoundNativeFn,
+    user: BoundUserFn,
+  },
+
+  pub const BoundUserFn = extern struct {
+    instance: Value,
+    closure: *ObjClosure,
+  };
+
+  pub const BoundNativeFn = extern struct {
+    instance: Value,
+    fun: *ObjNativeFn,
+  };
+
+  pub inline fn isBoundUserMethod(self: *@This()) bool {
+    return self.typ == MethodType.BoundUserMethod;
+  }
+
+  pub inline fn isBoundNativeMethod(self: *@This()) bool {
+    return self.typ == MethodType.BoundNativeMethod;
+  }
+};
+
+pub const ObjNativeFn = extern struct {
   obj: Obj,
   arity: u32,
-  fun: ZFn,
+  fun: NativeFn,
   name: usize,
 
-  pub fn getName(self: *ObjZFn) []const u8 {
-    return ZFnNames[self.name];
+  pub fn getName(self: *ObjNativeFn) []const u8 {
+    return NativeFns[self.name];
   }
 };
 
@@ -292,16 +339,10 @@ pub const ObjClass = extern struct {
 
 pub const ObjInstance = extern struct {
   obj: Obj,
-  cls: *ObjClass,
   flen: usize,
   fields: [*]Value,
 };
 
-pub const ObjBMethod = extern struct {
-  obj: Obj,
-  instance: Value,
-  closure: *ObjClosure,
-};
 
 pub const ObjFiber = extern struct {
   obj: Obj,
@@ -464,8 +505,8 @@ pub inline fn isUpvalue(val: Value) bool {
   return isObjType(val, .objupvalue);
 }
 
-pub inline fn isZFn(val: Value) bool {
-  return isObjType(val, .objzfn);
+pub inline fn isNativeFn(val: Value) bool {
+  return isObjType(val, .objnativefn);
 }
 
 pub inline fn isFiber(val: Value) bool {
@@ -481,7 +522,7 @@ pub inline fn isClass(val: Value) bool {
 }
 
 pub inline fn isMethod(val: Value) bool {
-  return isObjType(val, .objbmethod);
+  return isObjType(val, .objmethod);
 }
 
 pub inline fn isInstance(val: Value) bool {
@@ -516,8 +557,8 @@ pub fn isUpvalueNoInline(val: Value) bool {
   return isUpvalue(val);
 }
 
-pub fn isZFnNoInline(val: Value) bool {
-  return isZFn(val);
+pub fn isNativeFnNoInline(val: Value) bool {
+  return isNativeFn(val);
 }
 
 pub fn isFiberNoInline(val: Value) bool {
@@ -548,8 +589,8 @@ pub inline fn asFn(val: Value) *ObjFn {
   return @ptrCast(*ObjFn, asObj(val));
 }
 
-pub inline fn asZFn(val: Value) *ObjZFn {
-  return @ptrCast(*ObjZFn, asObj(val));
+pub inline fn asNativeFn(val: Value) *ObjNativeFn {
+  return @ptrCast(*ObjNativeFn, asObj(val));
 }
 
 pub inline fn asClosure(val: Value) *ObjClosure {
@@ -576,8 +617,8 @@ pub inline fn asInstance(val: Value) *ObjInstance {
   return @ptrCast(*ObjInstance, asObj(val));
 }
 
-pub inline fn asMethod(val: Value) *ObjBMethod {
-  return @ptrCast(*ObjBMethod, asObj(val));
+pub inline fn asMethod(val: Value) *ObjMethod {
+  return @ptrCast(*ObjMethod, asObj(val));
 }
 
 pub inline fn valueEqual(a: Value, b: Value) bool {
@@ -666,10 +707,15 @@ pub fn printObject(val: Value) void {
       util.print("{s}", .{asClass(val).name.string()});
     },
     .objinstance => {
-      util.print("{{{s} instance}}", .{asInstance(val).cls.name.string()});
+      util.print("{{{s} instance}}", .{asObj(val).cls.?.name.string()});
     },
-    .objbmethod => {
-      util.print("{{method {s}}}", .{asMethod(val).closure.fun.getName()});
+    .objmethod => {
+      var mtd = asMethod(val);
+      if (mtd.isBoundUserMethod()) {
+        util.print("{{bound-method {s}}}", .{mtd.as.user.closure.fun.getName()});
+      } else {
+        util.print("{{bound-b.method {s}}}", .{mtd.as.native.fun.getName()});
+      }
     },
     .objclosure => {
       util.print("{{fn {s}}}", .{asClosure(val).fun.getName()});
@@ -677,8 +723,8 @@ pub fn printObject(val: Value) void {
     .objupvalue => {
       util.print("{{upvalue}}", .{});
     },
-    .objzfn => {
-      util.print("{{b.fn {s}}}", .{asZFn(val).getName()});
+    .objnativefn => {
+      util.print("{{b.fn {s}}}", .{asNativeFn(val).getName()});
     },
     .objfiber => {
       util.print("{{fiber}}", .{});
@@ -717,9 +763,9 @@ pub fn objectToString(val: Value, vm: *VM) Value {
       var fmt = std.fmt.bufPrint(&buff, "@fn[{s}]", .{asFn(val).getName()}) catch "fn()";
       return createStringV(vm, &vm.strings, fmt, false);
     },
-    .objzfn => {
+    .objnativefn => {
       var buff: [30]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "@builtin_fn[{s}]", .{asZFn(val).getName()}) catch "builtin_fn()";
+      var fmt = std.fmt.bufPrint(&buff, "@builtin_fn[{s}]", .{asNativeFn(val).getName()}) catch "builtin_fn()";
       return createStringV(vm, &vm.strings, fmt, false);
     },
     .objfiber => {
@@ -727,12 +773,18 @@ pub fn objectToString(val: Value, vm: *VM) Value {
     },
     .objinstance => {
       var buff: [100]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "{{{s} instance}}", .{asInstance(val).cls.name.string()}) catch "instance";
+      var fmt = std.fmt.bufPrint(&buff, "{{{s} instance}}", .{asObj(val).cls.?.name.string()}) catch "instance";
       return createStringV(vm, &vm.strings, fmt, false);
     },
-    .objbmethod => {
+    .objmethod => {
       var buff: [100]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "{{method {s}}}", .{asMethod(val).closure.fun.getName()}) catch "method";
+      var mtd = asMethod(val);
+      var fmt: []const u8 = undefined;
+      if (mtd.isBoundUserMethod()) {
+        fmt = std.fmt.bufPrint(&buff, "{{bound-method {s}}}", .{mtd.as.user.closure.fun.getName()}) catch "bound-method";
+      } else {
+        fmt = std.fmt.bufPrint(&buff, "{{bound-method {s}}}", .{mtd.as.native.fun.getName()}) catch "bound-method";
+      }
       return createStringV(vm, &vm.strings, fmt, false);
     },
     .objclass => {
@@ -806,9 +858,10 @@ pub fn hashValue(val: Value) u64 {
 
 pub const VM = @import("vm.zig").VM;
 
-pub fn createObject(vm: *VM, id: ObjId, comptime T: type) *T {
+pub fn createObject(vm: *VM, id: ObjId, cls: ?*ObjClass, comptime T: type) *T {
   var mem = vm.mem.alloc(T, vm);
   mem.obj.id = id;
+  mem.obj.cls = cls;
   mem.obj.next = vm.objects;
   vm.objects = &mem.obj;
   return mem;
@@ -818,7 +871,7 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
   const hash = hashString(str);
   var string = map.findInterned(str, hash);
   if (string == null) {
-    var tmp = @call(.always_inline, createObject, .{vm, .objstring, ObjString});
+    var tmp = @call(.always_inline, createObject, .{vm, .objstring, vm.classes.string, ObjString});
     tmp.str = @ptrCast([*]const u8, str);
     tmp.hash = hash;
     tmp.len = str.len;
@@ -829,7 +882,7 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
     } else {
       vm.gc.bytes_allocated += str.len;
     }
-    _ = map.put(tmp, FALSE_VAL, vm);
+    _ = map.set(tmp, FALSE_VAL, vm);
     string = tmp;
     return tmp;
   }
@@ -838,7 +891,7 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
 
 pub fn createList(vm: *VM, len: usize) *ObjList {
   const cap = Mem.alignTo(Mem.growCapacity(len), Mem.BUFFER_INIT_SIZE);
-  var list = @call(.always_inline, createObject, .{vm, .objlist, ObjList});
+  var list = @call(.always_inline, createObject, .{vm, .objlist, vm.classes.list, ObjList});
   list.items = @ptrCast([*]Value, vm.mem.allocBuf(Value, cap, vm));
   list.capacity = cap;
   list.len = len;
@@ -846,14 +899,14 @@ pub fn createList(vm: *VM, len: usize) *ObjList {
 }
 
 pub fn createMap(vm: *VM, len: usize) *ObjMap {
-  var map = @call(.always_inline, createObject, .{vm, .objvalmap, ObjMap});
+  var map = @call(.always_inline, createObject, .{vm, .objvalmap, vm.classes.map, ObjMap});
   map.meta = ValueHashMap.init();
   map.meta.ensureCapacity(vm, len);
   return map;
 }
 
 pub fn createTuple(vm: *VM, len: usize) *ObjTuple {
-  var tuple = @call(.always_inline, createObject, .{vm, .objtuple, ObjTuple});
+  var tuple = @call(.always_inline, createObject, .{vm, .objtuple, vm.classes.tuple, ObjTuple});
   tuple.items = @ptrCast([*]Value, vm.mem.allocBuf(Value, len, vm));
   tuple.len = len;
   return tuple;
@@ -864,7 +917,7 @@ pub inline fn createStringV(vm: *VM, map: *StringHashMap, str: []const u8, is_al
 }
 
 pub fn createFn(vm: *VM, arity: u8) *ObjFn {
-  var fun = @call(.always_inline, createObject, .{vm, .objfn, ObjFn});
+  var fun = @call(.always_inline, createObject, .{vm, .objfn, null, ObjFn});
   fun.code = Code.init();
   fun.name = null;
   fun.arity = arity;
@@ -872,8 +925,8 @@ pub fn createFn(vm: *VM, arity: u8) *ObjFn {
   return fun;
 }
 
-pub fn createZFn(vm: *VM, zfun: ZFn, arity: u32, name: usize) *ObjZFn {
-  var fun = @call(.always_inline, createObject, .{vm, .objzfn, ObjZFn});
+pub fn createNativeFn(vm: *VM, zfun: NativeFn, arity: u32, name: usize) *ObjNativeFn {
+  var fun = @call(.always_inline, createObject, .{vm, .objnativefn, null, ObjNativeFn});
   fun.fun = zfun;
   fun.arity = arity;
   fun.name = name;
@@ -882,28 +935,28 @@ pub fn createZFn(vm: *VM, zfun: ZFn, arity: u32, name: usize) *ObjZFn {
 
 pub fn createClosure(vm: *VM, fun: *ObjFn) *ObjClosure {
   var env = vm.mem.allocBuf(*ObjUpvalue, fun.envlen, vm);
-  var clos = @call(.always_inline, createObject, .{vm, .objclosure, ObjClosure});
+  var clos = @call(.always_inline, createObject, .{vm, .objclosure, null, ObjClosure});
   clos.env = env.ptr;
   clos.fun = fun;
   return clos;
 }
 
 pub fn createUpvalue(vm: *VM, loc: *Value) *ObjUpvalue {
-  var upv = @call(.always_inline, createObject, .{vm, .objupvalue, ObjUpvalue});
+  var upv = @call(.always_inline, createObject, .{vm, .objupvalue, null, ObjUpvalue});
   upv.next = null;
   upv.loc = loc;
   return upv;
 }
 
 pub fn createError(vm: *VM, val: Value) *ObjError {
-  var err = @call(.always_inline, createObject, .{vm, .objerror, ObjError});
+  var err = @call(.always_inline, createObject, .{vm, .objerror, vm.classes.err, ObjError});
   err.val = val;
   return err;
 }
 
 pub fn createClass(vm: *VM, mlen: usize) *ObjClass {
   var methods = vm.mem.allocBuf(Value, mlen, vm);
-  var cls = @call(.always_inline, createObject, .{vm, .objclass, ObjClass});
+  var cls = @call(.always_inline, createObject, .{vm, .objclass, null, ObjClass});
   cls.mlen = mlen;
   cls.methods = methods.ptr;
   cls.name = undefined;
@@ -912,17 +965,23 @@ pub fn createClass(vm: *VM, mlen: usize) *ObjClass {
 
 pub fn createInstance(vm: *VM, cls: *ObjClass, flen: usize) *ObjInstance {
   var fields = vm.mem.allocBuf(Value, flen, vm);
-  var inst = @call(.always_inline, createObject, .{vm, .objinstance, ObjInstance});
-  inst.cls = cls;
+  var inst = @call(.always_inline, createObject, .{vm, .objinstance, cls, ObjInstance});
   inst.fields = fields.ptr;
   inst.flen = flen;
   return inst;
 }
 
-pub fn createBMethod(vm: *VM, instance: Value, closure: *ObjClosure) *ObjBMethod {
-  var meth = @call(.always_inline, createObject, .{vm, .objbmethod, ObjBMethod});
-  meth.instance = instance;
-  meth.closure = closure;
+pub fn createBoundNativeMethod(vm: *VM, instance: Value, func: *ObjNativeFn) *ObjMethod {
+  var meth = @call(.always_inline, createObject, .{vm, .objmethod, null, ObjMethod});
+  meth.as.native = @as(ObjMethod.BoundNativeFn, .{.instance = instance, .fun = func});
+  meth.typ = .BoundNativeMethod;
+  return meth;
+}
+
+pub fn createBoundUserMethod(vm: *VM, instance: Value, closure: *ObjClosure) *ObjMethod {
+  var meth = @call(.always_inline, createObject, .{vm, .objmethod, null, ObjMethod});
+  meth.as.user = @as(ObjMethod.BoundUserFn, .{.instance = instance, .closure = closure});
+  meth.typ = .BoundUserMethod;
   return meth;
 }
 
@@ -931,7 +990,7 @@ pub fn createFiber(vm: *VM, clo: ?*ObjClosure, origin: FiberOrigin, caller: ?*Ob
   const cap = Mem.alignTo(arity + 0xff, Mem.BUFFER_INIT_SIZE);
   var frames = vm.mem.allocBuf(CallFrame, Mem.BUFFER_INIT_SIZE, vm);
   var stack = vm.mem.allocBuf(Value, cap, vm);
-  var fiber = @call(.always_inline, createObject, .{vm, .objfiber, ObjFiber});
+  var fiber = @call(.always_inline, createObject, .{vm, .objfiber, null, ObjFiber});
   fiber.errval = NOTHING_VAL;
   fiber.origin = origin;
   fiber.caller = caller;

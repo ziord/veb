@@ -616,6 +616,8 @@ pub const Type = struct {
   kind: TypeInfo,
   /// only applies to function types; whether this function type is variadic
   variadic: bool = false,
+  /// whether this type was inferred automatically i.e not an annotation
+  inferred: bool = true,
 
   const Self = @This();
 

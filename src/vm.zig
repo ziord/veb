@@ -14,6 +14,7 @@ const ObjFiber = vl.ObjFiber;
 const ObjFn = vl.ObjFn;
 const ObjClosure = vl.ObjClosure;
 const ObjUpvalue = vl.ObjUpvalue;
+const ObjClass = vl.ObjClass;
 const CallFrame = vl.CallFrame;
 const StringHashMap = vl.StringHashMap;
 const Dis = debug.Disassembler;
@@ -24,6 +25,7 @@ pub const VM = struct {
   gsyms: [MAX_GSYM_ITEMS]Value,
   globals: StringHashMap,
   objects: ?*vl.Obj,
+  classes: BuiltinCls,
   mem: Mem,
   gc: GC,
   has_error: bool = false,
@@ -42,11 +44,29 @@ pub const VM = struct {
     vl.isAnyNoInline,
     vl.isListNoInline, vl.isMapNoInline, vl.isTupleNoInline,
     vl.isErrorNoInline, vl.isFnNoInline, vl.isClosureNoInline,
-    vl.isUpvalueNoInline, vl.isZFnNoInline, vl.isFiberNoInline
+    vl.isUpvalueNoInline, vl.isNativeFnNoInline, vl.isFiberNoInline
+  };
+
+  const BuiltinCls = struct {
+    string: *ObjClass,
+    list: *ObjClass,
+    map: *ObjClass,
+    tuple: *ObjClass,
+    err: *ObjClass,
+
+    pub fn init() @This() {
+      return @This(){
+        .string = undefined,
+        .list = undefined,
+        .map = undefined,
+        .tuple = undefined,
+        .err = undefined,
+      };
+    }
   };
 
   pub fn init(allocator: *VebAllocator) Self {
-    return Self {
+    var vm = Self {
       .fiber = undefined,
       .mem = Mem.init(allocator.getAllocator()),
       .gc = GC.init(allocator),
@@ -54,12 +74,14 @@ pub const VM = struct {
       .gsyms = undefined,
       .globals = StringHashMap.init(),
       .objects = null,
+      .classes = BuiltinCls.init(),
     };
+    native.addBuiltins(&vm);
+    return vm;
   }
 
   pub fn boot(self: *Self, fun: *ObjFn) void {
     var clo = vl.createClosure(self, fun);
-    native.addBuiltins(self);
     self.fiber = vl.createFiber(self, clo, .Root, null);
   }
 
@@ -241,6 +263,13 @@ pub const VM = struct {
     std.debug.print("\n", .{});
   }
 
+  fn printValue(self: *Self, comptime str: []const u8, val: Value) void {
+    _ = self;
+    std.debug.print(str, .{});
+    vl.printValue(val);
+    std.debug.print("\n", .{});
+  }
+
   pub fn run(self: *Self) RuntimeError!void {
     var fiber = self.fiber;
     var fp = fiber.fp;
@@ -274,7 +303,7 @@ pub const VM = struct {
           var bx: u32 = undefined;
           self.read2Args(code, &rx, &bx);
           var glb = vl.asString(self.readConst(bx, fp));
-          _ = self.globals.put(glb, fp.stack[rx], self);
+          _ = self.globals.set(glb, fp.stack[rx], self);
           continue;
         },
         .Ggsym => {
@@ -433,21 +462,26 @@ pub const VM = struct {
           if (vl.isClosure(val)) {
             fiber.appendFrame(vl.asClosure(val), fp.stack + rx);
             fp = fiber.fp;
-            continue;
           } else if (vl.isMethod(val)) {
             var mtd = vl.asMethod(val);
-            fiber.appendFrame(mtd.closure, fp.stack + rx);
-            @setRuntimeSafety(false);
-            fp.stack[rx] = mtd.instance;
-            fp = fiber.fp;
-            continue;
+            if (mtd.isBoundUserMethod()) {
+              fiber.appendFrame(mtd.as.user.closure, fp.stack + rx);
+              @setRuntimeSafety(false);
+              fp.stack[rx] = mtd.as.user.instance;
+              fp = fiber.fp;
+            } else {
+              fp.stack[rx] = mtd.as.native.instance;
+              var res = mtd.as.native.fun.fun(self, n, rx);
+              if (self.has_error) return error.RuntimeError;
+              fp.stack[rx] = res;
+            }
           } else {
-            var func = vl.asZFn(val);
+            var func = vl.asNativeFn(val);
             var res = func.fun(self, n, rx + 1);
             if (self.has_error) return error.RuntimeError;
             fp.stack[rx] = res;
-            continue;
           }
+          continue;
         },
         .Jmtdc => {
           // super instruction for get mtd & call mtd
@@ -457,13 +491,25 @@ pub const VM = struct {
           var idx: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &idx);
           var inst = self.RK(rk1, fp);
-          var closure = vl.asClosure(vl.asInstance(inst).cls.methods[idx]);
-          var next = @call(.always_inline, Self.readWord, .{self, fp});
-          self.read2Args(next, &rx, &rk1);
-          fiber.appendFrame(closure, fp.stack + rx);
-          @setRuntimeSafety(false);
-          fp.stack[rx] = inst;
-          fp = fiber.fp;
+          if (vl.isInstance(inst)) {
+            var closure = vl.asClosure(vl.asObj(inst).cls.?.methods[idx]);
+            var next = @call(.always_inline, Self.readWord, .{self, fp});
+            self.read2Args(next, &rx, &rk1);
+            fiber.appendFrame(closure, fp.stack + rx);
+            @setRuntimeSafety(false);
+            fp.stack[rx] = inst;
+            fp = fiber.fp;
+          } else {
+            var func = vl.asNativeFn(vl.asObj(inst).cls.?.methods[idx]);
+            var next = @call(.always_inline, Self.readWord, .{self, fp});
+            self.read2Args(next, &rx, &rk1);
+            fp.stack[rx] = inst;
+            var res = func.fun(self, rk1, rx);
+            if (self.has_error) return error.RuntimeError;
+            @setRuntimeSafety(false);
+            fp.stack[rx] = res;
+            fp = fiber.fp;
+          }
           continue;
         },
         .Callc => {
@@ -566,9 +612,9 @@ pub const VM = struct {
           var rk2: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &rk2);
           @setRuntimeSafety(false);
-          var inst = vl.asInstance(self.RK(rk1, fp));
+          var obj = vl.asObj(self.RK(rk1, fp));
           var cls = vl.asClass(self.RK(rk2, fp));
-          fp.stack[rx] = vl.boolVal((inst.cls == cls));
+          fp.stack[rx] = vl.boolVal((obj.cls.? == cls));
           continue;
         },
         .Xor => {
@@ -674,7 +720,7 @@ pub const VM = struct {
           var tmp: u32 = undefined;
           self.read2Args(code, &rx, &tmp);
           try self.ensureFrameCapacity(&fp, &fiber);
-          var init_mtd = vl.asInstance(fp.stack[rx]).cls.getInitMethod().?;
+          var init_mtd = vl.asObj(fp.stack[rx]).cls.?.getInitMethod().?;
           fiber.appendFrame(vl.asClosure(init_mtd), fp.stack + rx);
           fp = fiber.fp;
           continue;
@@ -696,7 +742,10 @@ pub const VM = struct {
           var idx: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &idx);
           var inst = self.RK(rk1, fp);
-          var mtd = vl.createBMethod(self, inst, vl.asClosure(vl.asInstance(inst).cls.methods[idx]));
+          var mtd = (
+            if (vl.isInstance(inst)) vl.createBoundUserMethod(self, inst, vl.asClosure(vl.asObj(inst).cls.?.methods[idx]))
+            else vl.createBoundNativeMethod(self, inst, vl.asNativeFn(vl.asObj(inst).cls.?.methods[idx]))
+          );
           @setRuntimeSafety(false);
           fp.stack[rx] = vl.objVal(mtd);
           continue;
@@ -826,7 +875,7 @@ pub const VM = struct {
           var rk2: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &rk2);
           var map = vl.asMap(fp.stack[rx]);
-          _ = map.meta.put(self.RK(rk1, fp), self.RK(rk2, fp), self);
+          _ = map.meta.set(self.RK(rk1, fp), self.RK(rk2, fp), self);
           continue;
         },
         .Gmap => {

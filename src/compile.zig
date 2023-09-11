@@ -581,8 +581,7 @@ pub const Compiler = struct {
             if (fun.name) |ident| self.addPatchInitGlobalVar(ident);
             if (self.generics.get(decl)) |list| {
               for (list.items()) |itm| {
-                var nfun = &itm.instance.AstFun;
-                nfun.name = itm.synth_name;
+                itm.instance.AstFun.name = itm.synth_name;
                 _ = self.addGSymVar(itm.synth_name);
               }
             }
@@ -597,8 +596,7 @@ pub const Compiler = struct {
             self.addPatchInitGlobalVar(cls.name);
             if (self.generics.get(decl)) |list| {
               for (list.items()) |itm| {
-                var ncls = &itm.instance.AstClass;
-                ncls.name = itm.synth_name;
+                itm.instance.AstClass.name = itm.synth_name;
                 _ = self.addGSymVar(itm.synth_name);
               }
             }
@@ -874,14 +872,19 @@ pub const Compiler = struct {
           // clear last error generated
           self.diag.popUntil(last);
         }
-      } else if (typ.isClass() and !self.isSelfVar(node)) {
+      } else if (typ.isClass() and !self.isSelfVar(node) and !typ.klass().builtin and typ.inferred) {
         var cls = typ.klass();
         if (cls.isGeneric()) {
           if (!cls.isInstantiatedGeneric()) {
             self.softError(node.token, "cannot generate code for an uninstantiated generic type", .{});
             return dst;
           } else if (cls.node) |nd| {
-            return try self.cVar(nd.AstClass.name, dst);
+            // try to capture the monomorphized class type, we only do this for looking up the var
+            // that actually defines the class's type and not a var annotated with a class type.
+            var last = self.diag.count();
+            var reg = self.cVar(nd.AstClass.name, dst) catch undefined;
+            if (self.diag.count() == last) return reg;
+            self.diag.popUntil(last);
           }
         }
       }
@@ -897,9 +900,8 @@ pub const Compiler = struct {
       const inst: OpCode = if(info.isGSym) .Ggsym else .Gglb;
       self.fun.code.write2ArgsInst(inst, dst, info.pos, node.line(), self.vm);
       return dst;
-    } else {
-      return self.compileError(node.token, "use of undefined variable '{s}'", .{node.token.value});
     }
+    return self.compileError(node.token, "use of undefined variable '{s}'", .{node.token.value});
   }
 
   fn cDotAccess(self: *Self, node: *ast.DotAccessNode, is_call: bool, dst: u32) !u32 {
@@ -1029,6 +1031,9 @@ pub const Compiler = struct {
       .right = node.value,
       .op = undefined, .typ = node.ident.typ
     };
+    // we must be certain about this type being inferred or from an 
+    // annotation, for proper code gen
+    node.ident.typ.?.inferred = !node.has_annotation;
     if (self.inLocalScope()) {
       // local
       var dst = try self.addLocal(node.ident);
@@ -1361,6 +1366,9 @@ pub const Compiler = struct {
       if (node.expr.isDotAccess()) try self.cDotAccess(&node.expr.AstDotAccess, true, reg)
       else try self.c(node.expr, reg)
     );
+    // assume last instruction compiled is .Jmtdc
+    var jmtdc_dst = self.fun.code.words.len -| 1;
+    var should_swap = node.expr.isDotAccess();
     var _dst = reg;
     var n = @intCast(u32, node.args.len());
     var do_move = false;
@@ -1392,6 +1400,16 @@ pub const Compiler = struct {
     ty = if (ty.isTop()) ty.top().child else ty;
     if (!ty.isClass()) {
       self.fun.code.write2ArgsInst(.Call, _dst, n, token.line, self.vm);
+      if (should_swap) {
+        // swap .Jmtdc with instruction before .Call
+        var last = self.fun.code.words.len - 2; // -2 meaning second last
+        var jmtdc_inst = self.fun.code.words.items[jmtdc_dst];
+        var jmtdc_line = self.fun.code.lines.items[jmtdc_dst];
+        self.fun.code.words.items[jmtdc_dst] = self.fun.code.words.items[last];
+        self.fun.code.lines.items[jmtdc_dst] = self.fun.code.lines.items[last];
+        self.fun.code.words.items[last] = jmtdc_inst;
+        self.fun.code.lines.items[last] = jmtdc_line;
+      }
     } else {
       var flen = @intCast(u32, ty.klass().fields.len());
       // after this instruction is executed, `_dst` holds the instance

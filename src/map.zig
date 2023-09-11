@@ -4,7 +4,6 @@ const util = @import("util.zig");
 const VM = @import("vm.zig").VM;
 const vl = @import("value.zig");
 
-const TOMB_VAL = @as(vl.Value, vl.TRUE_VAL | vl.NOTHING_VAL);
 const StringType = *const vl.ObjString;
 const LOAD_FACTOR: f64 = @as(f64, vl.LOAD_FACTOR) / @as(f64, 100);
 
@@ -19,12 +18,13 @@ pub fn Map(comptime K: type, comptime V: type) type {
 
     const ctx = if (K == StringType) StringContext{} else ValueContext {};
     const NullKey = if (K == StringType) &vl.StringNullKey else vl.NOTHING_VAL;
+    const TombVal = @as(vl.Value, vl.TRUE_VAL | vl.NOTHING_VAL);
 
     pub fn init() Self {
       return Self {.entries = &[_]KVEntry{}, .capacity = 0, .len = 0};
     }
 
-    inline fn isNullKey(self: *Self, key: K) bool {
+    pub inline fn isNullKey(self: *Self, key: K) bool {
       _ = self;
       return key == NullKey;
     }
@@ -122,7 +122,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
       }
     }
 
-    pub fn put(self: *Self, key: K, value: V, vm: *VM) bool {
+    pub fn set(self: *Self, key: K, value: V, vm: *VM) bool {
       if (self.len >= @floatToInt(usize, @intToFloat(f64, self.capacity) * LOAD_FACTOR)) {
         self.resizeMap(vm, 0);
       }
@@ -152,7 +152,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
       } else {
         self.len -= 1;
         entry.key = NullKey;
-        entry.value = TOMB_VAL;
+        entry.value = TombVal;
         return true;
       }
     }
@@ -173,6 +173,38 @@ pub fn Map(comptime K: type, comptime V: type) type {
         }
       }
       util.print("{s}", .{"}"});
+    }
+
+    pub fn keys(self: *Self, vm: *VM) vl.Value {
+      var list = vl.createList(vm, self.len);
+      var entry: *KVEntry = undefined;
+      var idx: usize = 0;
+      var keyc: usize = 0;
+      while (keyc < self.len) {
+        entry = &self.entries[idx];
+        if (!self.isNullKey(entry.key)) {
+          list.items[keyc] = entry.key;
+          keyc += 1;
+        }
+        idx += 1;
+      }
+      return vl.objVal(list);
+    }
+
+    pub fn values(self: *Self, vm: *VM) vl.Value {
+      var list = vl.createList(vm, self.len);
+      var entry: *KVEntry = undefined;
+      var idx: usize = 0;
+      var valc: usize = 0;
+      while (valc < self.len) {
+        entry = &self.entries[idx];
+        if (!self.isNullKey(entry.key)) {
+          list.items[valc] = entry.value;
+          valc += 1;
+        }
+        idx += 1;
+      }
+      return vl.objVal(list);
     }
 
     /// Map has to be a StringMap to use this method!

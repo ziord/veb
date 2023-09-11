@@ -1,4 +1,4 @@
-pub const _BuiltinsItf =
+pub const BuiltinsSrc =
 \\ type never = never
 \\
 \\ def assert(arg: bool, msg: str): void | noreturn
@@ -73,6 +73,10 @@ pub const _BuiltinsItf =
 \\
 \\ class err{T}
 \\  def init(val: T): void
+\\     #[[internal]]
+\\  end
+\\
+\\  def value(): T
 \\     #[[internal]]
 \\  end
 \\ end

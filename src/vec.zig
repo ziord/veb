@@ -22,7 +22,7 @@ pub fn Vec(comptime T: type) type {
     pub fn push(self: *Self, item: T, vm: *VM) void {
       if (self.len >= self.capacity) {
         const new_capacity = Mem.growCapacity(self.capacity);
-        self.items = vm.mem.resizeBuf(T, vm, self.allocatedSlice(),  self.capacity, new_capacity).ptr;
+        self.items = vm.mem.resizeBuf(T, vm, self.allocatedSlice(), self.capacity, new_capacity).ptr;
         self.capacity = new_capacity;
       }
       self.items[self.len] = item;

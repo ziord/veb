@@ -272,6 +272,8 @@ pub const ExprStmtNode = struct {
 pub const VarDeclNode = struct {
   ident: *VarNode,
   value: *AstNode,
+  /// whether this node has a type annotation
+  has_annotation: bool = false,
   /// whether this node is a function/method parameter
   is_param: bool = false,
   /// whether this node is a class field

@@ -1,4 +1,5 @@
 const std = @import("std");
+const BuiltinsSrc = @import("prelude.zig").BuiltinsSrc;
 const OpCode = @import("opcode.zig").OpCode;
 const VebAllocator = @import("allocator.zig");
 
@@ -354,6 +355,8 @@ pub const Token = struct {
   }
 
   pub fn column(self: @This(), src: []const u8) usize {
+    // FIXME: elegantly handle this
+    if (self.offset >= src.len) return self.column(BuiltinsSrc);
     return (
       if (std.mem.lastIndexOf(u8, src[0..self.offset], "\n")) |col|
         self.offset - col - 1
@@ -368,6 +371,8 @@ pub const Token = struct {
   }
 
   pub fn getLine(self: @This(), src: []const u8) []const u8 {
+    // FIXME: elegantly handle this
+    if (self.offset >= src.len) return self.getLine(BuiltinsSrc);
     var offset: usize = if (self.ty == .TkNewline or self.ty == .TkEof) self.offset - 1 else self.offset;
     // walk backwards
     var start_col: usize = offset;

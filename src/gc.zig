@@ -75,8 +75,8 @@ pub fn freeObject(self: *Self, obj: *Obj, vm: *VM) void {
       fun.code.deinit(vm);
       vm.mem.free(T, vm, fun);
     },
-    .objzfn => {
-      vm.mem.free(value.ObjZFn, vm, @ptrCast(*value.ObjZFn, obj));
+    .objnativefn => {
+      vm.mem.free(value.ObjNativeFn, vm, @ptrCast(*value.ObjNativeFn, obj));
     },
     .objclosure => {
       const T = value.ObjClosure;
@@ -109,8 +109,8 @@ pub fn freeObject(self: *Self, obj: *Obj, vm: *VM) void {
       vm.mem.freeBuf(value.Value, vm, inst.fields[0..inst.flen]);
       vm.mem.free(T, vm, inst);
     },
-    .objbmethod => {
-      vm.mem.free(value.ObjBMethod, vm, @ptrCast(*value.ObjBMethod, obj));
+    .objmethod => {
+      vm.mem.free(value.ObjMethod, vm, @ptrCast(*value.ObjMethod, obj));
     },
   }
 }

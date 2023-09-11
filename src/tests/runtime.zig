@@ -1787,6 +1787,20 @@ test "functions-18" {
   ;
   try doRuntimeTest(src);
 }
+  
+test "functions-19" {
+  var src =
+  \\ type T = num
+  \\ def id{T}(v: T): (fn (T): tuple{T})
+  \\  return def (x: T) => (x, v)
+  \\ end
+  \\ let j = id(8)
+  \\ let k = j(6)
+  \\ assert(k[0] == 6, 'k[0] == 6')
+  \\ assert(k[1] == 8, 'k[1] == 8')
+  ;
+  try doRuntimeTest(src);
+}
 
 test "builtin-functions" {
   var src =
@@ -2089,6 +2103,22 @@ test "simple-classes-4" {
   try doRuntimeTest(src);
 }
 
+test "simple-classes-5" {
+  var src =
+  \\ class Fox
+  \\    x: num | str = 5
+  \\    u = 12
+  \\    def foo()
+  \\      return self.u * 3
+  \\    end
+  \\ end
+  \\ let k = Fox()
+  \\ let t = k.foo
+  \\ assert(t() == 36, 'should be 36')
+  ;
+  try doRuntimeTest(src);
+}
+
 test "generic-classes-1" {
   var src =
   \\ class Fox{T}
@@ -2123,60 +2153,93 @@ test "generic-classes-1" {
   try doRuntimeTest(src);
 }
 
-// test "generic-classes-1" {
-//   var src =
-//   \\ let j = [1, 2, 3]
-//   \\ let p = (j.pop() orelse 0) + 4
-//   \\ j.append(4)
-//   \\ let k = (j, p)
-//   \\ p += k.len()
-//   \\ 
-//   \\ let x = {'a': 5, 'b': 6}
-//   \\ x.keys().len()
-//   \\ x.values().len()
-//   \\ x.get('a').? + 12
-//   \\ let j = [1, 2, 3]
-//   \\ let p = (j.pop() orelse 0) + 4
-//   ;
-//   try doRuntimeTest(src);
-// }
-// 
-// test "generic-classes-2" {
-//   var src =
-//   \\ class Fox{T}
-//   \\    x: tuple{T}
-//   \\    def init(x*: T): void
-//   \\      self.x = x
-//   \\    end
-//   \\    def pulse()
-//   \\      return self
-//   \\    end
-//   \\
-//   \\    def getGen()
-//   \\      type T = tuple{str}
-//   \\      def fun(p: T)
-//   \\        return p[0]
-//   \\      end
-//   \\      return fun
-//   \\    end
-//   \\ end
-//   \\ let x = Fox{num}(6, 7, 8)
-//   \\ let t: Fox{num} = x
-//   \\ t.pulse().x[0] + 12
-//   \\ t.pulse().getGen()(('starters',))
-//   \\ t.pulse().pulse().x.len()
-//   \\
-//   \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
-//   \\ let j: Fox{'mia'} = w
-//   \\ j.pulse().x
-//   \\
-//   \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
-//   \\ let j = Fox{'mia'}('mia')
-//   \\ j = w
-//   \\
-//   \\ type Poo{T} = Fox{T}
-//   \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
-//   \\ let j:Poo{'mia'} = Fox{'mia'}('mia')
-//   ;
-//   try doRuntimeTest(src);
-// }
+test "generic-classes-2" {
+  var src =
+  \\ let j = [1, 2, 3]
+  \\ let p = (j.pop() orelse 0) + 4
+  \\ j.append(4)
+  \\ let k = (j, p)
+  \\ p += k.len()
+  \\ assert(p == 9, 'p should be 9')
+  \\ 
+  \\ let x = {'a': 5, 'b': 6}
+  \\ assert(x.keys().len() == 2, 'length of keys should be 2')
+  \\ assert(x.values().len() == 2, 'length of values should be 2')
+  \\ assert(x.items().len() == 2, 'length of items should be 2')
+  \\ assert(x.get('a').? + 12 == 17, 'sum should be 17')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "generic-classes-3" {
+  var src =
+  \\ let j = []
+  \\ let _ = j.append
+  \\ _(5)
+  \\ _(1)
+  \\ assert(j.len() == 2, 'len should be 2')
+  \\ let x = j.pop()
+  \\ assert(x == 1, 'x should be 1')
+  \\ assert(j.pop() == 5, 'should be 5')
+  \\ assert(j.len() == 0, 'len should be 0 now')
+  \\ let t = {'a': 1, 'b': 5, 'c': 12}
+  \\ print(t, t.get('d'))
+  \\ print(t.keys())
+  \\ print(t.values())
+  \\ print(t.items())
+  \\ let g = (t)!
+  \\ print(g, g.value())
+  \\ let _ = g.value
+  \\ print(_, _().len())
+  \\ t.set('a', 0xff)
+  \\ print(t)
+  \\ let foo = t.get('p')
+  \\ assert(foo is nil, 'foo must be nil')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "generic-classes-4" {
+  var src =
+  \\ class Fox{T}
+  \\    x: tuple{T}
+  \\    def init(x*: T): void
+  \\      self.x = x
+  \\    end
+  \\    def pulse()
+  \\      return self
+  \\    end
+  \\
+  \\    def getGen()
+  \\      type T = tuple{str}
+  \\      def fun(p: T)
+  \\        return p[0]
+  \\      end
+  \\      return fun
+  \\    end
+  \\ end
+  \\ let x = Fox{num}(6, 7, 8)
+  \\ let t: Fox{num} = x
+  \\ t.pulse().x[0] + 12
+  \\ t.pulse().getGen()(('starters',))
+  \\ assert(t.pulse().pulse().x.len() == 3, 'should be 3')
+  \\
+  \\ let w = Fox{'mia'}('mia', 'mia', 'mia', 'mia')
+  \\ let j: Fox{'mia'} = w
+  \\ assert(j.pulse().x.len() == 4, 'len should be 4')
+  \\
+  \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
+  \\ let j = Fox{'mia'}('mia')
+  \\ assert(j.x.len() == 1, 'len should be 1')
+  \\ j = w
+  \\ assert(j.pulse().x.len() == 3, 'len should be 3')
+  \\
+  \\ type Poo{T} = Fox{T}
+  \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
+  \\ let j:Poo{'mia'} = Fox{'mia'}('mia', 'mia')
+  \\ assert(j.x.len() == 2, 'len should be 2')
+  \\ j = w
+  \\ assert(j.x.len() == 3, 'len should be 3')
+  ;
+  try doRuntimeTest(src);
+}

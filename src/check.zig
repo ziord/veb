@@ -242,7 +242,7 @@ pub const TypeChecker = struct {
 
   pub const SelfVar = "self";
   pub const InitVar = "init";
-  const _BuiltinsItf = prelude._BuiltinsItf;
+  const BuiltinsSrc = prelude.BuiltinsSrc;
 
   pub fn init(allocator: std.mem.Allocator, diag: *Diagnostic) @This() {
     return Self {
@@ -260,7 +260,7 @@ pub const TypeChecker = struct {
 
   fn loadBuiltinsPrelude(self: *Self, linker: *TypeLinker, al: *VebAllocator) void {
     const filename = @as([]const u8, "$builtins$");
-    var parser = parse.Parser.init(@constCast(&@as([]const u8, _BuiltinsItf)), &filename, al);
+    var parser = parse.Parser.init(@constCast(&@as([]const u8, BuiltinsSrc)), &filename, al);
     const node = parser.parse(true) catch unreachable;
     linker.linkTypes(node, true) catch unreachable;
     self.buildProgramFlow(node, true) catch unreachable;
@@ -2219,7 +2219,8 @@ pub const TypeChecker = struct {
     var synth_name = self.createSynthName(cls_ty.name, false, &_targs, null);
     if (self.findGenInfo(old_cls_node, synth_name)) |info| {
       node.expr.setType(info.typ);
-      return info.typ;
+      node.typ = info.typ.toInstance(al);
+      return node.typ.?;
     }
     // TODO: do we need to not clone methods considering they'll never be generic?
     var new_cls_node = cls.clone(al);
@@ -2255,7 +2256,7 @@ pub const TypeChecker = struct {
       old_cls_node,
       new_cls_node,
       self.boxSynthName(old_cls_node.getToken(), synth_name),
-      typ
+      new_cls_ty
     );
     return typ;
   }

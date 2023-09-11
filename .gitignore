@@ -2,3 +2,4 @@ zig-cache
 zig-out
 .lang
 .vscode
+.DS_Store

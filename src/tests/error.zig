@@ -90,6 +90,19 @@ test "casting" {
   });
 }
 
+test "noreturn" {
+  var src =
+  \\ def foo(): noreturn
+  \\  print("oops")
+  \\ end
+  \\
+  \\ foo()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Control flow reaches exit; function declared type 'noreturn' returns",
+  });
+}
+
 test "type linking" {
   var src =
   \\ type HashMap{K, V} = map{K, V}

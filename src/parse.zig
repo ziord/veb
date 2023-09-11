@@ -1041,9 +1041,7 @@ pub const Parser = struct {
   }
 
   fn annotation(self: *Self, ident: *ast.VarNode) !void {
-    var typ_node = &(try self.typing(false)).AstNType;
-    typ_node.from_alias_or_annotation = true;
-    ident.typ = typ_node.typ;
+    ident.typ = (try self.typing(false)).AstNType.typ;
   }
 
   fn parseExpr(self: *Self) !*Node {
@@ -1091,6 +1089,9 @@ pub const Parser = struct {
     var val = try self.parseExpr();
     var decl = self.newNode();
     decl.* = .{.AstVarDecl = ast.VarDeclNode.init(&ident.AstVar, val, false)};
+    if (ident.AstVar.typ) |_| {
+      decl.AstVarDecl.has_annotation = true;
+    }
     try self.consumeNlOrEof();
     return decl;
   }

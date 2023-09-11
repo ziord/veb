@@ -156,10 +156,6 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
       return @call(.always_inline, TypScope.allocator, .{&self.typScope});
     }
 
-    pub inline fn newType(self: *Self, kind: TypeInfo, debug: Token) *Type {
-      return util.box(Type, Type.init(kind, debug), self.typScope.allocator());
-    }
-
     pub inline fn enterScope(self: *Self) void {
       self.typScope.pushScope();
       self.varScope.pushScope();

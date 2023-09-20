@@ -1549,7 +1549,7 @@ test "functions-8" {
   \\    return (k, p)
   \\ end
   \\ funny2{num}()
-    \\ def funny
+  \\ def funny
   \\    def foo{T}(a: T): T
   \\     return a
   \\    end
@@ -1798,6 +1798,15 @@ test "functions-19" {
   \\ let k = j(6)
   \\ assert(k[0] == 6, 'k[0] == 6')
   \\ assert(k[1] == 8, 'k[1] == 8')
+  ;
+  try doRuntimeTest(src);
+}
+  
+test "functions-20" {
+  var src =
+  \\ assert((def (x: list{num}) 
+  \\   return x
+  \\ end)([5]) != [5], 'objects are not strictly equal')
   ;
   try doRuntimeTest(src);
 }
@@ -2104,6 +2113,22 @@ test "simple-classes-4" {
 }
 
 test "simple-classes-5" {
+  var src =
+  \\ class Fox
+  \\    x: num | str = 5
+  \\    u = 12
+  \\    def foo()
+  \\      return self.u * 3
+  \\    end
+  \\ end
+  \\ let k = Fox()
+  \\ let t = k.foo
+  \\ assert(t() == 36, 'should be 36')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "simple-classes-6" {
   var src =
   \\ class Fox
   \\    x: num | str = 5

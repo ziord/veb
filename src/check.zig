@@ -201,6 +201,7 @@ pub const TypeChecker = struct {
   linker: *TypeLinker = undefined,
   current_fn: ?*FlowMeta = null,
   void_ty: *Type,
+  str_ty: *Type,
   _prelude: *Node = undefined,
   builder: CFGBuilder,
   analyzer: Analysis,
@@ -242,6 +243,7 @@ pub const TypeChecker = struct {
 
   pub const SelfVar = "self";
   pub const InitVar = "init";
+  pub const StrVar = "str";
   const BuiltinsSrc = prelude.BuiltinsSrc;
 
   pub fn init(allocator: std.mem.Allocator, diag: *Diagnostic) @This() {
@@ -254,6 +256,7 @@ pub const TypeChecker = struct {
       .resolving = TypeList.init(allocator),
       .analyzer = Analysis.init(diag),
       .void_ty = Type.newVoid().box(allocator),
+      .str_ty = undefined,
       .builtins = TypeList.init(allocator),
     };
   }
@@ -275,7 +278,13 @@ pub const TypeChecker = struct {
         for (itm.AstClass.methods.items()) |method| {
           method.AstFun.is_builtin = true;
         }
-        self.builtins.append(self.inferClassPartial(itm) catch unreachable);
+        if (!std.mem.eql(u8, itm.AstClass.name.token.value, StrVar)) {
+          self.builtins.append(self.inferClassPartial(itm) catch unreachable);
+        } else {
+          var ty = try self.inferClassPartial(itm);
+          self.str_ty = self.inferClass(itm, ty) catch unreachable;
+          self.builtins.append(self.str_ty);
+        }
       }
     }
     self._prelude = node;
@@ -300,11 +309,8 @@ pub const TypeChecker = struct {
   }
 
   fn createSynthName(self: *Self, name: ?[]const u8, is_builtin: bool, args: *TypeList, targs: ?*NodeList) []const u8 {
+    _ = is_builtin;
     // FIXME: this is unhygienically inefficient.
-    if (is_builtin) {
-      // don't monomorphize builtin generic func/class names
-      return name.?;
-    }
     var start = name orelse self.genName(
       if (targs) |ta| ta.len() else 0,
       args.len()
@@ -991,8 +997,10 @@ pub const TypeChecker = struct {
   /// resolves a builtin class type
   fn resolveBuiltinType(self: *Self, typ: *Type) TypeCheckError!void {
     if (self.findBuiltinType(typ.klass().name)) |ty| {
+      self.resolving.append(typ);
       typ.* = (try self.synthInferClsType(typ, ty)).*;
       typ.klass().setAsResolved();
+      _ = self.resolving.pop();
     }
   }
 
@@ -1358,6 +1366,7 @@ pub const TypeChecker = struct {
         node.ident.typ = try self.infer(node.value);
       }
     }
+    if (node.is_param) try self.resolveType(node.ident.typ.?);
     self.insertVar(node.ident.token.value, node.ident.typ.?);
     return node.ident.typ.?;
   }
@@ -1844,6 +1853,10 @@ pub const TypeChecker = struct {
     }
     var lhs_ty = try self.infer(node.lhs);
     var prop = &node.rhs.AstVar;
+    if (lhs_ty.isStrTy()) {
+      node.lhs.forceSetType(self.str_ty);
+      lhs_ty = self.str_ty;
+    }
     if (!lhs_ty.isClass() and !lhs_ty.isInstance()) {
       return self.error_(
         true, node.lhs.getToken(),

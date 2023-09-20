@@ -145,8 +145,8 @@ pub const VM = struct {
   fn ensureStackCapacity(self: *Self) !void {
     if (
       (@divExact(
-        @ptrToInt(self.fiber.stack + self.fiber.stack_cap)
-        - @ptrToInt(self.fiber.fp.stack), @sizeOf(Value)
+        @intFromPtr(self.fiber.stack + self.fiber.stack_cap)
+        - @intFromPtr(self.fiber.fp.stack), @sizeOf(Value)
       ) > MAX_LOCAL_ITEMS)
     ) return;
     if (self.fiber.stack_cap >= MAX_STACK_ITEMS) {
@@ -169,7 +169,7 @@ pub const VM = struct {
         var frame = &self.fiber.frames[i];
         frame.stack = (
           self.fiber.stack
-          + @divExact(@ptrToInt(frame.stack) - @ptrToInt(old_stack), @sizeOf(Value))
+          + @divExact(@intFromPtr(frame.stack) - @intFromPtr(old_stack), @sizeOf(Value))
         );
       }
       // reset the stack pointer for each open upvalue.
@@ -177,7 +177,7 @@ pub const VM = struct {
       while (upvalues) |upvalue| {
         upvalue.loc = (
           &(self.fiber.stack
-          + (@divExact(@ptrToInt(upvalue.loc) - @ptrToInt(old_stack), @sizeOf(Value))))[0]
+          + (@divExact(@intFromPtr(upvalue.loc) - @intFromPtr(old_stack), @sizeOf(Value))))[0]
         );
         upvalues = upvalue.next;
       }
@@ -208,7 +208,7 @@ pub const VM = struct {
     var current = fiber.open_upvalues;
     var previous: ?*ObjUpvalue = null;
     // try to find a position where `local` fits
-    while (current != null and @ptrToInt(current.?.loc) > @ptrToInt(local)) {
+    while (current != null and @intFromPtr(current.?.loc) > @intFromPtr(local)) {
       previous = current;
       current = current.?.next;
     }
@@ -228,7 +228,7 @@ pub const VM = struct {
   }
 
   fn closeUpvalues(fiber: *ObjFiber, slot: *Value) void {
-    while (fiber.open_upvalues != null and @ptrToInt(fiber.open_upvalues.?.loc) >= @ptrToInt(slot)) {
+    while (fiber.open_upvalues != null and @intFromPtr(fiber.open_upvalues.?.loc) >= @intFromPtr(slot)) {
       var tmp = fiber.open_upvalues.?;
       tmp.value = tmp.loc.*;
       tmp.loc = &tmp.value;
@@ -557,7 +557,7 @@ pub const VM = struct {
           var rk2: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &rk2);
           fp.stack[rx] = vl.numberVal(
-            @intToFloat(f64, (vl.asIntNumber(i64, self.RK(rk1, fp)) | vl.asIntNumber(i64, self.RK(rk2, fp))))
+            @floatFromInt((vl.asIntNumber(i64, self.RK(rk1, fp)) | vl.asIntNumber(i64, self.RK(rk2, fp))))
           );
           continue;
         },
@@ -569,7 +569,7 @@ pub const VM = struct {
           self.read3Args(code, &rx, &rk1, &rk2);
           @setRuntimeSafety(false);
           fp.stack[rx] = vl.numberVal(
-            @intToFloat(f64, (vl.asIntNumber(i64, self.RK(rk1, fp)) & vl.asIntNumber(i64, self.RK(rk2, fp))))
+            @floatFromInt((vl.asIntNumber(i64, self.RK(rk1, fp)) & vl.asIntNumber(i64, self.RK(rk2, fp))))
           );
           continue;
         },
@@ -625,7 +625,7 @@ pub const VM = struct {
           self.read3Args(code, &rx, &rk1, &rk2);
           @setRuntimeSafety(false);
           fp.stack[rx] = vl.numberVal(
-            @intToFloat(f64, (vl.asIntNumber(i64, self.RK(rk1, fp)) ^ vl.asIntNumber(i64, self.RK(rk2, fp))))
+            @floatFromInt((vl.asIntNumber(i64, self.RK(rk1, fp)) ^ vl.asIntNumber(i64, self.RK(rk2, fp))))
           );
           continue;
         },
@@ -637,7 +637,7 @@ pub const VM = struct {
           self.read3Args(code, &rx, &rk1, &rk2);
           @setRuntimeSafety(false);
           fp.stack[rx] = vl.numberVal(
-            @intToFloat(f64, std.math.shl(i64, vl.asIntNumber(i64, self.RK(rk1, fp)), vl.asIntNumber(i64, self.RK(rk2, fp))))
+            @floatFromInt(std.math.shl(i64, vl.asIntNumber(i64, self.RK(rk1, fp)), vl.asIntNumber(i64, self.RK(rk2, fp))))
           );
           continue;
         },
@@ -648,7 +648,7 @@ pub const VM = struct {
           var rk2: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &rk2);
           fp.stack[rx] = vl.numberVal(
-            @intToFloat(f64, std.math.shr(i64, vl.asIntNumber(i64, self.RK(rk1, fp)), vl.asIntNumber(i64, self.RK(rk2, fp))))
+            @floatFromInt(std.math.shr(i64, vl.asIntNumber(i64, self.RK(rk1, fp)), vl.asIntNumber(i64, self.RK(rk2, fp))))
           );
           continue;
         },
@@ -658,7 +658,7 @@ pub const VM = struct {
           var rk: u32 = undefined;
           self.read2Args(code, &rx, &rk);
           @setRuntimeSafety(false);
-          fp.stack[rx] = vl.numberVal(@intToFloat(f64, ~vl.asIntNumber(i64, self.RK(rk, fp))));
+          fp.stack[rx] = vl.numberVal(@floatFromInt(~vl.asIntNumber(i64, self.RK(rk, fp))));
           continue;
         },
          .Mod => {
@@ -702,7 +702,7 @@ pub const VM = struct {
           self.read2Args(code, &direction, &bx);
           // 2 -> jmp fwd, 0 -> jmp bck
           @setRuntimeSafety(false);
-          fp.ip = @intCast(usize, (@intCast(i64, fp.ip) + (@intCast(i64, direction) - 1) * @intCast(i64, bx)));
+          fp.ip = @intCast((@as(i64, @intCast(fp.ip))) + (@as(i64, @intCast(direction)) - 1) * (@as(i64, @intCast(bx))));
           continue;
         },
         .Not => {
@@ -796,12 +796,12 @@ pub const VM = struct {
           self.read3Args(code, &rx, &rk1, &rk2);
           var list = vl.asList(fp.stack[rx]);
           var idx = vl.asIntNumber(i64, self.RK(rk1, fp));
-          if (idx < 0) idx += @intCast(i64, list.len);
+          if (idx < 0) idx += @intCast(list.len);
           if (idx >= list.len) {
             return self.runtimeError("IndexError: list index out of range: {}", .{idx});
           }
           @setRuntimeSafety(false);
-          list.items[@intCast(usize, idx)] = self.RK(rk2, fp);
+          list.items[@intCast(idx)] = self.RK(rk2, fp);
           continue;
         },
         .Glst => {
@@ -812,12 +812,12 @@ pub const VM = struct {
           self.read3Args(code, &rx, &rk1, &rk2);
           var list = vl.asList(self.RK(rk2, fp));
           var idx = vl.asIntNumber(i64, self.RK(rk1, fp));
-          if (idx < 0) idx += @intCast(i64, list.len);
+          if (idx < 0) idx += @intCast(list.len);
           if (idx >= list.len) {
             return self.runtimeError("IndexError: list index out of range: {}", .{idx});
           }
           @setRuntimeSafety(false);
-          fp.stack[rx] = list.items[@intCast(usize, idx)];
+          fp.stack[rx] = list.items[@intCast(idx)];
           continue;
         },
         .Ntup => {
@@ -839,7 +839,7 @@ pub const VM = struct {
           var idx = vl.asIntNumber(i64, self.RK(rk1, fp));
           // assumed safe
           @setRuntimeSafety(false);
-          tuple.items[@intCast(usize, idx)] = self.RK(rk2, fp);
+          tuple.items[@intCast(idx)] = self.RK(rk2, fp);
           continue;
         },
         .Gtup => {
@@ -850,12 +850,12 @@ pub const VM = struct {
           self.read3Args(code, &rx, &rk1, &rk2);
           var tuple = vl.asTuple(self.RK(rk2, fp));
           var idx = vl.asIntNumber(i64, self.RK(rk1, fp));
-          if (idx < 0) idx += @intCast(i64, tuple.len);
+          if (idx < 0) idx += @intCast(tuple.len);
           if (idx >= tuple.len) {
             return self.runtimeError("IndexError: tuple index out of range: {}", .{idx});
           }
           @setRuntimeSafety(false);
-          fp.stack[rx] = tuple.items[@intCast(usize, idx)];
+          fp.stack[rx] = tuple.items[@intCast(idx)];
           continue;
         },
         .Nmap => {

@@ -78,7 +78,13 @@ pub const Concrete = struct {
           return true;
         }
       },
-      .Generic, .Variable, .Recursive, .Function, .Method, .Class, .Top, .Instance => return false,
+      .Class => |*cls| {
+        if (this.tkind == .TyString) {
+          return cls.isStringClass();
+        }
+        return false;
+      },
+      .Generic, .Variable, .Recursive, .Function, .Method, .Top, .Instance => return false,
     }
     return false;
   }
@@ -105,13 +111,20 @@ pub const Constant = struct {
         return this.kind == cons.kind and std.mem.eql(u8, this.val, cons.val);
       },
       .Concrete => |conc| {
-        if (conc.tkind != this.kind) return false;
-        if (conc.val) |val| {
-          return std.mem.eql(u8, this.val, val.*);
+        if (conc.tkind == this.kind) {
+          if (conc.val) |val| {
+            return std.mem.eql(u8, this.val, val.*);
+          }
         }
         return false;
       },
-      .Union, .Generic, .Variable, .Recursive, .Function, .Method, .Class, .Top, .Instance => return false,
+      .Class => |*cls| {
+        if (this.kind == .TyString) {
+          return cls.isStringClass();
+        }
+        return false;
+      },
+      .Union, .Generic, .Variable, .Recursive, .Function, .Method, .Top, .Instance => return false,
     }
     return false;
   }
@@ -445,6 +458,10 @@ pub const Class = struct {
     return std.mem.eql(u8, self.name, other.name);
   }
 
+  pub fn isStringClass(self: *@This()) bool {
+    return self.builtin and std.mem.eql(u8, self.name, "str");
+  }
+
   pub fn setAsResolved(self: *@This()) void {
     self.resolved = true;
   }
@@ -526,7 +543,13 @@ pub const Class = struct {
         return true;
       },
       .Instance => this.isRelatedTo(other.instance().cls, ctx, A),
-      .Variable, .Constant, .Concrete, .Union, .Recursive, .Function, .Method, .Generic, .Top => false,
+      .Constant => |*cons| {
+        return this.isStringClass() and cons.kind == .TyString;
+      },
+      .Concrete => |*conc| {
+        return this.isStringClass() and conc.tkind == .TyString;
+      },
+      .Variable, .Union, .Recursive, .Function, .Method, .Generic, .Top => false,
     };
   }
 };
@@ -1102,7 +1125,7 @@ pub const Type = struct {
         for (gen.getSlice()) |typ| {
           self.tid += typ.typeid();
         }
-        self.tid += @boolToInt(gen.empty);
+        self.tid += @intFromBool(gen.empty);
       },
       .Class => |*cls| {
         self.tid = 5 << ID_HASH;
@@ -1120,8 +1143,8 @@ pub const Type = struct {
         // for (cls.methods.items()) |nd| {
         //   self.tid += nd.getType().?.typeid();
         // }
-        self.tid += @intCast(u32, cls.methods.len());
-        self.tid += @boolToInt(cls.empty);
+        self.tid += @intCast(cls.methods.len());
+        self.tid += @intFromBool(cls.empty);
       },
       .Union => |*uni| {
         self.tid = 6 << ID_HASH;
@@ -1139,7 +1162,7 @@ pub const Type = struct {
       .Function => |*fun| {
         self.tid = 8 << ID_HASH;
         if (fun.tparams) |tparams| {
-          self.tid += @intCast(u32, tparams.len());
+          self.tid += @intCast(tparams.len());
         }
         for (fun.params.items()) |ty| {
           self.tid += ty.typeid();
@@ -1160,7 +1183,7 @@ pub const Type = struct {
       },
       .Variable => |*vr| {
         for (vr.tokens.items()) |tok| {
-          self.tid += @as(u32, @enumToInt(tok.ty)) << ID_HASH;
+          self.tid += @as(u32, @intFromEnum(tok.ty)) << ID_HASH;
           // TODO: more efficient approach
           for (tok.value) |ch| {
             self.tid += @as(u8, ch);

@@ -49,7 +49,7 @@ pub const Code = extern struct {
     // [op] rx rk1 rk2
     //  6   8   9   9
     const op = (word >> 26) & _6bits;
-    return @intToEnum(OpCode, op);
+    return @enumFromInt(op);
   }
 
 
@@ -84,41 +84,48 @@ pub const Code = extern struct {
   pub inline fn readSBX(word: u32) i32 {
     // op rx [sbx] 
     // 6  8   18
-    const sbx = @intCast(i32, word & _18bits);
+    const sbx: i32 = @intCast(word & _18bits);
     return if (sbx & _sign == _sign) sbx - (1 << 18) else sbx;
+  }
+
+  pub fn resetBy(self: *Self, n: u32) void {
+    for (0..n) |_| {
+      _ = self.words.pop();
+      _ = self.lines.pop();
+    }
   }
 
   pub fn writeValue(self: *Self, value: Value, vm: *VM) u32 {
     self.values.push(value, vm);
-    return @intCast(u32, self.values.len - 1);
+    return @intCast(self.values.len - 1);
   }
 
   pub fn write3ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, arg3: u32, line: usize, vm: *VM) void {
     // [op 6bits][reg 8bits][reg 9bits][reg 9bits]
-    const inst = ((@enumToInt(op) & _6bits) << 26) | ((arg1 & _8bits) << 18) | ((arg2 & _9bits) << 9) | ((arg3 & _9bits));
+    const inst = ((@intFromEnum(op) & _6bits) << 26) | ((arg1 & _8bits) << 18) | ((arg2 & _9bits) << 9) | ((arg3 & _9bits));
     self.words.push(inst, vm);
-    self.lines.push(@intCast(u32, line), vm);
+    self.lines.push(@intCast(line), vm);
   }
 
   pub fn write2ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, line: usize, vm: *VM) void {
     // [op 6bits][reg 8bits][reg 18bits]
-    const inst = ((@enumToInt(op) & _6bits) << 26) | ((arg1 & _8bits) << 18) | ((arg2 & _18bits));
+    const inst = ((@intFromEnum(op) & _6bits) << 26) | ((arg1 & _8bits) << 18) | ((arg2 & _18bits));
     self.words.push(inst, vm);
-    self.lines.push(@intCast(u32, line), vm);
+    self.lines.push(@intCast(line), vm);
   }
 
   pub fn write1ArgInst(self: *Self, op: OpCode,  arg: u32, line: usize, vm: *VM) void {
     // [op 6bits][reg 26bits]
-    const inst = ((@enumToInt(op) & _6bits) << 26) | ((arg & _26bits));
+    const inst = ((@intFromEnum(op) & _6bits) << 26) | ((arg & _26bits));
     self.words.push(inst, vm);
-    self.lines.push(@intCast(u32, line), vm);
+    self.lines.push(@intCast(line), vm);
   }
 
   pub fn writeNoArgInst(self: *Self, op: OpCode, line: usize, vm: *VM) void {
     // [op 6bits]
-    const inst = ((@enumToInt(op) & _6bits) << 26);
+    const inst = ((@intFromEnum(op) & _6bits) << 26);
     self.words.push(inst, vm);
-    self.lines.push(@intCast(u32, line), vm);
+    self.lines.push(@intCast(line), vm);
   }
 
   pub fn write2ArgsJmp(self: *Self, op: OpCode, arg1: u32, line: usize, vm: *VM) usize {
@@ -138,7 +145,7 @@ pub const Code = extern struct {
     const real_offset = self.words.len - index - 1;
     checkOffset(real_offset, _18bits, "max jump offset exceeded");
     const new = (first << 26) | (second << 18) | real_offset;
-    self.words.items[index] = @intCast(u32, new);
+    self.words.items[index] = @intCast(new);
   }
 
   pub inline fn getInstLen(self: *Self) usize {
@@ -395,16 +402,16 @@ pub const FiberStatus = enum {
 
 
 pub inline fn numberVal(num: f64) Value {
-  return @ptrCast(*const Value, &num).*;
+  return @as(*const Value, @ptrCast(&num)).*;
 }
 
 pub inline fn asNumber(val: Value) f64 {
-  return @bitCast(f64, val);
+  return @bitCast(val);
 }
 
 pub inline fn asIntNumber(comptime T: type, val: Value) T {
   @setRuntimeSafety(false);
-  return @floatToInt(T, asNumber(val));
+  return @intFromFloat(asNumber(val));
 }
 
 pub inline fn isNumber(val: Value) bool {
@@ -462,11 +469,11 @@ pub inline fn isNothing(val: Value) bool {
 }
 
 pub inline fn objVal(ptr: anytype) Value {
-  return @intCast(Value, @intCast(u64, @ptrToInt(ptr)) | TAG_OBJECT);
+  return (@as(u64, @intFromPtr(ptr)) | TAG_OBJECT);
 }
 
 pub inline fn asObj(val: Value) *Obj {
-  return @intToPtr(*Obj, @intCast(u64, (val & ~TAG_OBJECT)));
+  return @ptrFromInt(val & ~TAG_OBJECT);
 }
 
 pub inline fn isObj(val: Value) bool {
@@ -570,55 +577,55 @@ pub fn isErrorNoInline(val: Value) bool {
 }
 
 pub inline fn asString(val: Value) *ObjString {
-  return @ptrCast(*ObjString, asObj(val));
+  return @ptrCast(asObj(val));
 }
 
 pub inline fn asList(val: Value) *ObjList {
-  return @ptrCast(*ObjList, asObj(val));
+  return @ptrCast(asObj(val));
 }
 
 pub inline fn asMap(val: Value) *ObjMap {
-  return @ptrCast(*ObjMap, asObj(val));
+  return @ptrCast(asObj(val));
 }
 
 pub inline fn asTuple(val: Value) *ObjTuple {
-  return @ptrCast(*ObjTuple, asObj(val));
+  return @ptrCast(asObj(val));
 }
 
 pub inline fn asFn(val: Value) *ObjFn {
-  return @ptrCast(*ObjFn, asObj(val));
+  return @ptrCast(asObj(val));
 }
 
 pub inline fn asNativeFn(val: Value) *ObjNativeFn {
-  return @ptrCast(*ObjNativeFn, asObj(val));
+  return @ptrCast(asObj(val));
 }
 
 pub inline fn asClosure(val: Value) *ObjClosure {
-  return @ptrCast(*ObjClosure, asObj(val));
+  return @ptrCast(asObj(val));
 }
 
 pub inline fn asUpvalue(val: Value) *ObjUpvalue {
-  return @ptrCast(*ObjUpvalue, asObj(val));
+  return @ptrCast(asObj(val));
 }
 
 pub inline fn asFiber(val: Value) *ObjFiber {
-  return @ptrCast(*ObjFiber, asObj(val));
+  return @ptrCast(asObj(val));
 }
 
 pub inline fn asError(val: Value) *ObjError {
-  return @ptrCast(*ObjError, asObj(val));
+  return @ptrCast(asObj(val));
 }
 
 pub inline fn asClass(val: Value) *ObjClass {
-  return @ptrCast(*ObjClass, asObj(val));
+  return @ptrCast(asObj(val));
 }
 
 pub inline fn asInstance(val: Value) *ObjInstance {
-  return @ptrCast(*ObjInstance, asObj(val));
+  return @ptrCast(asObj(val));
 }
 
 pub inline fn asMethod(val: Value) *ObjMethod {
-  return @ptrCast(*ObjMethod, asObj(val));
+  return @ptrCast(asObj(val));
 }
 
 pub inline fn valueEqual(a: Value, b: Value) bool {
@@ -827,7 +834,7 @@ pub fn hashString(str: []const u8) u64 {
     hash = hash ^ @as(u8, str[i]);
     hash = hash * fnv_prime;
   }
-  return @truncate(u64, hash);
+  return @truncate(hash);
 }
 
 pub fn hashBits(val: Value) u64 {
@@ -841,7 +848,7 @@ pub fn hashBits(val: Value) u64 {
   hash = hash ^ (hash >> 11);
   hash = hash + (hash << 6);
   hash = hash ^ (hash >> 22);
-  return @truncate(u64, (hash & 0x3fffffff));
+  return @truncate((hash & 0x3fffffff));
 }
 
 pub fn hashObject(val: Value) u64 {
@@ -872,13 +879,13 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
   var string = map.findInterned(str, hash);
   if (string == null) {
     var tmp = @call(.always_inline, createObject, .{vm, .objstring, vm.classes.string, ObjString});
-    tmp.str = @ptrCast([*]const u8, str);
+    tmp.str = @ptrCast(str);
     tmp.hash = hash;
     tmp.len = str.len;
     if (!is_alloc) {
       var s = vm.mem.allocBuf(u8, str.len, vm);
       std.mem.copy(u8, s, str);
-      tmp.str = @ptrCast([*]const u8, s);
+      tmp.str = @ptrCast(s);
     } else {
       vm.gc.bytes_allocated += str.len;
     }
@@ -892,7 +899,7 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
 pub fn createList(vm: *VM, len: usize) *ObjList {
   const cap = Mem.alignTo(Mem.growCapacity(len), Mem.BUFFER_INIT_SIZE);
   var list = @call(.always_inline, createObject, .{vm, .objlist, vm.classes.list, ObjList});
-  list.items = @ptrCast([*]Value, vm.mem.allocBuf(Value, cap, vm));
+  list.items = @ptrCast(vm.mem.allocBuf(Value, cap, vm));
   list.capacity = cap;
   list.len = len;
   return list;
@@ -907,7 +914,7 @@ pub fn createMap(vm: *VM, len: usize) *ObjMap {
 
 pub fn createTuple(vm: *VM, len: usize) *ObjTuple {
   var tuple = @call(.always_inline, createObject, .{vm, .objtuple, vm.classes.tuple, ObjTuple});
-  tuple.items = @ptrCast([*]Value, vm.mem.allocBuf(Value, len, vm));
+  tuple.items = @ptrCast(vm.mem.allocBuf(Value, len, vm));
   tuple.len = len;
   return tuple;
 }

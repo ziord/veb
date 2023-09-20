@@ -297,6 +297,7 @@ pub const VarDeclNode = struct {
     var vn = VarDeclNode.init(&self.ident.clone(al).AstVar, value, self.is_param);
     vn.is_field = self.is_field;
     vn.has_default = self.has_default;
+    vn.has_annotation = self.has_annotation;
     var new = util.alloc(AstNode, al);
     new.* = .{.AstVarDecl = vn};
     return new;
@@ -1084,9 +1085,37 @@ pub const AstNode = union(AstType) {
         else der.typ = typ;
       },
       .AstScope => {},
+      .AstString => |*lit| {
+        lit.typ = typ;
+      },
       else => {
         std.log.debug("Attempt to set type on node: {}\n", .{self});
       },
+    }
+  }
+
+  pub fn forceSetType(self: *@This(), typ: *Type) void {
+    switch (self.*) {
+      .AstNumber, .AstString, .AstBool, .AstNil => |*lit| lit.typ = typ,
+      .AstBinary, .AstAssign => |*bin| bin.typ = typ,
+      .AstUnary => |*una| una.typ = typ,
+      .AstDotAccess => |*dot| {
+        if (dot.narrowed) |nrw| nrw.typ = typ
+        else dot.typ = typ;
+      },
+      .AstSubscript => |*sub| {
+        if (sub.narrowed) |nrw| nrw.typ = typ
+        else sub.typ = typ;
+      },
+      .AstDeref => |*der| {
+        if (der.narrowed) |nrw| nrw.typ = typ
+        else der.typ = typ;
+      },
+      .AstVar => |*vr| vr.typ = typ,
+      .AstCast => |*cst| cst.typn.typ = typ,
+      .AstCall => |*call| call.typ = typ,
+      .AstOrElse => |*oe| oe.typ = typ,
+      else => unreachable,
     }
   }
 

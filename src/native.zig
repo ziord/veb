@@ -110,7 +110,7 @@ pub fn fnPrint(vm: *VM, argc: u32, args: u32) Value {
 fn stringLen(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var str = vl.asString(getArg(vm, args));
-  return vl.numberVal(@intToFloat(f64, str.len));
+  return vl.numberVal(@floatFromInt(str.len));
 }
 
 fn createStringClass(vm: *VM) *vl.ObjClass {
@@ -150,7 +150,7 @@ fn listAppend(vm: *VM, argc: u32, args: u32) Value {
 fn listLen(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var list = vl.asList(getArg(vm, args));
-  return vl.numberVal(@intToFloat(f64, list.len));
+  return vl.numberVal(@floatFromInt(list.len));
 }
 
 // pop(): T
@@ -166,14 +166,25 @@ fn listPop(vm: *VM, argc: u32, args: u32) Value {
   return val;
 }
 
+// get(index: num): T?
+fn listGet(vm: *VM, argc: u32, args: u32) Value {
+  _ = argc;
+  var list = vl.asList(getArg(vm, args));
+  if (list.len == 0) return vl.NIL_VAL;
+  var idx = vl.asIntNumber(i64, getArg(vm, args + 1));
+  if (idx < 0) idx += @intCast(list.len);
+  if (idx >= list.len) return vl.NIL_VAL;
+  return list.items[@intCast(idx)];
+}
+
 fn createListClass(vm: *VM) *vl.ObjClass {
   //*** method executable ***//
   // NOTE: Methods are set according to the order in prelude
-  const methods = [_]NativeFn {listInit, listAppend, listLen, listPop};
+  const methods = [_]NativeFn {listInit, listAppend, listLen, listPop, listGet};
   //*** arity of each method ***//
-  const arities = [_]u32 {VarArgC, 1, 0, 0};
+  const arities = [_]u32 {VarArgC, 1, 0, 0, 1};
   //*** index into NativeFns array ***//
-  const names = [_]usize{7, 4, 5, 8};
+  const names = [_]usize{7, 4, 5, 8, 10};
   var cls = vl.createClass(vm, (@sizeOf(@TypeOf(methods)) / methods.len));
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
@@ -197,16 +208,27 @@ fn tupleInit(vm: *VM, argc: u32, args: u32) Value {
 fn tupleLen(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var tuple = vl.asTuple(getArg(vm, args));
-  return vl.numberVal(@intToFloat(f64, tuple.len));
+  return vl.numberVal(@floatFromInt(tuple.len));
+}
+
+// get(index: num): T?
+fn tupleGet(vm: *VM, argc: u32, args: u32) Value {
+  _ = argc;
+  var tuple = vl.asTuple(getArg(vm, args));
+  if (tuple.len == 0) return vl.NIL_VAL;
+  var idx = vl.asIntNumber(i64, getArg(vm, args + 1));
+  if (idx < 0) idx += @intCast(tuple.len);
+  if (idx >= tuple.len) return vl.NIL_VAL;
+  return tuple.items[@intCast(idx)];
 }
 
 fn createTupleClass(vm: *VM) *vl.ObjClass {
   //*** method executable ***//
-  const methods = [_]NativeFn {tupleInit, tupleLen};
+  const methods = [_]NativeFn {tupleInit, tupleLen, tupleGet};
   //*** arity of each method ***//
-  const arities = [_]u32 {0, VarArgC};
+  const arities = [_]u32 {0, VarArgC, 1};
   //*** index into NativeFns array ***//
-  const names = [_]usize{7, 5};
+  const names = [_]usize{7, 5, 10};
   var cls = vl.createClass(vm, (@sizeOf(@TypeOf(methods)) / methods.len));
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
@@ -222,7 +244,7 @@ fn createTupleClass(vm: *VM) *vl.ObjClass {
 fn mapLen(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var map = vl.asMap(getArg(vm, args));
-  return vl.numberVal(@intToFloat(f64, map.meta.len));
+  return vl.numberVal(@floatFromInt(map.meta.len));
 }
 
 // set(key: K, value: V): void

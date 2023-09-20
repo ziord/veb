@@ -348,7 +348,7 @@ pub const Token = struct {
     if (self.value.len > 1 and self.value[0] == '0') {
       const ty = self.value[1];
       if (ty == 'x' or ty == 'o' or ty == 'b') {
-        return @intToFloat(f64, try std.fmt.parseInt(i64, self.value, 0));
+        return @floatFromInt(try std.fmt.parseInt(i64, self.value, 0));
       }
     }
     return try std.fmt.parseFloat(f64, self.value);
@@ -363,7 +363,7 @@ pub const Token = struct {
       else 
         self.offset
     ) + self.value.len 
-      + @boolToInt((self.ty == .TkString or self.ty == .TkAllocString)); // quote
+      + @intFromBool((self.ty == .TkString or self.ty == .TkAllocString)); // quote
   }
 
   pub fn isAlloc(self: @This()) bool {

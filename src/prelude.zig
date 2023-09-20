@@ -33,6 +33,10 @@ pub const BuiltinsSrc =
 \\  def pop(): T | err{str}
 \\    #[[internal]]
 \\  end
+\\
+\\  def get(index: num): T?
+\\    #[[internal]]
+\\  end
 \\ end
 \\
 \\ class tuple{T}
@@ -41,6 +45,10 @@ pub const BuiltinsSrc =
 \\  end
 \\
 \\  def len(): num
+\\    #[[internal]]
+\\  end
+\\
+\\  def get(index: num): T?
 \\    #[[internal]]
 \\  end
 \\ end
@@ -78,6 +86,12 @@ pub const BuiltinsSrc =
 \\
 \\  def value(): T
 \\     #[[internal]]
+\\  end
+\\ end
+\\
+\\ class str
+\\  def len(): num
+\\    #[[internal]]
 \\  end
 \\ end
 ;

@@ -47,70 +47,70 @@ pub fn freeObject(self: *Self, obj: *Obj, vm: *VM) void {
   switch (obj.id) {
     .objstring => {
       const T = value.ObjString;
-      var string = @ptrCast(*T, obj);
+      var string: *T = @ptrCast(obj);
       vm.mem.freeBuf(u8, vm, string.str[0..string.len]);
       vm.mem.free(T, vm, string);
     },
     .objlist => {
       const T = value.ObjList;
-      var list = @ptrCast(*T, obj);
+      var list: *T = @ptrCast(obj);
       vm.mem.freeBuf(value.Value, vm, list.items[0..list.capacity]);
       vm.mem.free(T, vm, list);
     },
     .objtuple => {
       const T = value.ObjTuple;
-      var tuple = @ptrCast(*T, obj);
+      var tuple: *T = @ptrCast(obj);
       vm.mem.freeBuf(value.Value, vm, tuple.items[0..tuple.len]);
       vm.mem.free(T, vm, tuple);
     },
     .objvalmap => {
       const T = value.ObjMap;
-      var map = @ptrCast(*T, obj);
+      var map: *T = @ptrCast(obj);
       map.meta.free(vm);
       vm.mem.free(T, vm, map);
     },
     .objfn => {
       const T = value.ObjFn;
-      var fun = @ptrCast(*T, obj);
+      var fun: *T = @ptrCast(obj);
       fun.code.deinit(vm);
       vm.mem.free(T, vm, fun);
     },
     .objnativefn => {
-      vm.mem.free(value.ObjNativeFn, vm, @ptrCast(*value.ObjNativeFn, obj));
+      vm.mem.free(value.ObjNativeFn, vm, @as(*value.ObjNativeFn, @ptrCast(obj)));
     },
     .objclosure => {
       const T = value.ObjClosure;
-      var clo = @ptrCast(*T, obj);
+      var clo: *T = @ptrCast(obj);
       vm.mem.freeBuf(*value.ObjUpvalue, vm, clo.env[0..clo.fun.envlen]);
       vm.mem.free(T, vm, clo);
     },
     .objerror => {
-      vm.mem.free(value.ObjError, vm, @ptrCast(*value.ObjError, obj));
+      vm.mem.free(value.ObjError, vm, @as(*value.ObjError, @ptrCast(obj)));
     },
     .objupvalue => {
-      vm.mem.free(value.ObjUpvalue, vm, @ptrCast(*value.ObjUpvalue, obj));
+      vm.mem.free(value.ObjUpvalue, vm, @as(*value.ObjUpvalue, @ptrCast(obj)));
     },
     .objfiber => {
       const T = value.ObjFiber;
-      var fiber = @ptrCast(*T, obj);
+      var fiber: *T = @ptrCast(obj);
       vm.mem.freeBuf(value.CallFrame, vm, fiber.frames[0..fiber.frame_cap]);
       vm.mem.freeBuf(value.Value, vm, fiber.stack[0..fiber.stack_cap]);
       vm.mem.free(T, vm, fiber);
     },
     .objclass => {
       const T = value.ObjClass;
-      var cls = @ptrCast(*T, obj);
+      var cls: *T = @ptrCast(obj);
       vm.mem.freeBuf(value.Value, vm, cls.methods[0..cls.mlen]);
       vm.mem.free(T, vm, cls);
     },
     .objinstance => {
       const T = value.ObjInstance;
-      var inst = @ptrCast(*T, obj);
+      var inst: *T = @ptrCast(obj);
       vm.mem.freeBuf(value.Value, vm, inst.fields[0..inst.flen]);
       vm.mem.free(T, vm, inst);
     },
     .objmethod => {
-      vm.mem.free(value.ObjMethod, vm, @ptrCast(*value.ObjMethod, obj));
+      vm.mem.free(value.ObjMethod, vm, @as(*value.ObjMethod, @ptrCast(obj)));
     },
   }
 }

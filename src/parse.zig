@@ -276,15 +276,15 @@ pub const Parser = struct {
   }
 
   fn _parse(self: *Self, bp: BindingPower) !*Node {
-    const prefix = ptable[@enumToInt(self.current_tok.ty)].prefix;
+    const prefix = ptable[@intFromEnum(self.current_tok.ty)].prefix;
     if (prefix == null) {
       return self.errMsg(self.current_tok, "token found at an invalid prefix position");
     }
-    const bp_val = @enumToInt(bp);
-    const assignable = bp_val <= @enumToInt(BindingPower.Assignment);
+    const bp_val = @intFromEnum(bp);
+    const assignable = bp_val <= @intFromEnum(BindingPower.Assignment);
     var node = try prefix.?(self, assignable);
-    while (bp_val < @enumToInt(ptable[@enumToInt(self.current_tok.ty)].bp)) {
-      var infix = ptable[@enumToInt(self.current_tok.ty)].infix;
+    while (bp_val < @intFromEnum(ptable[@intFromEnum(self.current_tok.ty)].bp)) {
+      var infix = ptable[@intFromEnum(self.current_tok.ty)].infix;
       if (infix == null) {
         return self.errMsg(self.current_tok, "token found at an invalid infix position");
       }
@@ -327,7 +327,7 @@ pub const Parser = struct {
 
   fn unary(self: *Self, assignable: bool) !*Node {
     _ = assignable;
-    const bp = ptable[@enumToInt(self.current_tok.ty)].bp;
+    const bp = ptable[@intFromEnum(self.current_tok.ty)].bp;
     const op = self.current_tok;
     const line_tok = self.current_tok;
     try self.advance();
@@ -351,7 +351,7 @@ pub const Parser = struct {
 
   fn binary(self: *Self, lhs: *Node, assignable: bool) !*Node {
     _ = assignable;
-    const bp = ptable[@enumToInt(self.current_tok.ty)].bp;
+    const bp = ptable[@intFromEnum(self.current_tok.ty)].bp;
     const op = self.current_tok;
     try self.advance();
     const rhs = try self._parse(bp);
@@ -362,7 +362,7 @@ pub const Parser = struct {
 
   fn binIs(self: *Self, lhs: *Node, assignable: bool) !*Node {
     _ = assignable;
-    const bp = ptable[@enumToInt(self.current_tok.ty)].bp;
+    const bp = ptable[@intFromEnum(self.current_tok.ty)].bp;
     const op = self.current_tok;
     try self.advance();
     var is_not = self.match(.TkNot);
@@ -523,7 +523,7 @@ pub const Parser = struct {
     if (!self.check(.TkIdent)) {
       self.softErrMsg(self.current_tok, "expected identifier after '.'");
     }
-    const bp = ptable[@enumToInt(self.previous_tok.ty)].bp;
+    const bp = ptable[@intFromEnum(self.previous_tok.ty)].bp;
     const right = try self._parse(bp);
     var node = self.newNode();
     node.* = .{.AstDotAccess = ast.DotAccessNode.init(left, right)};
@@ -591,7 +591,7 @@ pub const Parser = struct {
       );
     }
     try self.consume(.TkTry);
-    var ok = try self._parse(ptable[@enumToInt(self.previous_tok.ty)].bp);
+    var ok = try self._parse(ptable[@intFromEnum(self.previous_tok.ty)].bp);
     var token = lex.Token.tokenFrom(&self.previous_tok);
     token.ty = .TkAllocString;
     token.value = self.genName("e");
@@ -787,7 +787,7 @@ pub const Parser = struct {
   }
 
   fn builtinType(self: *Self) !Type {
-    // handle builtin list/map/tuple/err type
+    // handle builtin list/map/tuple/err/str type
     try self.advance();
     var ty = Type.newClass(self.previous_tok.value, self.allocator);
     ty.klass().builtin = true;
@@ -896,16 +896,17 @@ pub const Parser = struct {
       .TkIdent, .TkList, .TkMap, .TkTuple, .TkErr => {
         typ = try self.tGeneric();
       },
+      // Function
       .TkFn => {
-        // Function
         typ = try self.funType();
       },
+      // “(“ Expression “)”
       .TkLBracket => {
-        // “(“ Expression “)”
         try self.advance();
         typ = try self.tExpr();
         try self.consume(.TkRBracket);
       },
+      // Concrete
       .TkBool, .TkNum, .TkStr, .TkVoid, .TkNoReturn, .TkAny => |ty| {
           var tkind: TypeKind = switch (ty) {
           .TkBool => .TyBool,
@@ -920,6 +921,7 @@ pub const Parser = struct {
         typ = Type.newConcrete(tkind);
         try self.advance();
       },
+      // Constant
       else => {
         typ = try self.constantType();
       },
@@ -1315,7 +1317,7 @@ pub const Parser = struct {
     var cls = self.newNode();
     self.class = cls;
     switch (self.current_tok.ty) {
-      .TkList, .TkErr, .TkTuple, .TkMap => try self.advance(),
+      .TkList, .TkErr, .TkTuple, .TkMap, .TkStr => try self.advance(),
       else => try self.consume(.TkIdent)
     }
     var ident = ast.VarNode.init(self.previous_tok).box(self.allocator);

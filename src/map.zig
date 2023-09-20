@@ -73,7 +73,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
         entry.key = NullKey;
         entry.value = vl.NOTHING_VAL;
       }
-      var new_entries = @ptrCast([*]KVEntry, tmp);
+      var new_entries: [*]KVEntry = @ptrCast(tmp);
       self.len = 0; // reset len for resizing.
       for (self.entries[0..self.capacity]) |*entry| {
         if (!self.isNullKey(entry.key)) {
@@ -123,7 +123,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
     }
 
     pub fn set(self: *Self, key: K, value: V, vm: *VM) bool {
-      if (self.len >= @floatToInt(usize, @intToFloat(f64, self.capacity) * LOAD_FACTOR)) {
+      if (self.len >= @as(usize, @intFromFloat((@as(f64, @floatFromInt(self.capacity)) * LOAD_FACTOR)))) {
         self.resizeMap(vm, 0);
       }
       var entry = self.findEntry(self.entries, self.capacity, key);
@@ -160,7 +160,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
     pub fn display(self: *Self) void {
       util.print("{s}", .{"{"});
       var i: u32 = 0;
-      var last = @intCast(i64, self.len) - 1;
+      var last = @as(i64, @intCast(self.len)) - 1;
       for (self.entries[0..self.capacity]) |entry| {
         if (!self.isNullKey(entry.key)) {
           @call(.always_inline, vl.display, .{entry.key});

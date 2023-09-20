@@ -43,7 +43,7 @@ const VRegister = struct {
     var regs = std.MultiArrayList(Reg){};
     regs.ensureTotalCapacity(al, value.MAX_REGISTERS) catch {};
     for (0..value.MAX_REGISTERS) |i| {
-      regs.append(al, .{.val = @intCast(u8, i), .free = true}) catch {};
+      regs.append(al, .{.val = @intCast(i), .free = true}) catch {};
     }
     return Self {.regs = regs};
   }
@@ -222,7 +222,7 @@ pub const Compiler = struct {
   const RkBxPair = struct {
     optimizeRK: u32 = 0, // can optimize for rk
     optimizeBX: u32 = 0, // can optimize for bx
-    in_jmp: u32 = 0,
+    in_noopt: u32 = 0,
   };
   const CompileError = error{CompileError};
 
@@ -337,19 +337,19 @@ pub const Compiler = struct {
   }
 
   inline fn canOptimizeConstRK(self: *Self) bool {
-    return self.rk_bx.optimizeRK > 0 and self.rk_bx.in_jmp == 0;
+    return self.rk_bx.optimizeRK > 0 and self.rk_bx.in_noopt == 0;
   }
 
   inline fn canOptimizeConstBX(self: *Self) bool {
-    return self.rk_bx.optimizeBX > 0 and self.rk_bx.in_jmp == 0;
+    return self.rk_bx.optimizeBX > 0 and self.rk_bx.in_noopt == 0;
   }
 
-  inline fn enterJmp(self: *Self) void {
-    self.rk_bx.in_jmp += 1;
+  inline fn enterNoOpt(self: *Self) void {
+    self.rk_bx.in_noopt += 1;
   }
 
-  inline fn leaveJmp(self: *Self) void {
-    self.rk_bx.in_jmp -= 1;
+  inline fn leaveNoOpt(self: *Self) void {
+    self.rk_bx.in_noopt -= 1;
   }
 
   /// return true if within RK limit else false
@@ -372,7 +372,7 @@ pub const Compiler = struct {
     var reg = try self.getReg(node.token);
     self.locals.append(
       self.alloc(),
-      LocalVar.init(self.scope, &node.token.value, reg, @intCast(u32, self.locals.len))
+      LocalVar.init(self.scope, &node.token.value, reg, @intCast(self.locals.len))
     ) catch {};
     return reg;
   }
@@ -392,10 +392,10 @@ pub const Compiler = struct {
     var is_locals = slice.items(.is_local);
     for (indexs, is_locals, 0..) |idx, loc, i| {
       if (index == idx and is_local == loc) {
-        return @intCast(u32, i);
+        return @intCast(i);
       }
     }
-    var ret = @intCast(u32, self.upvalues.len);
+    var ret: u32 = @intCast(self.upvalues.len);
     self.upvalues.append(self.alloc(), Upvalue.init(index, is_local)) catch |e| {
       std.debug.print("error: {}\n", .{e});
       return error.CompileError;
@@ -414,7 +414,7 @@ pub const Compiler = struct {
       std.log.debug("Gsyms {s}..using globals list\n", .{if (self.skip_gsyms) "elided" else "exceeded"});
       return .{.pos = self.addGlobalVar(node), .isGSym = false};
     }
-    var idx = @intCast(u32, self.gsyms.len);
+    var idx: u32 = @intCast(self.gsyms.len);
     self.gsyms.append(
       self.alloc(),
       GSymVar {.name = &node.token.value}
@@ -426,7 +426,7 @@ pub const Compiler = struct {
     var gvar = GlobalVar {
       .name = &node.token.value, 
       .mempos = self.storeVar(node),
-      .index = @intCast(u32, self.globals.len),
+      .index = @intCast(self.globals.len),
     };
     self.globals.append(self.alloc(), gvar) catch {};
     return gvar.mempos;
@@ -475,7 +475,7 @@ pub const Compiler = struct {
     var names = self.gsyms.items(.name);
     while (i > 0): (i -= 1) {
       if (std.mem.eql(u8, names[i - 1].*, node.token.value)) {
-        return @intCast(u32, i - 1);
+        return @intCast(i - 1);
       }
     }
     return null;
@@ -687,7 +687,7 @@ pub const Compiler = struct {
     } else if (self.canOptimizeConstBX() and self.withinBXLimit()) {
       return memidx + value.MAX_REGISTERS;
     } else {
-      self.fun.code.write2ArgsInst(.Load, reg, memidx, @intCast(u32, line), self.vm);
+      self.fun.code.write2ArgsInst(.Load, reg, memidx, @intCast(line), self.vm);
       return reg;
     }
   }
@@ -724,7 +724,7 @@ pub const Compiler = struct {
     self.optimizeConstBX();
     const inst_op = node.op.optype.toInstOp();
     const rk = try self.c(node.expr, reg);
-    self.fun.code.write2ArgsInst(inst_op, reg, rk, @intCast(u32, node.line()), self.vm);
+    self.fun.code.write2ArgsInst(inst_op, reg, rk, @intCast(node.line()), self.vm);
     self.deoptimizeConstBX();
     return reg;
   }
@@ -734,13 +734,13 @@ pub const Compiler = struct {
     // for and/or we do not want any const optimizations as we need consts to be loaded to registers
     // since const optimizations can cause no instructions to be emitted for consts. For ex: `4 or 5`
     // turn off const optimizations
-    self.enterJmp();
+    self.enterNoOpt();
     var rx = try self.c(node.left, reg);
     const end_jmp = self.fun.code.write2ArgsJmp(node.op.optype.toInstOp(), rx, node.line(), self.vm);
     rx = try self.c(node.right, reg);
     self.fun.code.patch2ArgsJmp(end_jmp);
     // restore const optimizations
-    self.leaveJmp();
+    self.leaveNoOpt();
     return reg;
   }
 
@@ -755,7 +755,7 @@ pub const Compiler = struct {
     // we own this register, so we can free
     self.vreg.releaseReg(dst2);
     const inst_op = node.op.optype.toInstOp();
-    self.fun.code.write3ArgsInst(inst_op, dst, rk1, rk2, @intCast(u32, node.line()), self.vm);
+    self.fun.code.write3ArgsInst(inst_op, dst, rk1, rk2, @intCast(node.line()), self.vm);
     self.deoptimizeConstRK();
     return dst;
   }
@@ -774,6 +774,7 @@ pub const Compiler = struct {
           else if (typ.isMapTy()) TypeKind.TyClass + 1
           else if (typ.isTupleTy()) TypeKind.TyClass + 2
           else if (typ.isErrorTy()) TypeKind.TyClass + 3
+          else if (typ.isClass() and typ.klass().isStringClass()) @intFromEnum(TypeKind.TyString)
           else if (typ.isClass() or typ.isInstance()) blk: {
             op = OpCode.Iscls;
             var cls = typ.klass();
@@ -785,24 +786,24 @@ pub const Compiler = struct {
           else unreachable
         );
       } else {
-        break :tb @enumToInt(typ.concrete().tkind);
+        break :tb @intFromEnum(typ.concrete().tkind);
       }
     };
     self.vreg.releaseReg(dst2);
-    self.fun.code.write3ArgsInst(op, dst, rk1, rk2, @intCast(u32, node.line()), self.vm);
+    self.fun.code.write3ArgsInst(op, dst, rk1, rk2, @intCast(node.line()), self.vm);
     self.deoptimizeConstRK();
     return dst;
   }
 
   inline fn cCollection(self: *Self, node: *ast.ListNode, ast_node: *Node, dst: u32, op: OpCode, set: OpCode) !u32 {
-    const size = @intCast(u32, node.elems.len());
+    const size: u32 = @intCast(node.elems.len());
     self.fun.code.write2ArgsInst(op, dst, size, self.lastLine(), self.vm);
     var token = ast_node.getToken();
     var idx: u32 = undefined;
     for (node.elems.items(), 0..) |elem, i| {
       var reg = try self.getReg(token);
       var rk_val = try self.c(elem, reg);
-      var val = value.numberVal(@intToFloat(f64, i));
+      var val = value.numberVal(@floatFromInt(i));
       if (self.withinRKLimit(1)) {
         idx = self.fun.code.storeConst(val, self.vm);
       } else {
@@ -825,7 +826,7 @@ pub const Compiler = struct {
   }
 
   fn cMap(self: *Self, node: *ast.MapNode, dst: u32) !u32 {
-    const size = @intCast(u32, node.pairs.len());
+    const size: u32 = @intCast(node.pairs.len());
     // TODO: specialize map with k-v types
     self.fun.code.write2ArgsInst(.Nmap, dst, size, self.lastLine(), self.vm);
     var token = Token.getDefault();
@@ -914,10 +915,10 @@ pub const Compiler = struct {
     var prop_idx: u32 = 0;
     var op: OpCode = undefined;
     if (ty.getFieldIndex(prop.value)) |idx| {
-      prop_idx = @intCast(u32, idx);
+      prop_idx = @intCast(idx);
       op = .Gfd;
     } else if (ty.getMethodIndex(prop.value)) |idx| {
-      prop_idx = @intCast(u32, idx);
+      prop_idx = @intCast(idx);
       op = if (is_call) .Jmtdc else .Gmtd;
     } else {
       return self.compileError(prop, "No such field/method '{s}'", .{prop.value});
@@ -983,7 +984,7 @@ pub const Compiler = struct {
     var prop = node.rhs.getToken();
     var prop_idx: u32 = 0;
     if (ty.getFieldIndex(prop.value)) |idx| {
-      prop_idx = @intCast(u32, idx);
+      prop_idx = @intCast(idx);
     } else {
       return self.compileError(prop, "No such field '{s}'", .{prop.value});
     }
@@ -1119,7 +1120,7 @@ pub const Compiler = struct {
       // this makes sense for now, since having num == str be true is kinda counterintuitive
       // but again, no one should even be doing this in the first place! 
       return self.cConst(
-        reg, value.numberVal(@intToFloat(f64, node.typ.typeid())),
+        reg, value.numberVal(@floatFromInt(node.typ.typeid())),
         node.token.line
       );
     }
@@ -1193,7 +1194,7 @@ pub const Compiler = struct {
         self.fun.code.patch2ArgsJmp(ctrl.patch_index);
       } else {
         // obtain offset to jmp forward to, then rewrite the jmp instruction
-        var offset = @intCast(u32, ctrl.patch_index - loop_cond + 1);
+        var offset: u32 = @intCast(ctrl.patch_index - loop_cond + 1);
         _ = self.fun.code.write2ArgsInst(.Jmp, 0, offset, ctrl.token.line, self.vm);
         self.fun.code.words.items[ctrl.patch_index] = self.fun.code.words.pop();
       }
@@ -1212,7 +1213,7 @@ pub const Compiler = struct {
     _ = try self.cBlock(&node.then.AstBlock, reg);
     // loop to cond
     // +1 to include the jmp inst itself, which we already processed
-    var offset = @intCast(u32, self.fun.code.getInstLen() - to_cond + 1);
+    var offset: u32 = @intCast(self.fun.code.getInstLen() - to_cond + 1);
     _ = self.fun.code.write2ArgsInst(.Jmp, 0, offset, self.lastLine(), self.vm);
     self.fun.code.patch2ArgsJmp(cond_to_exit);
     self.vreg.releaseReg(reg);
@@ -1256,7 +1257,7 @@ pub const Compiler = struct {
     }
     var reg: u32 = undefined;
     var token = ast_node.getToken();
-    var new_fn = value.createFn(self.vm, @intCast(u8, node.params.len()));
+    var new_fn = value.createFn(self.vm, @intCast(node.params.len()));
     var is_global = self.inGlobalScope();
     var is_lambda = node.name == null;
     if (is_global) {
@@ -1316,7 +1317,7 @@ pub const Compiler = struct {
     var is_locals = slice.items(.is_local);
     for (indexs, is_locals) |idx, loc| {
       // use .Bclo as a placeholder
-      self.fun.code.write2ArgsInst(.Bclo, @boolToInt(loc), idx, self.lastLine(), self.vm);
+      self.fun.code.write2ArgsInst(.Bclo, @intFromBool(loc), idx, self.lastLine(), self.vm);
     }
     if (is_global) {
       if (node.name) |ident| {
@@ -1362,15 +1363,14 @@ pub const Compiler = struct {
     // - generate the instruction: call r(func), b(argc)
     if (node.variadic) node.transformVariadicArgs();
     var token = node.expr.getToken();
-    var fun_dst = (
-      if (node.expr.isDotAccess()) try self.cDotAccess(&node.expr.AstDotAccess, true, reg)
-      else try self.c(node.expr, reg)
-    );
-    // assume last instruction compiled is .Jmtdc
-    var jmtdc_dst = self.fun.code.words.len -| 1;
-    var should_swap = node.expr.isDotAccess();
+    var ty = node.expr.getType().?;
+    ty = if (ty.isTop()) ty.top().child else ty;
+    if (node.expr.isDotAccess() and (!ty.isClass() or node.expr.isFun())) {
+      return try self.cMethodCall(node, reg);
+    }
+    var fun_dst = try self.c(node.expr, reg);
     var _dst = reg;
-    var n = @intCast(u32, node.args.len());
+    var n: u32 = @intCast(node.args.len());
     var do_move = false;
     var win = blk: {
       break :blk self.vreg.getRegWindow(reg, n) catch {
@@ -1385,9 +1385,9 @@ pub const Compiler = struct {
       self.fun.code.write3ArgsInst(.Mov, _dst, fun_dst, 0, token.line, self.vm);
     }
     // don't optimize this call's arguments
-    self.enterJmp();
+    self.enterNoOpt();
     for (node.args.items(), 0..) |arg, i| {
-      var dst = win + @intCast(u32, i);
+      var dst = win + @as(u32, @intCast(i));
       var tmp = try self.c(arg, dst);
       // we need the args to be positioned in line with the function in the register window
       if (tmp != dst) {
@@ -1395,23 +1395,11 @@ pub const Compiler = struct {
         self.fun.code.write3ArgsInst(.Mov, dst, tmp, 0, self.lastLine(), self.vm);
       }
     }
-    self.leaveJmp();
-    var ty = node.expr.getType().?;
-    ty = if (ty.isTop()) ty.top().child else ty;
-    if (!ty.isClass()) {
+    self.leaveNoOpt();
+    if (!ty.isClass() or node.expr.isFun()) {
       self.fun.code.write2ArgsInst(.Call, _dst, n, token.line, self.vm);
-      if (should_swap) {
-        // swap .Jmtdc with instruction before .Call
-        var last = self.fun.code.words.len - 2; // -2 meaning second last
-        var jmtdc_inst = self.fun.code.words.items[jmtdc_dst];
-        var jmtdc_line = self.fun.code.lines.items[jmtdc_dst];
-        self.fun.code.words.items[jmtdc_dst] = self.fun.code.words.items[last];
-        self.fun.code.lines.items[jmtdc_dst] = self.fun.code.lines.items[last];
-        self.fun.code.words.items[last] = jmtdc_inst;
-        self.fun.code.lines.items[last] = jmtdc_line;
-      }
     } else {
-      var flen = @intCast(u32, ty.klass().fields.len());
+      var flen: u32 = @intCast(ty.klass().fields.len());
       // after this instruction is executed, `_dst` holds the instance
       self.fun.code.write3ArgsInst(.Callc, _dst, n, flen, token.line, self.vm);
       // compile default fields
@@ -1421,7 +1409,7 @@ pub const Compiler = struct {
       for (clsnode.fields.items(), 0..) |vd, idx| {
         if (vd.AstVarDecl.has_default) {
           var _r = try self.c(vd.AstVarDecl.value, tmp);
-          self.fun.code.write3ArgsInst(.Sfd, _dst, @intCast(u32, idx), _r, token.line, self.vm);
+          self.fun.code.write3ArgsInst(.Sfd, _dst, @intCast(idx), _r, token.line, self.vm);
         }
       }
       self.deoptimizeConstRK();
@@ -1440,10 +1428,56 @@ pub const Compiler = struct {
     return reg;
   }
 
+  fn cMethodCall(self: *Self, node: *ast.CallNode, reg: u32) !u32 {
+    // For calls, we need to:
+    // - get a register window
+    // - compile the call expr
+    // - generate the instruction: call r(func), b(argc)
+    if (node.variadic) node.transformVariadicArgs();
+    var token = node.expr.getToken();
+    var _dst = reg;
+    var n: u32 = @intCast(node.args.len());
+    var do_move = false;
+    var win = blk: {
+      break :blk self.vreg.getRegWindow(reg, n) catch {
+        do_move = true;
+        break :blk self.vreg.getAnyRegWindow(reg, n + 1);
+      };
+    };
+    if (do_move) {_dst = win; win += 1;}
+    // we need the function to be in a specific position in the register window, along with its args
+    // don't optimize this call's arguments
+    self.enterNoOpt();
+    for (node.args.items(), 0..) |arg, i| {
+      var dst = win + @as(u32, @intCast(i));
+      var tmp = try self.c(arg, dst);
+      // we need the args to be positioned in line with the function in the register window
+      if (tmp != dst) {
+        self.fun.code.write3ArgsInst(.Mov, dst, tmp, 0, self.lastLine(), self.vm);
+      }
+    }
+    self.leaveNoOpt();
+    var fun_dst = try self.cDotAccess(&node.expr.AstDotAccess, true, reg);
+    if (fun_dst != _dst) {
+      self.fun.code.resetBy(1);
+      fun_dst = try self.cDotAccess(&node.expr.AstDotAccess, false, reg);
+      self.fun.code.write3ArgsInst(.Mov, _dst, fun_dst, 0, token.line, self.vm);
+      std.log.debug("fun_dst != _dst on method call\n", .{});
+    }
+    self.fun.code.write2ArgsInst(.Call, _dst, n, token.line, self.vm);
+    if (do_move) {
+      self.fun.code.write3ArgsInst(.Mov, reg, _dst, 0, token.line, self.vm);
+      self.vreg.releaseRegWindow(_dst, n + 1);
+    } else {
+      self.vreg.releaseRegWindow(win, n);
+    }
+    return reg;
+  }
+
   fn cVoidRet(self: *Self, line: usize) u32 {
     const dst = 0;
     const memidx = self.fun.code.writeValue(value.NOTHING_VAL, self.vm);
-    self.fun.code.write2ArgsInst(.Load, dst, memidx, @intCast(u32, line), self.vm);
+    self.fun.code.write2ArgsInst(.Load, dst, memidx, @intCast(line), self.vm);
     self.fun.code.write2ArgsInst(.Ret, dst, 0, line, self.vm);
     return dst;
   }
@@ -1542,13 +1576,13 @@ pub const Compiler = struct {
       cls.name = @constCast(value.createString(self.vm, &self.vm.strings, ident.token.value, false));
     }
     // emit class
-    self.enterJmp();
+    self.enterNoOpt();
     var dst = self.cConst(reg, value.objVal(cls), token.line);
-    self.leaveJmp();
+    self.leaveNoOpt();
     self.incScope();
     for (node.methods.items(), 0..) |mth, i| {
       var mreg = try self.cFun(&mth.AstFun, mth, true, _reg);
-      self.fun.code.write3ArgsInst(.Smtd, mreg, dst, @intCast(u32, i), token.line, self.vm);
+      self.fun.code.write3ArgsInst(.Smtd, mreg, dst, @intCast(i), token.line, self.vm);
     }
     self.decScope();
     if (is_global) {

@@ -378,11 +378,9 @@ pub const Top = struct {
   }
 
   pub fn isRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
-    _ = A;
-    _ = ctx;
-    _ = this;
     return switch (other.kind) {
-      .Top => true,
+      .Top => |*tp| this.child.isRelatedTo(tp.child, ctx, A),
+      .Instance, .Class => if (this.child.isClass()) this.child.isRelatedTo(other, ctx, A) else false,
       else => false,
     };
   }
@@ -660,87 +658,89 @@ pub const Type = struct {
     ty1.variadic = ty2.variadic;
   }
 
-  pub fn clone(self: *Self, A: std.mem.Allocator) *Self {
+  const TypeHashMap = ds.ArrayHashMap(*Type, *Type);
+
+  fn _clone(self: *Self, al: std.mem.Allocator, map: *TypeHashMap) *Self {
     switch (self.kind) {
       .Constant, .Concrete, .Variable, .Recursive => return self,
       .Function => |*fun| {
-        var new = Function.init(A, fun.ret.clone(A), null, fun.node);
-        new.params.ensureTotalCapacity(fun.params.capacity());
+        if (map.get(self)) |ty| return ty;
+        var new = Type.init(.{.Function = Function.init(al, fun.ret._clone(al, map), null, fun.node)}).box(al);
+        map.set(self, new);
+        var _fun = new.function();
+        _fun.params.ensureTotalCapacity(fun.params.capacity());
         if (fun.tparams) |tparams| {
-          var new_tparams = util.boxEnsureCapacity(TypeList, TypeList.init(A), A, tparams.capacity());
+          var new_tparams = util.boxEnsureCapacity(TypeList, TypeList.init(al), al, tparams.capacity());
           for (tparams.items()) |ty| {
-            new_tparams.append(ty.clone(A));
+            new_tparams.append(ty._clone(al, map));
           }
-          new.tparams = new_tparams;
+          _fun.tparams = new_tparams;
         }
         for (fun.params.items()) |ty| {
-          new.params.append(ty.clone(A));
+          _fun.params.append(ty._clone(al, map));
         }
-        var ret = Type.init(.{.Function = new}).box(A);
+        new.setRestFields(self);
+        return new;
+      },
+      .Class => |*cls| {
+        if (map.get(self)) |ty| return ty;
+        var fields = util.boxEnsureCapacity(NodeList, NodeList.init(al), al, cls.fields.capacity());
+        var methods = util.boxEnsureCapacity(TypeList, TypeList.init(al), al, cls.methods.capacity());
+        var ret = Type.init(.{.Class = Class.init(cls.name, fields, methods, null, cls.node, cls.empty, cls.builtin)}).box(al);
+        map.set(self, ret);
+        for (cls.fields.items()) |itm| {
+          fields.append(itm.AstVarDecl.clone(al));
+        }
+        for (cls.methods.items()) |itm| {
+          methods.append(itm._clone(al, map));
+        }
+        var tparams: ?*TypeList = null;
+        if (cls.tparams) |tp| {
+          var new_tparams = util.boxEnsureCapacity(TypeList, TypeList.init(al), al, tp.capacity());
+          for (tp.items()) |ty| {
+            new_tparams.append(ty._clone(al, map));
+          }
+          tparams = new_tparams;
+        }
+        ret.klass().tparams = tparams;
         ret.setRestFields(self);
         return ret;
       },
-      .Method => |*mth| {
-        var new = Method.init(mth.func.clone(A), mth.cls.clone(A)).toType().box(A);
-        new.setRestFields(self);
-        return new;
-      },
-      .Top => |*tp| {
-        var new = Top.init(tp.child).toType().box(A);
-        new.setRestFields(self);
-        return new;
-      },
       .Generic => |*gen| {
-        var new = Generic.init(A, gen.base.clone(A));
+        var new = Generic.init(al, gen.base._clone(al, map));
         new.empty = gen.empty;
         new.tparams.ensureTotalCapacity(gen.tparams.capacity());
         for (gen.tparams.items()) |ty| {
-          new.append(ty.clone(A));
+          new.append(ty._clone(al, map));
         }
-        var ret = Type.init(.{.Generic = new}).box(A);
+        var ret = Type.init(.{.Generic = new}).box(al);
         ret.setRestFields(self);
         return ret;
       },
       .Union => |*uni| {
-        var new = Union.init(A);
+        var new = Union.init(al);
         new.active = uni.active;
         new.variants.ensureTotalCapacity(uni.variants.capacity());
         for (uni.variants.values()) |ty| {
-          new.set(ty.clone(A));
+          new.set(ty._clone(al, map));
         }
-        var ret = Type.init(.{.Union = new}).box(A);
+        var ret = Type.init(.{.Union = new}).box(al);
         ret.setRestFields(self);
         return ret;
       },
       .Instance => |*inst| {
         // TODO: clone class?
-        var new = Instance.init(inst.cls).toType().box(A);
+        var new = Instance.init(inst.cls).toType().box(al);
         new.setRestFields(self);
         return new;
       },
-      .Class => |*cls| {
-        var fields = util.boxEnsureCapacity(NodeList, NodeList.init(A), A, cls.fields.capacity());
-        var methods = util.boxEnsureCapacity(TypeList, TypeList.init(A), A, cls.methods.capacity());
-        for (cls.fields.items()) |itm| {
-          fields.append(itm.AstVarDecl.clone(A));
-        }
-        for (cls.methods.items()) |itm| {
-          methods.append(itm.clone(A));
-        }
-        var tparams: ?*TypeList = null;
-        if (cls.tparams) |tp| {
-          var new_tparams = util.boxEnsureCapacity(TypeList, TypeList.init(A), A, tp.capacity());
-          for (tp.items()) |ty| {
-            new_tparams.append(ty.clone(A));
-          }
-          tparams = new_tparams;
-        }
-        var new = Class.init(cls.name, fields, methods, tparams, cls.node, cls.empty, cls.builtin);
-        var ret = Type.init(.{.Class = new}).box(A);
-        ret.setRestFields(self);
-        return ret;
-      },
+      else => unreachable,
     }
+  }
+
+  pub fn clone(self: *Self, A: std.mem.Allocator) *Self {
+    var map = TypeHashMap.init(A);
+    return self._clone(A, &map);
   }
 
   pub fn newConcrete(kind: TypeKind) Self {
@@ -1136,7 +1136,13 @@ pub const Type = struct {
           self.tid += typ.typeid();
         }
         for (cls.fields.items()) |nd| {
-          self.tid += nd.getType().?.typeid();
+          if (nd.getType()) |typ| {
+            self.tid += typ.typeid();
+          } else {
+            for (nd.AstVarDecl.ident.token.value) |ch| {
+              self.tid += @as(u8, ch);
+            }
+          }
         }
         // TODO: method type may not be available at the
         //       time this typeid is being computed
@@ -1178,8 +1184,9 @@ pub const Type = struct {
         self.tid = 15 << ID_HASH;
         self.tid += inst.cls.typeid();
       },
-      .Top => {
+      .Top => |*tp| {
         self.tid = 12 << ID_HASH;
+        self.tid += tp.child.typeid();
       },
       .Variable => |*vr| {
         for (vr.tokens.items()) |tok| {
@@ -1903,7 +1910,9 @@ pub const Type = struct {
           }
         }
       },
-      .Top => {},
+      .Top => |*tp| {
+        return tp.child.is(t2, al);
+      },
       // TODO:
       .Recursive => return t1,
     }

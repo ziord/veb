@@ -1,3 +1,12 @@
 #!/bin/sh
+
+folder="src/tests/"
+skip="test.zig"
 pkg="--main-pkg-path src"
-zig test src/tests/runtime.zig $pkg && zig test src/tests/static.zig $pkg && zig test src/tests/error.zig $pkg
+for file in "$folder"/*; do
+    if [ -f "$file" ]; then
+        if [ "$file" != "$folder/$skip" ]; then
+            zig test "$file" $pkg
+        fi
+    fi
+done

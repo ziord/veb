@@ -142,6 +142,8 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
     typScope: TypScope,
     /// scope for other declarations, e.g. variables, functions, etc.
     varScope: VarScope,
+    /// data
+    data: Data,
 
     const Self = @This();
 
@@ -149,6 +151,7 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
       return Self {
         .typScope = TypScope.init(al), 
         .varScope = VarScope.init(al),
+        .data = .{},
       };
     }
 
@@ -173,7 +176,7 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
     }
   };
 }
-
+pub const Data = struct {parent: ?*Node = null};
 pub const Scope = GenScope([]const u8, *Type);
 pub const TContext = CreateTContext(Scope, Scope);
 
@@ -605,29 +608,31 @@ pub const TypeLinker = struct {
     self.ctx.leaveScope();
   }
 
-  fn linkNType(self: *Self, node: *ast.TypeNode) !void {
+  pub fn linkNType(self: *Self, node: *ast.TypeNode) !void {
     node.typ = try self.resolve(node.typ, node.token);
   }
 
-  fn linkCast(self: *Self, node: *ast.CastNode) !void {
+  pub fn linkCast(self: *Self, node: *ast.CastNode) !void {
     try self.link(node.expr);
     try self.linkNType(node.typn);
   }
 
-  fn linkVarDecl(self: *Self, node: *ast.VarDeclNode) !void {
+  pub fn linkVarDecl(self: *Self, node: *ast.VarDeclNode) !void {
     if (node.ident.typ) |ty| {
       node.ident.typ = try self.resolve(ty, node.ident.token);
       self.ctx.varScope.insert(node.ident.token.value, node.ident.typ.?);
     }
-    try self.link(node.value);
+    if (!(node.is_field or node.is_param)) {
+      try self.link(node.value);
+    }
   }
 
-  fn linkFieldOrParamDecl(self: *Self, node: *ast.VarDeclNode) !void {
+  pub fn linkFieldOrParamDecl(self: *Self, node: *ast.VarDeclNode) !void {
     node.ident.typ = try self.resolve(node.ident.typ.?, node.ident.token);
     self.ctx.varScope.insert(node.ident.token.value, node.ident.typ.?);
   }
 
-  fn linkAlias(self: *Self, node: *ast.AliasNode) !void {
+  pub fn linkAlias(self: *Self, node: *ast.AliasNode) !void {
     var typ = node.alias.typ;
     var tokens = if (typ.isGeneric()) typ.generic().base.variable().tokens else typ.variable().tokens;
     self.ctx.typScope.insert(tokens.itemAt(0).value, node.aliasee.typ);
@@ -736,6 +741,12 @@ pub const TypeLinker = struct {
     try self.link(node.err);
   }
 
+  fn linkSimpleIf(self: *Self, node: *ast.SimpleIfNode) !void {
+    try self.link(node.cond);
+    try self.link(node.then);
+    try self.link(node.els);
+  }
+
   fn linkProgram(self: *Self, node: *ast.ProgramNode) !void {
     self.ctx.enterScope();
     for (node.decls.items()) |item| {
@@ -746,7 +757,7 @@ pub const TypeLinker = struct {
     self.ctx.varScope.popScope();
   }
 
-  fn link(self: *Self, node: *Node) TypeLinkError!void {
+  pub fn link(self: *Self, node: *Node) TypeLinkError!void {
     switch (node.*) {
       .AstNumber, .AstString, .AstBool, .AstControl, .AstNil, .AstScope => {},
       .AstUnary => |*nd| try self.linkUnary(nd),
@@ -773,17 +784,9 @@ pub const TypeLinker = struct {
       .AstRet => |*nd| try self.linkRet(nd),
       .AstError => |*nd| try self.linkError(nd),
       .AstOrElse => |*nd| try self.linkOrElse(nd),
+      .AstSimpleIf => |*nd| try self.linkSimpleIf(nd),
       .AstProgram => |*nd| try self.linkProgram(nd),
-      .AstSimpleIf, .AstCondition, .AstEmpty => unreachable,
-    }
-  }
-
-  pub fn linkTypes(self: *Self, node: *Node, display_diag: bool) !void {
-    self.link(node) catch {};
-    if (self.diag.hasAny()) {
-      var has_error = self.diag.hasErrors();
-      if (display_diag) self.diag.display();
-      if (has_error) return error.TypeLinkError;
+      .AstCondition, .AstEmpty => {},
     }
   }
 };

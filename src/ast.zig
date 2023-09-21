@@ -1023,6 +1023,13 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn isCall(self: *@This()) bool {
+    return switch (self.*) {
+      .AstCall => true,
+      else => false,
+    };
+  }
+
   pub fn getNarrowed(self: *@This()) ?*VarNode {
     return switch (self.*) {
       .AstVar => |*vr| vr,

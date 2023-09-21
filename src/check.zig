@@ -198,7 +198,7 @@ pub const TypeChecker = struct {
   ctx: TContext,
   cfg: CFG = undefined,
   diag: *Diagnostic,
-  linker: *TypeLinker = undefined,
+  linker: TypeLinker = undefined,
   current_fn: ?*FlowMeta = null,
   void_ty: *Type,
   str_ty: *Type,
@@ -247,7 +247,7 @@ pub const TypeChecker = struct {
   const BuiltinsSrc = prelude.BuiltinsSrc;
 
   pub fn init(allocator: std.mem.Allocator, diag: *Diagnostic) @This() {
-    return Self {
+    var self = Self {
       .ctx = TContext.init(allocator),
       .diag = diag,
       .generics = ds.ArrayHashMap(*Node, *ds.ArrayList(GenInfo)).init(allocator),
@@ -259,13 +259,14 @@ pub const TypeChecker = struct {
       .str_ty = undefined,
       .builtins = TypeList.init(allocator),
     };
+    self.linker = TypeLinker.init(&self.ctx, self.diag);
+    return self;
   }
 
-  fn loadBuiltinsPrelude(self: *Self, linker: *TypeLinker, al: *VebAllocator) void {
+  fn loadBuiltinsPrelude(self: *Self, al: *VebAllocator) void {
     const filename = @as([]const u8, "$builtins$");
     var parser = parse.Parser.init(@constCast(&@as([]const u8, BuiltinsSrc)), &filename, al);
     const node = parser.parse(true) catch unreachable;
-    linker.linkTypes(node, true) catch unreachable;
     self.buildProgramFlow(node, true) catch unreachable;
     self.flowInferEntry(self.cfg.program.entry) catch unreachable;
     for (node.AstProgram.decls.items()) |itm| {
@@ -383,23 +384,29 @@ pub const TypeChecker = struct {
     return null;
   }
 
-  fn findType(self: *Self, name: []const u8) ?*Type {
-    if (self.ctx.typScope.lookup(name)) |ty| {
-      return ty;
-    }
-    return null;
+  inline fn findType(self: *Self, name: []const u8) ?*Type {
+    return self.ctx.typScope.lookup(name);
   }
 
-  fn findName(self: *Self, name: []const u8) ?*Type {
-    if (self.ctx.varScope.lookup(name)) |ty| {
-      return ty;
-    }
-    return self.findType(name);
+  inline fn findName(self: *Self, name: []const u8) ?*Type {
+    return self.ctx.varScope.lookup(name);
   }
 
   fn lookupName(self: *Self, ident: *ast.VarNode, emit: bool) !*Type {
     if (self.findName(ident.token.value)) |found| {
       return found;
+    } else if (self.findType(ident.token.value)) |found| {
+      return found;
+    } else {
+      return self.error_(emit, ident.token, "Could not resolve type of ident: '{s}'", .{ident.token.value});
+    }
+  }
+
+  fn lookupNameWithInfo(self: *Self, ident: *ast.VarNode, emit: bool) !struct{typ: *Type, ident: bool} {
+    if (self.findName(ident.token.value)) |found| {
+      return .{.typ = found, .ident = true};
+    } else if (self.findType(ident.token.value)) |found| {
+      return .{.typ = found, .ident = false};
     } else {
       return self.error_(emit, ident.token, "Could not resolve type of ident: '{s}'", .{ident.token.value});
     }
@@ -1233,7 +1240,6 @@ pub const TypeChecker = struct {
     }
     // at this point, rhs is a TypeNode
     var ty = node.right.getType().?;
-    ty = if (ty.isClassFromTop()) ty.top().child else ty;
     if ((ty.isClsGeneric() and ty.klass().tparamsLen() != 0) or ty.isUnion() or ty.isVariable() or ty.isFunction()) {
       return self.error_(
         true, node.op.token,
@@ -1252,8 +1258,19 @@ pub const TypeChecker = struct {
 
   fn inferVar(self: *Self, node: *ast.VarNode, emit: bool) !*Type {
     // TODO: Do we need to always fetch the updated type?
-    node.typ = try self.lookupName(node, emit);
-    var typ = node.typ.?;
+    var res = try self.lookupNameWithInfo(node, emit);
+    if (self.ctx.data.parent) |parent| {
+      // type vars are only accessible to call & dot access nodes
+      if (!parent.isCall() and !parent.isDotAccess()) {
+        if (!res.ident) {
+          return self.error_(
+            true, node.token, "Could not resolve type of ident: '{s}'", .{node.token.value}
+          );
+        }
+      }
+    }
+    var typ = res.typ;
+    node.typ = typ;
     // since we infer functions by need, we check if this is a reference
     // to a function and try to infer the function if it's not yet fully inferred
     if (typ.isFunction() and !typ.function().isGeneric()) {
@@ -1279,6 +1296,7 @@ pub const TypeChecker = struct {
   }
 
   fn inferCast(self: *Self, node: *ast.CastNode) !*Type {
+    try self.linker.linkCast(node);
     var typ = try self.infer(node.expr);
     var cast_typ = node.typn.typ;
     var true_ctx: RelationContext = undefined; 
@@ -1338,7 +1356,7 @@ pub const TypeChecker = struct {
   }
 
   fn inferNType(self: *Self, node: *ast.TypeNode) !*Type {
-    _ = self;
+    try self.linker.linkNType(node);
     // if this type node was found in an expression 
     // (i.e. not in an alias or annotation context), then return TyType
     if (!node.from_alias_or_annotation) {
@@ -1348,8 +1366,7 @@ pub const TypeChecker = struct {
   }
 
   fn inferAlias(self: *Self, node: *ast.AliasNode) !*Type {
-    _ = try self.inferNType(node.alias);
-    _ = try self.inferNType(node.aliasee);
+    try self.linker.linkAlias(node);
     return node.typ;
   }
 
@@ -1358,6 +1375,7 @@ pub const TypeChecker = struct {
   }
 
   fn inferVarDecl(self: *Self, node: *ast.VarDeclNode) !*Type {
+    try self.linker.linkVarDecl(node);
     if (!node.is_param and (!node.is_field or node.has_default)) {
       if (node.ident.typ) |typ| {
         var expr_ty = try self.infer(node.value);
@@ -1488,6 +1506,7 @@ pub const TypeChecker = struct {
 
   fn inferFunPartial(self: *Self, node: *Node) !*Type {
     var fun = &node.AstFun;
+    try self.linker.linkFun(fun, false);
     // we need to infer this first to handle recursive functions
     var ty = try self.createFunType(node,  node.getType());
     // set the function's name (if available) to it's full type
@@ -1716,9 +1735,7 @@ pub const TypeChecker = struct {
     var cls = &node.AstClass;
     var ty = self.createClsType(node);
     // set the class's name to it's full type
-    var top = Type.newTop(ty).box(self.ctx.allocator());
-    self.ctx.typScope.insert(cls.name.token.value, top);
-    self.insertVar(cls.name.token.value, top);
+    self.ctx.typScope.insert(cls.name.token.value, ty);
     return ty;
   }
 
@@ -1760,7 +1777,7 @@ pub const TypeChecker = struct {
       _ = self.cycles.pop();
       cls.checked = true;
     }
-    cls.typ = Type.newTop(ty).box(self.ctx.allocator());
+    cls.typ = ty;
     return ty;
   }
 
@@ -1838,6 +1855,10 @@ pub const TypeChecker = struct {
 
   fn inferDotAccess(self: *Self, node: *ast.DotAccessNode) !*Type {
     if (node.typ) |ty| return ty;
+    // set parent for later type disambiguation
+    var parent = self.ctx.data.parent;
+    self.ctx.data.parent = @constCast(&@as(Node, .{.AstDotAccess = node.*}));
+    defer self.ctx.data.parent = parent;
     // if this node is not being narrowed (`node.narrowed == null`),
     // try to see if we can obtain an inferred narrow type.
     if (node.narrowed == null and self.canNarrowDotAccess(node)) {
@@ -1864,20 +1885,20 @@ pub const TypeChecker = struct {
         .{self.getTypename(lhs_ty), prop.token.value}
       );
     }
-    var ty = (
-      if (lhs_ty.isInstance()) lhs_ty.instance().cls 
-      else if (lhs_ty.isClassFromTop()) lhs_ty.top().child
-      else lhs_ty
-    );
+    var ty = (if (lhs_ty.isInstance()) lhs_ty.instance().cls else lhs_ty);
     try self.resolveType(ty);
     try self.checkDotAccess(node, ty, prop);
     return node.typ.?;
   }
   
   fn inferCall(self: *Self, node: *ast.CallNode) !*Type {
+    // set parent for later type disambiguation
+    var parent = self.ctx.data.parent;
+    self.ctx.data.parent = @constCast(&@as(Node, .{.AstCall = node.*}));
+    defer self.ctx.data.parent = parent;
     var _ty = try self.infer(node.expr);
-    if (_ty.isClassFromTop()) {
-      return try self.inferClsCall(node, _ty.top().child, null);
+    if (_ty.isClass()) {
+      return try self.inferClsCall(node, _ty, null);
     }
     // check that we're actually calling a function
     if (!_ty.isFunction() and !_ty.isMethod()) {
@@ -2624,13 +2645,9 @@ pub const TypeChecker = struct {
   }
 
   pub fn typecheck(self: *Self, node: *Node, va: *VebAllocator, display_diag: bool) TypeCheckError!void {
-    var linker = TypeLinker.init(&self.ctx, self.diag);
     self.ctx.enterScope();
-    self.loadBuiltinsPrelude(&linker, va);
-    linker.linkTypes(node, display_diag) catch |e| {
-      return e;
-    };
-    self.linker = &linker;
+    self.linker.ctx = &self.ctx;
+    self.loadBuiltinsPrelude(va);
     try self.buildProgramFlow(node, display_diag);
     self.flowInferEntry(self.cfg.program.entry) catch  {};
     self.analyzer.analyzeDeadCodeWithTypes(self.cfg.program.entry) catch {};

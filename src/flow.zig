@@ -303,7 +303,7 @@ pub const CFGBuilder = struct {
       var slice = nodes.items()[i..];
       for (slice) |item| {
         switch (item.*) {
-          .AstAlias => {},
+          // .AstAlias => {},
           .AstIf => |*nd| {
             // link the current bb to this if's condition
             var tmp = self.simplifyIfNode(nd);

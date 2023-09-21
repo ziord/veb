@@ -371,6 +371,21 @@ test "narrowing-12" {
   });
 }
 
+test "dca-0" {
+  var src =
+  \\ def foo()
+  \\  return 5
+  \\  type X = 7
+  \\ end
+  \\
+  \\ foo()
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "Dead code: control flow never reaches this code",
+    "type X = 7",
+  });
+}
+
 test "dca-1" {
   var src =
   \\ def fun(n: num | str)
@@ -794,8 +809,10 @@ test "generic-classes-3" {
   \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
   \\ let j: Poo{'miah'} = Fox{'mia'}('mia')
   ;
-    try doErrorTest(src, 6, [_][]const u8{
+    try doErrorTest(src, 8, [_][]const u8{
     "Expected type 'num' + 'num', but got 'tuple{mia}' + 'num'",
+    "Could not resolve type of ident: 'j'",
+    "Could not resolve type of ident: 'p'",
     "Expected type 'num' + 'num', but got 'tuple{mia}' + 'num'",
     "Expected type 'num' + 'num', but got 'num' + 'str'",
     "Expected type 'num' + 'num', but got 'str' + 'str'",

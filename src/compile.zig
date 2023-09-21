@@ -578,7 +578,7 @@ pub const Compiler = struct {
         },
         .AstFun => |*fun| {
           if (fun.isGeneric()) {
-            if (fun.name) |ident| self.addPatchInitGlobalVar(ident);
+            // if (fun.name) |ident| self.addPatchInitGlobalVar(ident);
             if (self.generics.get(decl)) |list| {
               for (list.items()) |itm| {
                 itm.instance.AstFun.name = itm.synth_name;
@@ -593,7 +593,6 @@ pub const Compiler = struct {
         },
         .AstClass => |*cls| {
           if (cls.isGeneric()) {
-            self.addPatchInitGlobalVar(cls.name);
             if (self.generics.get(decl)) |list| {
               for (list.items()) |itm| {
                 itm.instance.AstClass.name = itm.synth_name;
@@ -857,8 +856,7 @@ pub const Compiler = struct {
     // Since the type checker guarantees that the node embedded in the function type is the
     // function being called, we can safely use the function's name for lookup
     // which if generic, should already be synthesized.
-    if (node.typ) |_ty| {
-      var typ = if (_ty.isClassFromTop()) _ty.top().child else _ty;
+    if (node.typ) |typ| {
       if (typ.isFunction()) {
         var fun = typ.function();
         if (fun.isGeneric()) {
@@ -873,7 +871,21 @@ pub const Compiler = struct {
           // clear last error generated
           self.diag.popUntil(last);
         }
-      } else if (typ.isClass() and !self.isSelfVar(node) and !typ.klass().builtin and typ.inferred) {
+      }
+    }
+    if (self.findLocalVar(node)) |lvar| {
+      try self.validateLocalVarUse(lvar.index, node);
+      return lvar.reg;
+    } else if (self.findUpvalue(node)) |upv| {
+      self.fun.code.write2ArgsInst(.Gupv, dst, upv, node.line(), self.vm);
+      return dst;
+    } else if (self.findGlobal(node)) |info| {
+      try self.validateGlobalVarUse(info, node);
+      const inst: OpCode = if(info.isGSym) .Ggsym else .Gglb;
+      self.fun.code.write2ArgsInst(inst, dst, info.pos, node.line(), self.vm);
+      return dst;
+    } else if (node.typ) |typ| {
+      if (typ.isClass() and !self.isSelfVar(node) and !typ.klass().builtin and typ.inferred) {
         var cls = typ.klass();
         if (cls.isGeneric()) {
           if (!cls.isInstantiatedGeneric()) {
@@ -889,18 +901,6 @@ pub const Compiler = struct {
           }
         }
       }
-    }
-    if (self.findLocalVar(node)) |lvar| {
-      try self.validateLocalVarUse(lvar.index, node);
-      return lvar.reg;
-    } else if (self.findUpvalue(node)) |upv| {
-      self.fun.code.write2ArgsInst(.Gupv, dst, upv, node.line(), self.vm);
-      return dst;
-    } else if (self.findGlobal(node)) |info| {
-      try self.validateGlobalVarUse(info, node);
-      const inst: OpCode = if(info.isGSym) .Ggsym else .Gglb;
-      self.fun.code.write2ArgsInst(inst, dst, info.pos, node.line(), self.vm);
-      return dst;
     }
     return self.compileError(node.token, "use of undefined variable '{s}'", .{node.token.value});
   }

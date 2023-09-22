@@ -840,3 +840,75 @@ test "loopy" {
     "Expected type 'num' + 'num', but got 'num | str' + 'num'",
   });
 }
+
+test "labeled argument" {
+  var src =
+  \\ def fun(x: str, y: num, a: list{num}, b: err{str})
+  \\  print('x is', x, 'y is', y, 'a is', a, 'b is', b)
+  \\ end
+  \\ fun(y: 'ops', a: 6, x: [6], ('oops')!)
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Argument mismatch. Expected type 'str' but found 'list{num}'",
+  });
+}
+
+test "labeled argument 2" {
+  var src =
+  \\ def fun(x: str, y: num, a: list{num}, b: err{str})
+  \\  print('x is', x, 'y is', y, 'a is', a, 'b is', b)
+  \\ end
+  \\ fun(y: 'ops', a: 6, x: 'ok', ('oops')!)
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Argument mismatch. Expected type 'num' but found 'str'",
+  });
+}
+
+test "labeled argument 3" {
+  var src =
+  \\ def fun(x: str, y: num, a: list{num}, b: err{str})
+  \\  print('x is', x, 'y is', y, 'a is', a, 'b is', b)
+  \\ end
+  \\ fun(y: 5, a: 6, x: 'ok', ('oops')!)
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Argument mismatch. Expected type 'list{num}' but found 'num'"
+  });
+}
+
+test "labeled argument 4" {
+  var src =
+  \\ def fun(x: str, y: num, a*: list{num})
+  \\  print('x is', x, 'y is', y, 'a is', a)
+  \\ end
+  \\ fun(y: 5, a: [2, 3], y: 'oo', a: [1, 2], a: [5, 6, 7])
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "duplicate labeled argument found",
+  });
+}
+
+test "labeled argument 5" {
+  var src =
+  \\ def fun(x: str, y: num, a*: list{num})
+  \\  print('x is', x, 'y is', y, 'a is', a)
+  \\ end
+  \\ fun(y: 5, a: [2, 3])
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "missing required argument(s)",
+  });
+}
+
+test "labeled argument 6" {
+  var src =
+  \\ def fun(x: str, y: num, a: list{num}, b: err{str})
+  \\  print('x is', x, 'y is', y, 'a is', a, 'b is', b)
+  \\ end
+  \\ fun(6: 'a', 12: 9)
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "labeled argument used without an identifier label",
+  });
+}

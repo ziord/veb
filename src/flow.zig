@@ -55,7 +55,7 @@ pub const BasicBlock = struct {
   }
 
   pub inline fn getLast(self: *@This()) ?*Node {
-    return if (self.nodes.len() > 0) self.nodes.getLast() else null;
+    return if (self.nodes.isNotEmpty()) self.nodes.getLast() else null;
   }
 };
 
@@ -256,7 +256,7 @@ pub const CFGBuilder = struct {
       ast.BlockNode.newEmptyBlock(self.alloc, node.cond)
     );
     var els: ?*Node = null;
-    if (node.elifs.len() > 0) {
+    if (node.elifs.isNotEmpty()) {
       for (node.elifs.items(), 0..) |elif, i| {
         var if_ = elif.AstElif.toIf(self.alloc);
         var nd = util.alloc(Node, self.alloc);
@@ -283,7 +283,7 @@ pub const CFGBuilder = struct {
     //     }
     //     return false;
     // but we manage to eliminate the need for iteration
-    return nodes.len() == 0 and node.AstBlock.nodes.len() > 0;
+    return nodes.len() == 0 and node.AstBlock.nodes.isNotEmpty();
   }
 
   fn linkAtomic(self: *Self, nodes: NodeList, prev: FlowList, edge: FlowEdge, tag: FlowTag) FlowList {
@@ -380,7 +380,7 @@ pub const CFGBuilder = struct {
           break;
         }
       }
-      if (bb_nodes.len() > 0) {
+      if (bb_nodes.isNotEmpty()) {
         _prev = self.linkAtomic(bb_nodes, _prev, edge, .CfgOther);
       }
     }

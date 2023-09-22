@@ -128,3 +128,53 @@ test "generic-classes-4" {
   ;
   try doRuntimeTest(src);
 }
+
+test "labeled argument" {
+  var src =
+  \\ def fun(x: str, y: num, a: list{num}, b: err{str})
+  \\  assert(x == 'oo', 'x should not be changed')
+  \\  print('x is', x, 'y is', y, 'a is', a, 'b is', b)
+  \\ end
+  \\ fun(y: 5, a: [2, 3], x: 'oo', ('oops')!)
+  \\ fun(y: 5, a: [2, 3], b: ('oops')!, x: 'oo')
+  \\ 
+  \\ def fun(x: str, y: num, a*: list{num})
+  \\  assert(x == 'oo', 'x should not be changed')
+  \\  print('x is', x, 'y is', y, 'a is', a)
+  \\ end
+  \\ fun(y: 5, a: [2, 3], x: 'oo', a: [1, 2], a: [5, 6, 7])
+  \\ fun(y: 5, a: [2, 3], x: 'oo', a: [1, 2], a: [5, 6, 7])
+  \\ fun(y: 5, a: [2, 3], x: 'oo', [1, 2], [5, 6, 7])
+  \\
+  \\ def fun(x: str, y: num, a*: list{num})
+  \\  assert(y == 5, 'y should not change')
+  \\  print('x is', x, 'y is', y, 'a is', a)
+  \\ end
+  \\ fun(a: [0x1, 0x2], y: 5, 'a', a: [2, 3])
+  ;
+  try doRuntimeTest(src);
+}
+
+test "labeled argument 2" {
+  var src =
+  \\ class Fun
+  \\  a: num
+  \\  b: str
+  \\  def init(a: num, b: str)
+  \\    self.a = a
+  \\    self.b = b
+  \\  end
+  \\  def send(data: list{any})
+  \\    let i = 0
+  \\    while i < data.len()
+  \\      print('sending...', data[i])
+  \\      i += 1
+  \\    end
+  \\  end
+  \\ end
+  \\ let f = Fun(b: 'oops', a: 12)
+  \\ print(f.a, f.b)
+  \\ f.send(data: ['a', 1, f])
+  ;
+  try doRuntimeTest(src);
+}

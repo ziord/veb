@@ -747,6 +747,10 @@ pub const TypeLinker = struct {
     try self.link(node.els);
   }
 
+  fn linkLblArg(self: *Self, node: *ast.LblArgNode) !void {
+    try self.link(node.value);
+  }
+
   fn linkProgram(self: *Self, node: *ast.ProgramNode) !void {
     self.ctx.enterScope();
     for (node.decls.items()) |item| {
@@ -785,6 +789,7 @@ pub const TypeLinker = struct {
       .AstError => |*nd| try self.linkError(nd),
       .AstOrElse => |*nd| try self.linkOrElse(nd),
       .AstSimpleIf => |*nd| try self.linkSimpleIf(nd),
+      .AstLblArg => |*nd| try self.linkLblArg(nd),
       .AstProgram => |*nd| try self.linkProgram(nd),
       .AstCondition, .AstEmpty => {},
     }

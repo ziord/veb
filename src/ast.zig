@@ -46,6 +46,7 @@ pub const AstType = enum {
   AstClass,
   AstDotAccess,
   AstScope,
+  AstLblArg,
   AstProgram,
 };
 
@@ -555,14 +556,21 @@ pub const ControlNode = struct {
 
 pub const CallNode = struct {
   variadic: bool = false,
+  labeled: bool = false,
   va_start: usize = 0,
   expr: *AstNode,
   targs: ?*AstNodeList = null,
   args: AstNodeList,
   typ: ?*Type = null,
 
-  pub fn init(expr: *AstNode, args: AstNodeList, targs: ?*AstNodeList) @This() {
-    return @This() {.expr = expr, .args = args, .targs = targs};
+  pub fn init(
+    expr: *AstNode, args: AstNodeList, targs: ?*AstNodeList,
+    va_start: usize, variadic: bool, labeled: bool
+  ) @This() {
+    return @This() {
+      .expr = expr, .args = args, .targs = targs,
+      .va_start = va_start, .variadic = variadic, .labeled = labeled
+    };
   }
 
   pub inline fn isGeneric(self: *@This()) bool {
@@ -588,7 +596,10 @@ pub const CallNode = struct {
     if (self.targs) |list| {
       targs = util.box(AstNodeList, cloneNodeList(list, al), al);
     }
-    var call = CallNode.init(self.expr.clone(al), cloneNodeList(&self.args, al), targs);
+    var call = CallNode.init(
+      self.expr.clone(al), cloneNodeList(&self.args, al), targs,
+      self.va_start, self.variadic, self.labeled
+    );
     var new = util.alloc(AstNode, al);
     new.* = .{.AstCall = call};
     return new;
@@ -773,6 +784,22 @@ pub const ClassNode = struct {
   }
 };
 
+pub const LblArgNode = struct {
+  label: Token,
+  value: *AstNode,
+
+  pub fn init(label: Token, value: *AstNode) @This() {
+    return @This() {.label = label, .value = value};
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var arg = @This().init(self.label, self.value.clone(al));
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstLblArg = arg};
+    return new;
+  }
+};
+
 pub const RetNode = struct {
   token: Token,
   expr: ?*AstNode,
@@ -853,6 +880,7 @@ pub const AstNode = union(AstType) {
   AstClass: ClassNode,
   AstDotAccess: DotAccessNode,
   AstScope: ScopeNode,
+  AstLblArg: LblArgNode,
   AstProgram: ProgramNode,
 
   pub inline fn isComptimeConst(self: *@This()) bool {
@@ -1030,6 +1058,13 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn isLblArg(self: *@This()) bool {
+    return switch (self.*) {
+      .AstLblArg => true,
+      else => false,
+    };
+  }
+
   pub fn getNarrowed(self: *@This()) ?*VarNode {
     return switch (self.*) {
       .AstVar => |*vr| vr,
@@ -1068,7 +1103,7 @@ pub const AstNode = union(AstType) {
       .AstClass => |*cls| cls.typ,
       .AstDotAccess => |*dot| dot.typ,
       .AstBlock, .AstIf, .AstElif,
-      .AstWhile, .AstControl, .AstScope => null,
+      .AstWhile, .AstControl, .AstScope, .AstLblArg => null,
       else => unreachable,
     };
   }
@@ -1173,6 +1208,7 @@ pub const AstNode = union(AstType) {
       .AstEmpty => |emp| emp.token,
       .AstDotAccess => |*dot| dot.lhs.getToken(),
       .AstClass => |*cls| cls.name.token,
+      .AstLblArg => |*arg| arg.label,
       .AstFun => |*fun| {
         if (fun.name) |name| {
           return name.token;
@@ -1246,6 +1282,7 @@ pub const AstNode = union(AstType) {
       .AstOrElse => |*oe| oe.clone(al),
       .AstFun => |*fun| fun.clone(al),
       .AstClass => |*cls| cls.clone(al),
+      .AstLblArg => |*arg| arg.clone(al),
       .AstProgram => unreachable,
     };
   }

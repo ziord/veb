@@ -560,14 +560,29 @@ pub const Parser = struct {
     }
     try self.consume(.TkLBracket);
     var args = NodeList.init(self.allocator);
+    var start: ast.Token = undefined;
+    var labeled = false;
     while (!self.check(.TkEof) and !self.check(.TkRBracket)) {
       if (args.isNotEmpty()) try self.consume(.TkComma);
-      args.append(try self.parseExpr());
+      start = self.current_tok;
+      var arg = try self.parseExpr(); 
+      if (self.match(.TkColon)) {
+        labeled = true;
+        if (start.ty != .TkIdent) {
+          self.softErrMsg(self.previous_tok, "labeled argument used without an identifier label");
+        }
+        var val = try self.parseExpr();
+        var tmp = self.newNode();
+        tmp.* = .{.AstLblArg = ast.LblArgNode.init(start, val)};
+        args.append(tmp);
+      } else {
+        args.append(arg);
+      }
     }
     try self.consume(.TkRBracket);
     try self.assertMaxArgs(args.len(), "arguments");
     var node = self.newNode();
-    node.* = .{.AstCall = ast.CallNode.init(left, args, targs)};
+    node.* = .{.AstCall = ast.CallNode.init(left, args, targs, 0, false, labeled)};
     return node;
   }
 

@@ -828,7 +828,9 @@ pub const TypeChecker = struct {
       .AstList,
       .AstMap,
       .AstNType => try self.narrowAtomic(node, env),
-      else => unreachable,
+      else => |*d| {
+        std.log.debug("attempt to narrow node: {}\n", .{d});
+      },
     };
   }
 
@@ -1800,7 +1802,56 @@ pub const TypeChecker = struct {
     }
   }
 
+  fn validateLabeledCallArguments(self: *Self, fun_ty: *types.Function, node: *ast.CallNode) !void {
+    if (node.labeled) {
+      var fun = &fun_ty.node.?.AstFun;
+      var map = std.StringHashMap([]const u8).init(self.ctx.allocator());
+      defer map.clearAndFree();
+      // find duplicate labels
+      for (node.args.items()) |arg| {
+        if (arg.isLblArg()) {
+          var str = arg.AstLblArg.label.value;
+          if (map.get(str)) |_| {
+            if (node.variadic) {
+              // skip if this is an arg to the variadic param
+              if (std.mem.eql(u8, str, fun.params.getLast().ident.token.value)) {
+                continue;
+              }
+            }
+            self.softError(arg.AstLblArg.label, "duplicate labeled argument found", .{});
+          } else {
+            map.put(str, str) catch {};
+          }
+        }
+      }
+      // simply sort the labeled arguments
+      for (fun.params.items(), 0..) |param, i| {
+        for (node.args.items(), 0..) |arg, j| {
+          if (arg.isLblArg()) {
+            var lbl = arg.AstLblArg.label;
+            if (std.mem.eql(u8, param.ident.token.value, lbl.value)) {
+              if (i >= node.args.len()) {
+                self.softError(lbl, "missing required argument(s)", .{});
+                continue;
+              }
+              node.args.items()[j] = node.args.items()[i];
+              node.args.items()[i] = arg.AstLblArg.value;
+            }
+          }
+        }
+      }
+      if (self.diag.hasErrors()) return error.CheckError;
+      // report errors for unsorted/untransformed labeled args if any
+      for (node.args.items()) |arg| {
+        if (arg.isLblArg()) {
+          return self.error_(true, arg.AstLblArg.label, "illegal or invalid label", .{});
+        }
+      }
+    }
+  }
+
   fn validateCallArguments(self: *Self, fun_ty: *types.Function, node: *ast.CallNode) !void {
+    try self.validateLabeledCallArguments(fun_ty, node);
     if (!node.variadic) {
       for (fun_ty.params.items(), node.args.items()) |p_ty, arg| {
         var arg_ty = try self.infer(arg);
@@ -2621,7 +2672,7 @@ pub const TypeChecker = struct {
       .AstDotAccess => |*nd| try self.inferDotAccess(nd),
       .AstScope => |*nd| try self.inferScope(nd),
       .AstProgram => |*nd| try self.inferProgram(nd),
-      .AstIf, .AstElif, .AstSimpleIf,
+      .AstIf, .AstElif, .AstSimpleIf, .AstLblArg,
       .AstCondition, .AstEmpty, .AstControl => return undefined,
     };
   }

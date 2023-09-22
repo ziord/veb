@@ -1633,7 +1633,7 @@ pub const Compiler = struct {
       .AstOrElse => |*nd| try self.cOrElse(nd, reg),
       .AstClass => |*nd| try self.cClass(node, nd, reg),
       .AstDotAccess => |*nd| try self.cDotAccess(nd, false, reg),
-      .AstProgram, .AstSimpleIf, .AstElif, .AstCondition, .AstEmpty => unreachable,
+      .AstProgram, .AstSimpleIf, .AstElif, .AstCondition, .AstEmpty, .AstLblArg => unreachable,
     };
   }
 

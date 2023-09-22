@@ -909,6 +909,6 @@ test "labeled argument 6" {
   \\ fun(6: 'a', 12: 9)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "labeled argument used without an identifier label",
+    "invalid labeled argument",
   });
 }

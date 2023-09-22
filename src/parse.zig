@@ -569,7 +569,7 @@ pub const Parser = struct {
       if (self.match(.TkColon)) {
         labeled = true;
         if (start.ty != .TkIdent) {
-          self.softErrMsg(self.previous_tok, "labeled argument used without an identifier label");
+          self.softErrMsg(self.previous_tok, "invalid labeled argument");
         }
         var val = try self.parseExpr();
         var tmp = self.newNode();

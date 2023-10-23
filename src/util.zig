@@ -74,3 +74,37 @@ pub fn boxEnsureCapacity(comptime T: type, val: T, al: std.mem.Allocator, cap: u
 pub inline fn todo(msg: []const u8) noreturn {
   @panic("Todo! " ++ msg ++ "\n");
 }
+
+/// handy function for adding spaces to a writer context
+pub fn addDepth(writer: *std.ArrayList(u8).Writer, depth: usize) !void {
+  for (0..depth) |_| {
+    _ = try writer.write(" ");
+  }
+}
+
+pub const NameGen = struct {
+  al: std.mem.Allocator,
+  name_id: usize = 0,
+
+  pub inline fn init(al: std.mem.Allocator) @This() {
+    return @This(){.al = al};
+  }
+
+  pub fn generate(self: *@This(), comptime fmt: []const u8, args: anytype) [] const u8 {
+    var name = std.fmt.allocPrint(self.al, fmt ++ ".{}", args ++ .{self.name_id}) catch @panic("could not generate name");
+    self.name_id += 1;
+    return name;
+  }
+
+  pub inline fn reset(self: *@This()) void {
+    self.name_id = 0;
+  }
+
+  pub inline fn resetTo(self: *@This(), idc: usize) void {
+    self.name_id = idc;
+  }
+
+  pub inline fn getCurrentId(self: *@This()) usize {
+    return self.name_id;
+  }
+};

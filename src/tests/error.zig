@@ -153,7 +153,7 @@ test "conditionals" {
     "Expected condition expression to be of type 'bool', but got 'num'",
     "Expected condition expression to be of type 'bool', but got 'list{map{any, any}}'",
     "Expected type instance in lhs of `is` operator but found 'Type'",
-    "Expected type 'Type' in rhs of `is` operator but found type 'bool'\n\tHelp: For constant types, consider using '==' or '!=' operator instead.",
+    "Expected type 'Type' in rhs of `is` operator but found type 'false'\n\tHelp: For constant types, consider using '==' or '!=' operator instead.",
   });
 }
 
@@ -165,7 +165,7 @@ test "narrowing-1" {
   \\ end
   \\ let x: list{num} | map{str, num} = [5]
   \\ let p = 10
-  \\ if x is list
+  \\ if x is list{num}
   \\   x += 5
   \\ end
   ;
@@ -178,8 +178,8 @@ test "narrowing-1" {
 test "narrowing-2" {
   var src =
   \\ let x: list{num} | map{str, num} = [5]
-  \\ if x is list
-  \\ elif x is map
+  \\ if x is list{num}
+  \\ elif x is map{str, num}
   \\ else
   \\  ~x 
   \\ end
@@ -222,8 +222,8 @@ test "narrowing-5" {
   var src =
   \\ let x: list{num | list{num}} | num = [9 as num | list{num}]
   \\ let p = 0
-  \\ if x is list
-  \\    if x[0] is list
+  \\ if x is list{num | list{num}}
+  \\    if x[0] is list{num}
   \\        p /= 5
   \\    end
   \\ elif x is num
@@ -240,16 +240,16 @@ test "narrowing-5" {
 
 test "narrowing-6" {
   var src =
-  \\ let x: (list{num} | str)? = [5]
-  \\ if x.? is list and x.?[0] is num
-  \\    x.?[0] += 5
+  \\ let x: (list{num | str} | str)? = [5, 'a']
+  \\ if x.? is list{num | str} and x.?[0] is num
+  \\    x.?[1] += 5
   \\ else
   \\    x.?
   \\ end
   \\ x
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' - 'num', but got 'str | list{num}' - 'num'",
+    "Expected type 'num' + 'num', but got 'num | str' + 'num'",
   });
 }
 
@@ -274,7 +274,7 @@ test "narrowing-8" {
   var src =
   \\ let x: list{list{num | str}} | map{str, list{num | str}} = [[5 as num | str]]
   \\ let p = 10
-  \\ if x is map 
+  \\ if x is map{str, list{num | str}}
   \\   if x['a'][0] is num and x['a'][0] + 2 > 0xff
   \\      x['a'][0] + 5
   \\   else
@@ -627,6 +627,18 @@ test "functions-6" {
   });
 }
 
+test "functions-7.<function arguments>" {
+  var src =
+  \\ def funny(t: list{str})
+  \\  print(t)
+  \\ end
+  \\ funny([])
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Argument mismatch. Expected type 'list{str}' but found 'list{any}'",
+  });
+}
+
 test "error type" {
   var src =
   \\ let j = try fancy(5)
@@ -910,5 +922,369 @@ test "labeled argument 6" {
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "invalid labeled argument",
+  });
+}
+
+test "patterns-1.<ordinary match>" {
+  var src =
+  \\ match ('a', 'b')
+  \\  case ('x', 'y') => print('first')
+  \\  case ('a' as a, 'b' as b) as d => print('ok')
+  \\  case ('q', 'k') => print('third')
+  \\ end
+  \\ 
+  ;
+ try doErrorTest(src, 2, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'str'",
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'tuple{str}'"
+  });
+}
+
+test "patterns-2.<scopes>" {
+  var src =
+  \\ let o = 5
+  \\ match ('a', 'b')
+  \\  case ('x', 'y') => print('first')
+  \\  case ('a', 'b' as o) as d => o = 10
+  \\  case ('q', 'k') => print('third')
+  \\  case _ => print("last")
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Cannot assign type 'num' to type 'str'",
+  });
+}
+
+test "patterns-3.<nested match>" {
+  var src =
+  \\ let z = false
+  \\ match (('a', 'b'), ('x', 'y'))
+  \\
+  \\  case (('x', 'y'), ..) => do
+  \\    let p = z
+  \\    print('first')
+  \\  end
+  \\  case (('a', ..), u) => do
+  \\    let b = z
+  \\    print('here!')
+  \\  end
+  \\  case (('a', t, ..) as d, ..) => do
+  \\    let h = z
+  \\    print('second')
+  \\    z = true
+  \\  end
+  \\  case (('x', k), y) => do
+  \\    let v = z
+  \\    print('third')
+  \\  end
+  \\  case _ as n => let j = n
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "possible redundant case",
+    "case (('a', t, ..) as d, ..) => do",
+  });
+}
+
+test "patterns-4.<match on unions>" {
+  var src =
+  \\ let j: 'a' | 'b' | 'c' = 'b'
+  \\ match j
+  \\  case 'a' => print('a')
+  \\  case 'c' => print('hmm')
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'b'"
+  });
+}
+
+test "patterns-5.<match on classes (fields)>" {
+  var src =
+  \\ class Ant
+  \\  a = 5
+  \\ end
+  \\ class Rat
+  \\  x = 1
+  \\  y = 8
+  \\ end
+  \\ let j = Rat() as Ant | Rat
+  \\ match j
+  \\  case Ant(a) if a > 2 => print(12)
+  \\  case Ant(5) => print(13)
+  \\  case Ant() => print(40)
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "'Ant' has 1 field(s), but pattern test assumes 0",
+  });
+}
+
+test "patterns-6.<match on classes (fields)>" {
+  var src =
+  \\ class Ant
+  \\  a = 5
+  \\ end
+  \\ class Rat
+  \\  x = 1
+  \\  y = 8
+  \\ end
+  \\ let j = Rat() as Ant | Rat
+  \\ match j
+  \\  case Ant(a) if a > 2 => print(12)
+  \\  case Ant(5) => print(13)
+  \\  case Rat(2) => print(40)
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "'Rat' has 2 field(s), but pattern test assumes 1",
+  });
+}
+
+test "patterns-7.<tuple exhaustiveness>" {
+  var src =
+  \\ match ('a', 'b')
+  \\  case ('x', 'y') => print('first')
+  \\  case ('a', 'b' as o) as d => print('second')
+  \\  case ('q', 'k') => print('third')
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'str'",
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'tuple{str}'"
+  });
+}
+
+test "patterns-8.<list exhaustiveness>" {
+  var src =
+  \\ let z = false
+  \\ match [('a', 'b')]
+  \\  case [('x', 'y')] => print('first')
+  \\  case [('a', 'b' as o)] as d => z = true
+  \\  case [('q', 'k')] => print('third')
+  \\ end
+  \\ assert(z, 'should be matched')
+  ;
+  try doErrorTest(src, 3, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'str'",
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'tuple{str}'",
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'list{tuple{str}}'"
+  });
+}
+
+test "patterns-9.<match redundancy>" {
+  var src =
+  \\ let z = false
+  \\ class Cat
+  \\ end
+  \\ class Dog
+  \\ end
+  \\ let p: Cat | Dog = Cat()
+  \\ let z = false
+  \\ match p
+  \\  case Dog() => print('good')
+  \\  case Dog() => print('hmm')
+  \\  case Cat() => z = true
+  \\ end
+  \\ assert(z, 'should be matched')
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "possible redundant case",
+    "case Dog() => print('hmm')"
+  });
+}
+
+test "patterns-10.<type checks>" {
+  var src =
+  \\ class Cat
+  \\  x = 1
+  \\ end
+  \\ class Dog
+  \\ end
+  \\ let p: Cat | Dog = Cat()
+  \\ let z = false
+  \\ match p
+  \\  case Dog() => print('hmm')
+  \\  case Cat('fox') => print('nope')
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "illegal argument pattern type. Expected type 'num'"
+  });
+}
+
+test "patterns-11.<type checks>" {
+  var src =
+  \\ class Cat
+  \\  x = 1
+  \\ end
+  \\ class Dog
+  \\ end
+  \\ let p: Cat | Dog = Cat()
+  \\ let z = false
+  \\ match p
+  \\  case [] => print('hmm')
+  \\  case [Cat(5)] => print('nope')
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "expected type 'Cat | Dog' but found 'list{<>}'",
+    "expected type 'Cat | Dog' but found 'list{Cat | <>}'"
+  });
+}
+
+test "patterns-12.<type checks>" {
+  var src =
+  \\ class Cat
+  \\  x = [Dog()]
+  \\ end
+  \\ class Dog
+  \\ end
+  \\ let p: Cat | Dog = Cat()
+  \\ let z = false
+  \\ match p
+  \\  case [] => print('hmm')
+  \\  case [Cat(5)] => print('nope')
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "expected type 'Cat | Dog' but found 'list{<>}'",
+    "illegal argument pattern type. Expected type 'list{Dog instance}'"
+  });
+}
+
+test "patterns-13.<type checks>" {
+  var src =
+  \\ class Cat
+  \\  x = 5
+  \\ end
+  \\ class Dog
+  \\  y = 10
+  \\ end
+  \\ let p: Cat | Dog = Cat()
+  \\ let z = false
+  \\ match p
+  \\  case Dog(x=5) => print('nope')
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "type 'Dog' has no field 'x'",
+  });
+}
+
+test "patterns-14.<type checks (fields)>" {
+  var src =
+  \\ class Cat
+  \\  x = 5
+  \\ end
+  \\ class Dog
+  \\  y = 10
+  \\ end
+  \\ let p: Cat | Dog = Cat()
+  \\ let z = false
+  \\ match p
+  \\  case Dog(x=5, j=10) => print('nope')
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "type 'Dog' has 1 field(s), but pattern test assumes 2",
+  });
+}
+
+test "patterns-14b.<type checks (fields)>" {
+  var src =
+  \\ class Cat
+  \\  x = 5
+  \\ end
+  \\ class Dog
+  \\  y = 10
+  \\ end
+  \\ let p: Cat | Dog = Cat()
+  \\ let z = false
+  \\ match p
+  \\  case Dog(y=5, x, ..) => print('nope')
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "type 'Dog' has 1 field(s), but pattern test assumes 2 or more",
+  });
+}
+
+test "patterns-15.<match on bool (exhaustiveness)>" {
+  var src =
+  \\ match (1 < 2)
+  \\  case false => print('nay')
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'bool'",
+  });
+}
+
+test "patterns-16.<match on bool (exhaustiveness)>" {
+  var src =
+  \\ match (1 < 2)
+  \\  case true => print('nay')
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'bool'",
+  });
+}
+
+test "patterns-17.<ranges (exhaustiveness)>" {
+  var src =
+  \\  let n = 10 / 2
+  \\  match n
+  \\    case 0..2 => print('hey')
+  \\    case 3..5 => print('hah')
+  \\  end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'num'",
+  });
+}
+
+test "patterns-18.<redundancy>" {
+  var src =
+  \\ match true
+  \\  case false => print('nay')
+  \\  case true => print('yay')
+  \\  case _ => print('oops')
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "redundant case",
+    "case _ => print('oops')"
+  });
+}
+
+test "patterns-19.<redundancy>" {
+  var src =
+  \\ type T = "a" | "b" | "c"
+  \\ let j: T = "c"
+  \\ match j
+  \\   case "a" => print('a!')
+  \\   case "b" => print('b!')
+  \\   case "c" => print('c!')
+  \\   case _ => print('other!')
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "redundant case",
+    "case _ => print('other!')"
+  });
+}
+
+test "patterns-20.<match on nil (exhaustiveness)>" {
+  var src =
+  \\ let j: ("a" | "b")? = "b"
+  \\ match j
+  \\   case "a" => print('a!')
+  \\   case "b" => print('b!')
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'nil'",
   });
 }

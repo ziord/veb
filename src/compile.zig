@@ -1,6 +1,7 @@
 const std = @import("std");
 const value = @import("value.zig");
 const ast = @import("ast.zig");
+const ks = @import("constants.zig");
 const parse = @import("parse.zig");
 const util = @import("util.zig");
 const ds = @import("ds.zig");
@@ -21,7 +22,7 @@ const Diagnostic = diagnostics.Diagnostic;
 const GenInfo = check.TypeChecker.GenInfo;
 const GenInfoMap = ds.ArrayHashMap(*Node, *ds.ArrayList(GenInfo));
 const TypeList = check.TypeList;
-const InitVar = check.TypeChecker.InitVar;
+const InitVar = ks.InitVar;
 
 const VRegister = struct {
   regs: std.MultiArrayList(Reg),
@@ -289,7 +290,7 @@ pub const Compiler = struct {
 
   inline fn isSelfVar(self: *Self, node: *ast.VarNode) bool {
     _ = self;
-    return std.mem.eql(u8, node.token.value, check.TypeChecker.SelfVar);
+    return std.mem.eql(u8, node.token.value, ks.SelfVar);
   }
 
   inline fn incScope(self: *Self) void {
@@ -411,7 +412,7 @@ pub const Compiler = struct {
       return .{.pos = info.pos, .isGSym = info.isGSym};
     }
     if (self.gsyms.len >= MAX_GSYMS or self.skip_gsyms) {
-      std.log.debug("Gsyms {s}..using globals list\n", .{if (self.skip_gsyms) "elided" else "exceeded"});
+      std.log.debug("Gsyms {s}..using globals list", .{if (self.skip_gsyms) "elided" else "exceeded"});
       return .{.pos = self.addGlobalVar(node), .isGSym = false};
     }
     var idx: u32 = @intCast(self.gsyms.len);
@@ -509,8 +510,7 @@ pub const Compiler = struct {
   }
 
   fn appendSelfParam(self: *Self, token: Token) !void {
-    var self_tok = Token.tokenFrom(&token);
-    self_tok.value = check.TypeChecker.SelfVar;
+    const self_tok = Token.fromWithValue(&token, ks.SelfVar, token.ty);
     var node = ast.VarNode.init(self_tok).box(self.allocator.getArenaAllocator());
     _ = try self.initLocal(node);
   }
@@ -568,7 +568,7 @@ pub const Compiler = struct {
   }
 
   /// preallocate all globals in `gsyms` or `globals`
-  fn preallocateGlobals(self: *Self, toplevels: *ast.AstNodeList) void {
+  fn preallocateGlobals(self: *Self, toplevels: *ast.AstList) void {
     // TODO: update
     if (self.inLocalScope()) return;
     for (toplevels.items()) |decl| {
@@ -768,13 +768,21 @@ pub const Compiler = struct {
       var typ = node.right.getType().?;
       typ = if (typ.isTop()) typ.top().child else typ;
       if (typ.isClass()) {
+        if (typ.isClsGeneric()) {
+          std.debug.assert(typ.klass().isInstantiatedGeneric());
+          var cls = typ.klass();
+          if (!cls.builtin) {
+            var nd = &cls.node.?.AstClass;
+            nd.name.token.value = check.TypeChecker.makeSynthName(self.alloc(), nd.name.token.value, false, cls.tparams.?, null);
+          }
+        }
         break :tb (
           if (typ.isListTy()) TypeKind.TyClass
           else if (typ.isMapTy()) TypeKind.TyClass + 1
           else if (typ.isTupleTy()) TypeKind.TyClass + 2
           else if (typ.isErrorTy()) TypeKind.TyClass + 3
-          else if (typ.isClass() and typ.klass().isStringClass()) @intFromEnum(TypeKind.TyString)
-          else if (typ.isClass() or typ.isInstance()) blk: {
+          else if (typ.klass().isStringClass()) @intFromEnum(TypeKind.TyString)
+          else blk: {
             op = OpCode.Iscls;
             var cls = typ.klass();
             var reg = try self.getReg(node.right.getToken());
@@ -782,7 +790,6 @@ pub const Compiler = struct {
             self.vreg.releaseReg(reg);
             break :blk rk2;
           }
-          else unreachable
         );
       } else {
         break :tb @intFromEnum(typ.concrete().tkind);
@@ -1136,13 +1143,13 @@ pub const Compiler = struct {
     var rx = try self.c(node.cond, reg);
     // jmp to elif, if any
     var cond_to_elif_or_else = self.fun.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
-    _ = try self.cBlock(&node.then.AstBlock, reg);
+    _ = try self.cBlock(node.then.block(), reg);
     var should_patch_if_then_to_end = true;
     var if_then_to_end = blk: {
       // as a simple optimization, if we only have an if-end statement, i.e. no elif & else,
       // we don't need to jump after the last statement in the if-then block, control
-      // would naturally fallthrough to outside the if-end statement.
-      if (node.elifs.len() == 0 and node.els.AstBlock.nodes.len() == 0) {
+      // would naturally fallthrough to outside of the if-end statement.
+      if (node.elifs.len() == 0 and node.els.block().nodes.len() == 0) {
         should_patch_if_then_to_end = false;
         break :blk @as(usize, 0);
       }
@@ -1172,13 +1179,43 @@ pub const Compiler = struct {
       self.fun.code.patch2ArgsJmp(cond_to_elif_or_else);
     }
     // else-
-    _ = try self.cBlock(&node.els.AstBlock, reg);
+    _ = try self.cBlock(node.els.block(), reg);
     if (node.elifs.isNotEmpty()) {
       // patch up elif_then_to_end 
       for (elifs_then_to_end.items()) |idx| {
         self.fun.code.patch2ArgsJmp(idx);
       }
     }
+    if (should_patch_if_then_to_end) {
+      self.fun.code.patch2ArgsJmp(if_then_to_end);
+    }
+    // self.leaveJmp();
+    self.vreg.releaseReg(reg);
+    return dst;
+  }
+
+  fn cSimpleIf(self: *Self, node: *ast.SimpleIfNode, dst: u32) !u32 {
+    // self.enterJmp();
+    var reg = try self.getReg(node.cond.getToken());
+    // if-
+    var rx = try self.c(node.cond, reg);
+    // jmp to elif, if any
+    var cond_to_else = self.fun.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
+    _ = try self.cBlock(node.then.block(), reg);
+    var should_patch_if_then_to_end = true;
+    var if_then_to_end = blk: {
+      // as a simple optimization, if we only have an if-end statement, i.e. no elif & else,
+      // we don't need to jump after the last statement in the if-then block, control
+      // would naturally fallthrough to outside of the if-end statement.
+      if (node.els.block().nodes.len() == 0) {
+        should_patch_if_then_to_end = false;
+        break :blk @as(usize, 0);
+      }
+      break :blk self.fun.code.write2ArgsJmp(.Jmp, 2, self.lastLine(), self.vm);
+    };
+    self.fun.code.patch2ArgsJmp(cond_to_else);
+    // else-
+    _ = try self.cBlock(node.els.block(), reg);
     if (should_patch_if_then_to_end) {
       self.fun.code.patch2ArgsJmp(if_then_to_end);
     }
@@ -1210,7 +1247,7 @@ pub const Compiler = struct {
     var rx = try self.c(node.cond, reg);
     // jmp to exit
     var cond_to_exit = self.fun.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
-    _ = try self.cBlock(&node.then.AstBlock, reg);
+    _ = try self.cBlock(node.then.block(), reg);
     // loop to cond
     // +1 to include the jmp inst itself, which we already processed
     var offset: u32 = @intCast(self.fun.code.getInstLen() - to_cond + 1);
@@ -1240,7 +1277,7 @@ pub const Compiler = struct {
     var rx = try self.c(node.cond, reg);
     // jmp to else, if any
     var cond_jmp = self.fun.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
-    _ = try self.cBlock(&node.then.AstBlock, reg);
+    _ = try self.cBlock(node.then.block(), reg);
     var then_jmp = self.fun.code.write2ArgsJmp(.Jmp, 2, self.lastLine(), self.vm);
     return .{.jmp_to_next = cond_jmp, .jmp_to_end = then_jmp};
   }
@@ -1248,7 +1285,7 @@ pub const Compiler = struct {
   fn cFun(self: *Self, node: *ast.FunNode, ast_node: *Node, is_method: bool, _reg: u32) !u32 {
     // is_method tells us if we're currently trying to compile a class's method
     if (node.isGeneric()) return self.cFunGeneric(ast_node, is_method, _reg);
-    if (!node.body.AstBlock.checked) {
+    if (!node.body.block().checked) {
       if (self.inGlobalScope() and node.name != null) {
         _ = try self.patchGlobal(node.name.?);
       }
@@ -1295,12 +1332,12 @@ pub const Compiler = struct {
     }
     // compile function body using cBlockNoPops() since no need to pop locals,
     // - return does this automatically
-    _ = try compiler.cBlockNoPops(&node.body.AstBlock, _reg);
+    _ = try compiler.cBlockNoPops(node.body.block(), _reg);
     // append return inst as last
     if (is_method and std.mem.eql(u8, node.name.?.token.value, InitVar)) {
       // return `self`
       compiler.fun.code.write2ArgsInst(.Ret, 0, 0, token.line, self.vm);
-    } else if (node.body.AstBlock.nodes.len() == 0 or !node.body.AstBlock.nodes.getLast().isRet()) {
+    } else if (node.body.block().nodes.len() == 0 or !node.body.block().nodes.getLast().isRet()) {
       _ = compiler.cVoidRet(compiler.lastLine());
     }
     compiler.decScope();
@@ -1462,7 +1499,7 @@ pub const Compiler = struct {
       self.fun.code.resetBy(1);
       fun_dst = try self.cDotAccess(&node.expr.AstDotAccess, false, reg);
       self.fun.code.write3ArgsInst(.Mov, _dst, fun_dst, 0, token.line, self.vm);
-      std.log.debug("fun_dst != _dst on method call\n", .{});
+      std.log.debug("fun_dst != _dst on method call", .{});
     }
     self.fun.code.write2ArgsInst(.Call, _dst, n, token.line, self.vm);
     if (do_move) {
@@ -1533,6 +1570,10 @@ pub const Compiler = struct {
     }
     self.fun.code.patch2ArgsJmp(ok_to_end);
     return rx;
+  }
+
+  fn cMatch(self: *Self, node: *ast.MatchNode, reg: u32) !u32 {
+    return self.c(node.lnode, reg);
   }
 
   fn cClassGeneric(self: *Self, node: *Node, reg: u32) CompileError!u32 {
@@ -1607,33 +1648,36 @@ pub const Compiler = struct {
       .AstNumber => |*nd| self.cNumber(nd, reg),
       .AstString => |*nd| self.cString(nd, reg),
       .AstBool => |*nd| self.cBool(nd, reg),
-      .AstUnary => |*nd| try self.cUnary(nd, reg),
-      .AstBinary => |*nd| try self.cBinary(nd, reg),
-      .AstList => |*nd| try self.cList(nd, node, reg),
-      .AstTuple => |*nd| try self.cTuple(nd, node, reg),
-      .AstMap => |*nd| try self.cMap(nd, reg),
-      .AstExprStmt => |*nd| try self.cExprStmt(nd, reg),
-      .AstVar => |*nd| try self.cVar(nd, reg),
-      .AstVarDecl => |*nd| try self.cVarDecl(nd, reg),
-      .AstAssign => |*nd| try self.cAssign(nd, reg),
-      .AstBlock => |*nd| try self.cBlock(nd, reg),
+      .AstUnary => |*nd| self.cUnary(nd, reg),
+      .AstBinary => |*nd| self.cBinary(nd, reg),
+      .AstList => |*nd| self.cList(nd, node, reg),
+      .AstTuple => |*nd| self.cTuple(nd, node, reg),
+      .AstMap => |*nd| self.cMap(nd, reg),
+      .AstExprStmt => |*nd| self.cExprStmt(nd, reg),
+      .AstVar => |*nd| self.cVar(nd, reg),
+      .AstVarDecl => |*nd| self.cVarDecl(nd, reg),
+      .AstAssign => |*nd| self.cAssign(nd, reg),
+      .AstBlock => |*nd| self.cBlock(nd, reg),
       .AstNType => |*nd| self.cNType(nd, reg),
-      .AstAlias, .AstScope => reg,
+      .AstAlias, .AstScope, .AstFail => reg,
       .AstNil => |*nd| self.cNil(nd, reg),
-      .AstCast => |*nd| try self.cCast(nd, reg),
-      .AstSubscript => |*nd| try self.cSubscript(nd, reg),
-      .AstDeref => |*nd| try self.cDeref(nd, reg),
-      .AstIf => |*nd| try self.cIf(nd, reg),
-      .AstWhile => |*nd| try self.cWhile(nd, reg),
+      .AstCast => |*nd| self.cCast(nd, reg),
+      .AstSubscript => |*nd| self.cSubscript(nd, reg),
+      .AstDeref => |*nd| self.cDeref(nd, reg),
+      .AstIf => |*nd| self.cIf(nd, reg),
+      .AstSimpleIf => |*nd| self.cSimpleIf(nd, reg),
+      .AstWhile => |*nd| self.cWhile(nd, reg),
       .AstControl => |*nd| self.cControl(nd, reg),
-      .AstFun => |*nd| try self.cFun(nd, node, false, reg),
-      .AstCall => |*nd| try self.cCall(nd, reg),
-      .AstRet => |*nd| try self.cRet(nd, reg),
-      .AstError => |*nd| try self.cError(nd, reg),
-      .AstOrElse => |*nd| try self.cOrElse(nd, reg),
-      .AstClass => |*nd| try self.cClass(node, nd, reg),
-      .AstDotAccess => |*nd| try self.cDotAccess(nd, false, reg),
-      .AstProgram, .AstSimpleIf, .AstElif, .AstCondition, .AstEmpty, .AstLblArg => unreachable,
+      .AstFun => |*nd| self.cFun(nd, node, false, reg),
+      .AstCall => |*nd| self.cCall(nd, reg),
+      .AstRet => |*nd| self.cRet(nd, reg),
+      .AstError => |*nd| self.cError(nd, reg),
+      .AstOrElse => |*nd| self.cOrElse(nd, reg),
+      .AstClass => |*nd| self.cClass(node, nd, reg),
+      .AstDotAccess => |*nd| self.cDotAccess(nd, false, reg),
+      .AstMatch => |*nd| self.cMatch(nd, reg),
+      .AstMCondition => |*nd| self.c(nd.tst.AstCondition.cond, reg),
+      .AstProgram, .AstElif, .AstCondition, .AstEmpty, .AstLblArg => unreachable,
     };
   }
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const ds = @import("ds.zig");
 const util = @import("util.zig");
+const ks = @import("constants.zig");
 const VarNode = @import("ast.zig").VarNode;
 const Token = @import("lex.zig").Token;
 
@@ -408,14 +409,14 @@ pub const Class = struct {
   }
 
   pub fn initWithDefault(name: []const u8, al: std.mem.Allocator) @This() {
-    var fields = util.box(NodeList, NodeList.init(al), al);
-    var methods = util.box(TypeList, TypeList.init(al), al);
+    var fields = NodeList.init(al).box();
+    var methods = TypeList.init(al).box();
     return Class.init(name, fields, methods, null, null, false, false);
   }
 
   pub inline fn initTParams(self: *@This(), al: std.mem.Allocator) void {
     if (self.tparams == null) {
-      self.tparams = util.box(TypeList, TypeList.init(al), al);
+      self.tparams = TypeList.init(al).box();
     }
   }
 
@@ -525,7 +526,7 @@ pub const Class = struct {
           if (oth.tparams) |tparams2| {
             if (tparams1.len() != tparams2.len()) return false;
             for (tparams1.items(), tparams2.items()) |tp1, tp2| {
-              if (!tp1.isRelatedTo(tp2, .RCTypeParams, A)) {
+              if (!tp1.isRelatedTo(tp2, if (ctx != .RCIs) .RCTypeParams else ctx, A)) {
                 return false;
               }
             }
@@ -656,6 +657,7 @@ pub const Type = struct {
     ty1.tid = ty2.tid;
     ty1.alias = ty2.alias;
     ty1.variadic = ty2.variadic;
+    ty1.inferred = ty2.inferred;
   }
 
   const TypeHashMap = ds.ArrayHashMap(*Type, *Type);
@@ -670,7 +672,7 @@ pub const Type = struct {
         var _fun = new.function();
         _fun.params.ensureTotalCapacity(fun.params.capacity());
         if (fun.tparams) |tparams| {
-          var new_tparams = util.boxEnsureCapacity(TypeList, TypeList.init(al), al, tparams.capacity());
+          var new_tparams = TypeList.init(al).boxEnsureCapacity(tparams.capacity());
           for (tparams.items()) |ty| {
             new_tparams.append(ty._clone(al, map));
           }
@@ -684,8 +686,8 @@ pub const Type = struct {
       },
       .Class => |*cls| {
         if (map.get(self)) |ty| return ty;
-        var fields = util.boxEnsureCapacity(NodeList, NodeList.init(al), al, cls.fields.capacity());
-        var methods = util.boxEnsureCapacity(TypeList, TypeList.init(al), al, cls.methods.capacity());
+        var fields =  NodeList.init(al).boxEnsureCapacity(cls.fields.capacity());
+        var methods = TypeList.init(al).boxEnsureCapacity(cls.methods.capacity());
         var ret = Type.init(.{.Class = Class.init(cls.name, fields, methods, null, cls.node, cls.empty, cls.builtin)}).box(al);
         map.set(self, ret);
         for (cls.fields.items()) |itm| {
@@ -696,7 +698,7 @@ pub const Type = struct {
         }
         var tparams: ?*TypeList = null;
         if (cls.tparams) |tp| {
-          var new_tparams = util.boxEnsureCapacity(TypeList, TypeList.init(al), al, tp.capacity());
+          var new_tparams = TypeList.init(al).boxEnsureCapacity(tp.capacity());
           for (tp.items()) |ty| {
             new_tparams.append(ty._clone(al, map));
           }
@@ -731,6 +733,11 @@ pub const Type = struct {
       .Instance => |*inst| {
         // TODO: clone class?
         var new = Instance.init(inst.cls).toType().box(al);
+        new.setRestFields(self);
+        return new;
+      },
+      .Top => |*tp| {
+        var new = Type.newTop(tp.child.clone(al)).box(al);
         new.setRestFields(self);
         return new;
       },
@@ -807,13 +814,20 @@ pub const Type = struct {
   pub fn newNever(allocator: std.mem.Allocator) *Self {
     var ty = newVariable(allocator);
     var nvr = Token.getDefault();
-    nvr.value = "never";
+    nvr.value = ks.NeverVar;
     ty.variable().append(nvr);
     return ty.box(allocator);
   }
 
   pub fn newVoid() Self {
     return Self.init(.{.Concrete = Concrete.init(.TyVoid)});
+  }
+
+  pub fn newBuiltinGenericClass(name: []const u8, al: std.mem.Allocator) *Type {
+    var base = Type.newClass(name, al).box(al);
+    base.klass().initTParams(al);
+    base.klass().builtin = true;
+    return base;
   }
 
   pub fn subtype(self: *Self, al: std.mem.Allocator) *Type {
@@ -985,6 +999,11 @@ pub const Type = struct {
     return self.isLikeXTy(isVoidTy);
   }
 
+  /// a type that may be noreturn
+  pub inline fn isLikeNoreturn(self: *Self) bool {
+    return self.isLikeXTy(isNoreturnTy);
+  }
+
   inline fn isConcreteTypeEq(self: *Self, kind: TypeKind) bool {
     return switch (self.kind) {
       .Concrete => |conc| conc.tkind == kind,
@@ -1028,21 +1047,28 @@ pub const Type = struct {
     return self.isConcreteTypeEq(.TyAny);
   }
 
+  pub inline fn isNeverTy(self: *Self) bool {
+    return (
+      self.isVariable() and
+      self.variable().tokens.len() == 1 and
+      std.mem.eql(u8, self.variable().tokens.getLast().value, ks.NeverVar)
+    );
+  }
 
   pub fn isListTy(self: *Self) bool {
-    return self.isXClassTy("list");
+    return self.isXClassTy(ks.ListVar);
   }
 
   pub fn isMapTy(self: *Self) bool {
-    return self.isXClassTy("map");
+    return self.isXClassTy(ks.MapVar);
   }
 
   pub fn isTupleTy(self: *Self) bool {
-    return self.isXClassTy("tuple");
+    return self.isXClassTy(ks.TupleVar);
   }
 
   pub fn isErrorTy(self: *Self) bool {
-    return self.isXClassTy("err");
+    return self.isXClassTy(ks.ErrVar);
   }
 
   /// extract the appropriate typeinfo of this type
@@ -1341,39 +1367,7 @@ pub const Type = struct {
     // this.     &.      other.     ctx
     if (this == other) return true;
     switch (this.kind) {
-      .Concrete => |*conc| {
-        return conc.isRelatedTo(other, ctx, A);
-      },
-      .Constant => |*cons| {
-        return cons.isRelatedTo(other, ctx, A);
-      },
-      .Union => |*uni| {
-        return uni.isRelatedTo(other, ctx, A);
-      },
-      .Generic => |*gen| {
-        return gen.isRelatedTo(other, ctx, A);
-      },
-      .Class => |*cls| {
-        return cls.isRelatedTo(other, ctx, A);
-      },
-      .Variable => |*vr| {
-        return vr.isRelatedTo(other, ctx, A);
-      },
-      .Function => |*fun| {
-        return fun.isRelatedTo(other, ctx, A);
-      },
-      .Method => |*mth| {
-        return mth.isRelatedTo(other, ctx, A);
-      },
-      .Instance => |*inst| {
-        return inst.isRelatedTo(other, ctx, A);
-      },
-      .Top => |*tp| {
-        return tp.isRelatedTo(other, ctx, A);
-      },
-      .Recursive => |*rec| {
-        return rec.isRelatedTo(other, ctx, A);
-      },
+      inline else => |*tyk| return tyk.isRelatedTo(other, ctx, A),
     }
     unreachable;
   }
@@ -1515,7 +1509,8 @@ pub const Type = struct {
   fn writeName(allocator: std.mem.Allocator, tokens: *ds.ArrayList(Token)) ![]const u8 {
     var writer = @constCast(&ds.ArrayList(u8).init(allocator)).writer();
     for (tokens.items(), 0..) |tok, i| {
-      _ = try writer.write(tok.value);
+      // variables starting with $ are generated and internal, so use this symbol instead
+      _ = if (tok.value[0] != '$') try writer.write(tok.value) else try writer.write(ks.GeneratedTypeVar);
       if (i != tokens.len() - 1) {
         // compound names are separated via '.'
         _ = try writer.write(".");
@@ -1721,7 +1716,7 @@ pub const Type = struct {
   }
 
   /// combine t1 and t2 into a union type if possible
-  pub fn unionify(t1: *Type, t2: *Type, allocator: std.mem.Allocator) *Type {
+  inline fn _unionify(t1: *Type, t2: *Type, allocator: std.mem.Allocator) *Type {
     if (t1.typeid() == t2.typeid()) {
       return t1;
     }
@@ -1756,6 +1751,20 @@ pub const Type = struct {
       tmp.union_().addSlice(([_]*Type{t1, t2})[0..]);
       return tmp;
     }
+  }
+
+  /// combine t1 and t2 into a union type if possible
+  pub fn unionify(t1: *Type, t2: *Type, allocator: std.mem.Allocator) *Type {
+    // The idea is that, if we're unionifying a 'never' type and a non-never type
+    // then this must be from a type negation. Essentially, it means the never type 
+    // does not hold if we still have the possibility of a non-never type.
+    if (t1.isNeverTy()) {
+      return t2;
+    }
+    if (t2.isNeverTy()) {
+      return t1;
+    }
+    return _unionify(t1, t2, allocator);
   }
 
   /// find the intersection of t1 and t2
@@ -1857,13 +1866,9 @@ pub const Type = struct {
         }
       },
       .Class => |*cls1| {
-        if (t2.isClass()) {
-          // TODO: class relations
-          if (std.mem.eql(u8, cls1.name, t2.klass().name)) {
-            return t1;
-          }
-        } else if (t2.isClassFromTop()) {
-          if (std.mem.eql(u8, cls1.name, t2.classfromtop().name)) {
+        if (t2.isClass() or t2.isClassFromTop()) {
+          var ty = if (t2.isClass()) t2 else t2.top().child;
+          if (cls1.isRelatedTo(ty, .RCIs, al)) {
             return t1;
           }
         }

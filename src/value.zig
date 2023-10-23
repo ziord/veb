@@ -748,17 +748,17 @@ pub fn objectToString(val: Value, vm: *VM) Value {
     .objstring => return val,
     .objvalmap => {
       var buff: [20]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "@map[{}]", .{asMap(val).meta.len}) catch "";
+      var fmt = std.fmt.bufPrint(&buff, "@map[{}]", .{asMap(val).meta.len}) catch unreachable;
       return createStringV(vm, &vm.strings, fmt, false);
     },
     .objlist => {
       var buff: [20]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "@list[{}]", .{asList(val).len}) catch "";
+      var fmt = std.fmt.bufPrint(&buff, "@list[{}]", .{asList(val).len}) catch unreachable;
       return createStringV(vm, &vm.strings, fmt, false);
     },
     .objtuple => {
       var buff: [20]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "@tuple[{}]", .{asTuple(val).len}) catch "";
+      var fmt = std.fmt.bufPrint(&buff, "@tuple[{}]", .{asTuple(val).len}) catch unreachable;
       return createStringV(vm, &vm.strings, fmt, false);
     },
     .objerror => {
@@ -767,12 +767,12 @@ pub fn objectToString(val: Value, vm: *VM) Value {
     },
     .objclosure => {
       var buff: [30]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "@fn[{s}]", .{asFn(val).getName()}) catch "fn()";
+      var fmt = std.fmt.bufPrint(&buff, "@fn[{s}]", .{asFn(val).getName()}) catch unreachable;
       return createStringV(vm, &vm.strings, fmt, false);
     },
     .objnativefn => {
       var buff: [30]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "@builtin_fn[{s}]", .{asNativeFn(val).getName()}) catch "builtin_fn()";
+      var fmt = std.fmt.bufPrint(&buff, "@builtin_fn[{s}]", .{asNativeFn(val).getName()}) catch unreachable;
       return createStringV(vm, &vm.strings, fmt, false);
     },
     .objfiber => {
@@ -780,7 +780,7 @@ pub fn objectToString(val: Value, vm: *VM) Value {
     },
     .objinstance => {
       var buff: [100]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "{{{s} instance}}", .{asObj(val).cls.?.name.string()}) catch "instance";
+      var fmt = std.fmt.bufPrint(&buff, "{{{s} instance}}", .{asObj(val).cls.?.name.string()}) catch unreachable;
       return createStringV(vm, &vm.strings, fmt, false);
     },
     .objmethod => {
@@ -788,9 +788,9 @@ pub fn objectToString(val: Value, vm: *VM) Value {
       var mtd = asMethod(val);
       var fmt: []const u8 = undefined;
       if (mtd.isBoundUserMethod()) {
-        fmt = std.fmt.bufPrint(&buff, "{{bound-method {s}}}", .{mtd.as.user.closure.fun.getName()}) catch "bound-method";
+        fmt = std.fmt.bufPrint(&buff, "{{bound-method {s}}}", .{mtd.as.user.closure.fun.getName()}) catch unreachable;
       } else {
-        fmt = std.fmt.bufPrint(&buff, "{{bound-method {s}}}", .{mtd.as.native.fun.getName()}) catch "bound-method";
+        fmt = std.fmt.bufPrint(&buff, "{{bound-method {s}}}", .{mtd.as.native.fun.getName()}) catch unreachable;
       }
       return createStringV(vm, &vm.strings, fmt, false);
     },
@@ -813,7 +813,7 @@ pub fn valueToString(val: Value, vm: *VM) Value {
     } else {
       // TODO
       var buff: [25]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "{d}", .{num}) catch "";
+      var fmt = std.fmt.bufPrint(&buff, "{d}", .{num}) catch unreachable;
       return createStringV(vm, &vm.strings, fmt, false);
     }
   } else if (isBool(val)) {

@@ -23,6 +23,12 @@ pub const Analysis = struct {
     var start = self.diag.count();
     for (node.prev_next.items()) |itm| {
       if (itm.next and !itm.flo.isExitNode()) {
+        // last item may be an exit Scope node, which doesn't count as dead code
+        if (itm.flo.bb.len() == 1) {
+          if (itm.flo.bb.getLast()) |lst| {
+            if (lst.isExitScope()) continue;
+          }
+        }
         self.diag.addDiagnostics(
           .DiagError,
           itm.flo.bb.nodes.itemAt(0).getToken(),

@@ -20,8 +20,10 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"def", .TkDef},
   .{"end", .TkEnd},
   .{"not", .TkNot},
+  .{"case", .TkCase},
   .{"true", .TkTrue},
   .{"false", .TkFalse},
+  .{"match", .TkMatch},
   .{"num", .TkNum},
   .{"map", .TkMap},
   .{"str", .TkStr},
@@ -37,6 +39,7 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"break", .TkBreak},
   .{"void", .TkVoid},
   .{"self", .TkSelf},
+  .{"with", .TkWith},
   .{"class", .TkClass},
   .{"orelse", .TkOrElse},
   .{"continue", .TkContinue},
@@ -70,6 +73,7 @@ pub const TokenType = enum (u8) {
   TkQMark,          // ?
   TkNewline,        // \n
   TkEqGrt,          // =>
+  Tk2Dot,         // ..
   TkLeq,            // <=
   TkGeq,            // >=
   Tk2Eq,            // ==
@@ -101,12 +105,15 @@ pub const TokenType = enum (u8) {
   TkType,           // type
   TkElse,           // else
   TkElif,           // elif
+  TkCase,           // case
   TkTrue,           // true
   TkVoid,           // void
   TkSelf,           // self
+  TkWith,           // with
   TkClass,          // class
   TkBreak,          // break
   TkFalse,          // false
+  TkMatch,          // match
   TkTuple,          // tuple
   TkWhile,          // while
   TkOrElse,         // orelse
@@ -194,6 +201,7 @@ pub const TokenType = enum (u8) {
       .TkQMark => "?",
       .TkNewline => "<newline>",
       .TkEqGrt => "=>",
+      .Tk2Dot => "..",
       .TkLeq => "<=",
       .TkGeq => ">=",
       .Tk2Eq => "==",
@@ -225,12 +233,15 @@ pub const TokenType = enum (u8) {
       .TkType => "type",
       .TkElse => "else",
       .TkElif => "elif",
+      .TkCase => "case",
       .TkTrue => "true",
       .TkVoid => "void",
       .TkSelf => "self",
+      .TkWith => "with",
       .TkClass => "class",
       .TkBreak => "break",
       .TkFalse => "false",
+      .TkMatch => "match",
       .TkTuple => "tuple",
       .TkWhile => "while",
       .TkOrElse => "orelse",
@@ -410,9 +421,17 @@ pub const Token = struct {
     };
   }
 
-  pub fn tokenFrom(token: *const Token) Token {
+  pub fn from(token: *const Token) Token {
     var new: Token = undefined;
     new = token.*;
+    return new;
+  }
+
+  pub fn fromWithValue(token: *const Token, val: []const u8, ty: TokenType) Token {
+    var new: Token = undefined;
+    new = token.*;
+    new.value = val;
+    new.ty = ty;
     return new;
   }
 
@@ -466,6 +485,10 @@ pub const Lexer = struct {
 
   inline fn peek(self: *Self) u8 {
     return if (self.atEnd()) 0 else self.src[self.current];
+  }
+
+  inline fn peekN(self: *Self, n: usize) u8 {
+    return if (self.current + n >= self.src.len) 0 else self.src[self.current + n];
   }
 
   inline fn isAlpha(self: *Self, char: u8) bool {
@@ -625,6 +648,9 @@ pub const Lexer = struct {
       }
       // "." dec_int ([eE] [-+]? dec_int)?
       if (self.peek() == '.') {
+        if (self.peekN(1) == '.') {
+          return self.newToken(.TkNumber);
+        }
         // "." dec_int
         self.adv(); // skip '.'
         if (std.ascii.isDigit(self.peek())) {
@@ -771,10 +797,10 @@ pub const Lexer = struct {
       '^' => self.newToken(.TkCaret),
       '|' => self.newToken(.TkPipe),
       '~' => self.newToken(.TkTilde),
-      '.' => self.newToken(.TkDot),
       '?' => self.newToken(.TkQMark),
       '\n' => self.newToken(.TkNewline),
       '"', '\'' => self.lexStr(ch),
+      '.' => self.newToken(if (self.match('.')) .Tk2Dot else .TkDot),
       '!' => self.newToken(if (self.match('=')) .TkNeq else .TkExMark),
       '=' => self.newToken(if (self.match('=')) .Tk2Eq else if (self.match('>')) .TkEqGrt else .TkEqual),
       '<' => self.newToken(if (self.match('=')) .TkLeq else if (self.match('<')) .Tk2Lthan else .TkLthan),

@@ -7,9 +7,11 @@ const analysis = @import("analysis.zig");
 const flow = @import("flow.zig");
 const ds = @import("ds.zig");
 const parse = @import("parse.zig");
+const ptn = @import("pattern.zig");
 const prelude = @import("prelude.zig");
 const VebAllocator = @import("allocator.zig");
-const NodeList = ast.AstNodeList;
+const ks = @import("constants.zig");
+const NodeList = ast.AstList;
 const TypeHashMap = std.StringHashMap(*Type);
 const FlowNode = flow.FlowNode;
 const FlowList = flow.FlowList;
@@ -24,12 +26,14 @@ const RelationContext = types.RelationContext;
 const TypeKind = link.TypeKind;
 const TypeInfo = link.TypeInfo;
 const Union = link.Union;
-pub const Class = types.Class;
-const TContext = link.TContext;
 const Node = link.Node;
+const TContext = link.TContext;
 const TypeLinker = link.TypeLinker;
 const TypeHashSet = types.TypeHashSet;
+pub const Class = types.Class;
 pub const TypeList = types.TypeList;
+const Pattern = ptn.Pattern;
+const MatchCompiler = ptn.MatchCompiler;
 const Diagnostic = diagnostics.Diagnostic;
 const Analysis = analysis.Analysis;
 
@@ -129,7 +133,7 @@ const TypeEnv = struct {
 
   /// combines the narrowed types in self with other into a union when possible
   pub fn or_(self: *@This(), other: *@This()) void {
-    var allocator = self.global.allocator();
+    const allocator = self.global.allocator();
     var itr = self.narrowed.iterator();
     while (itr.next()) |entry| {
       var ident = entry.key_ptr.*;
@@ -149,7 +153,7 @@ const TypeEnv = struct {
 
   /// computes the intersection of the narrowed types in self with other
   pub fn and_(self: *@This(), other: *@This()) void {
-    var allocator = self.global.allocator();
+    const allocator = self.global.allocator();
     var itr = self.narrowed.iterator();
     while (itr.next()) |entry| {
       var ident = entry.key_ptr.*;
@@ -172,12 +176,12 @@ const TypeEnv = struct {
   /// transforms types by negation - negates the narrowed types using the global types
   pub fn not_(self: *@This(), name: []const u8, tc: *TypeChecker) !bool {
     _ = tc;
-    var allocator = self.global.allocator();
+    const allocator = self.global.allocator();
     if (self.narrowed.get(name)) |t2| {
       var t1 = self.global.lookup(name).?;
       var neg = blk: {
         break :blk t1.negate(t2, allocator) catch {
-          std.log.debug("negate with t1 exactly equal to t2 results in the 'never' type\n", .{});
+          std.log.debug("negate with t1 exactly equal to t2 results in the 'never' type", .{});
           break :blk (
             if (t1.typeidEql(t2)) Type.newNever(allocator)
             else t1
@@ -195,16 +199,15 @@ const TypeEnv = struct {
 };
 
 pub const TypeChecker = struct {
-  ctx: TContext,
   cfg: CFG = undefined,
-  diag: *Diagnostic,
   linker: TypeLinker = undefined,
-  current_fn: ?*FlowMeta = null,
-  void_ty: *Type,
-  str_ty: *Type,
-  _prelude: *Node = undefined,
+  namegen: util.NameGen,
   builder: CFGBuilder,
   analyzer: Analysis,
+  pc: PatternChecker,
+  diag: *Diagnostic,
+  /// type context
+  ctx: TContext,
   /// generic function/class info
   generics: ds.ArrayHashMap(*Node, *ds.ArrayList(GenInfo)),
   /// function nodes with cyclic references
@@ -213,7 +216,29 @@ pub const TypeChecker = struct {
   resolving: TypeList,
   /// builtin classes/types
   builtins: TypeList,
+  /// builtin prelude
+  _prelude: *Node = undefined,
+  /// type environment for narrowing
+  tenv: ?*TypeEnv = null,
+  /// current function being type checked
+  current_fn: ?*FlowMeta = null,
+  /// current match node being type checked
+  match_node: ?*ast.MatchNode = null,
+  /// cached types
+  void_ty: *Type,
+  str_ty: *Type,
 
+  const Self = @This();
+  const ConsList = ds.ArrayList(*ptn.Constructor);
+  const MAX_STRING_SYNTH_LEN = 0xc;
+  const BuiltinsSrc = prelude.BuiltinsSrc;
+  const TypeCheckError = (
+    MatchCompiler.MatchError ||
+    TypeLinker.TypeLinkError ||
+    error{SynthFailure, SynthTooLarge, DeadCode, CheckError}
+  );
+
+  /// cached 'unit' types
   const UnitTypes = struct {
     const num = types.Concrete.init(.TyNumber);
     const str = types.Concrete.init(.TyString);
@@ -229,6 +254,8 @@ pub const TypeChecker = struct {
     var tyVoid: Type = Type.newConcrete(.TyVoid);
     var TyTy: Type = Type.init(.{.Top = tyty});
   };
+
+  /// generic information
   pub const GenInfo = struct {
     /// monomorphized generic class/function node
     instance: *Node,
@@ -237,19 +264,522 @@ pub const TypeChecker = struct {
     /// actual type
     typ: *Type,
   };
-  const Self = @This();
-  const MAX_STRING_SYNTH_LEN = 0xc;
-  const TypeCheckError = error{CheckError, TypeLinkError, SynthFailure, SynthTooLarge, DeadCode};
 
-  pub const SelfVar = "self";
-  pub const InitVar = "init";
-  pub const StrVar = "str";
-  const BuiltinsSrc = prelude.BuiltinsSrc;
+  /// type checker for match nodes
+  const PatternChecker = struct {
+    tc: *TypeChecker,
+    mc: MatchCompiler,
+    /// list of conditions for which we may infer inexhaustiveness
+    tests: NodeList,
 
-  pub fn init(allocator: std.mem.Allocator, diag: *Diagnostic) @This() {
+    fn init(tc: *TypeChecker) @This() {
+      return @This(){
+        .tc = tc,
+        .mc = MatchCompiler.init(tc.diag, tc, tc.ctx.allocator()),
+        .tests = NodeList.init(tc.ctx.allocator()),
+      };
+    }
+
+    inline fn compressTypes(self: *@This(), typeset: *TypeHashSet) !*Type {
+      _ = self;
+      return if (typeset.count() < 1) error.CheckError else Type.compressTypes(typeset, null);
+    }
+
+    /// generate a new expandable Variable type
+    inline fn newVariableType(self: *@This(), token: Token, al: std.mem.Allocator) *Type {
+      var vr = Type.newVariable(al).box(al);
+      var name = self.tc.namegen.generate("$ptn", .{});
+      vr.variable().append(Token.fromWithValue(&token, name, .TkIdent));
+      return vr;
+    }
+
+    fn getPatternType(self: *@This(), pat: *Pattern) ?*Type {
+      return switch (pat.variant.*) {
+        .cons => |*cons| cons.typ,
+        .vari => |*vari| self.tc.findType(vari.ident.AstVar.token.value),
+        .wildc => |*wildc| wildc.typ,
+        else => unreachable,
+      };
+    }
+
+    /// infer the type of this pattern
+    fn inferPattern(self: *@This(), pat: *Pattern, conses: *ConsList, expand: bool, al: std.mem.Allocator) !*Type {
+      switch (pat.variant.*) {
+        .cons => |*cons| {
+          switch (cons.tag) {
+            .List, .Tuple => {
+              var ty = Type.newBuiltinGenericClass(cons.name, al);
+              if (cons.args.isNotEmpty()) {
+                // infer type of elements stored in the list
+                var typeset = TypeHashSet.init(al);
+                typeset.ensureTotalCapacity(cons.args.len());
+                for (cons.args.items()) |arg| {
+                  var typ = try self.inferPattern(arg, conses, expand, al);
+                  typeset.set(typ.typeid(), typ);
+                }
+                if (expand) {
+                  // add an expansion Variable type
+                  var vr = self.newVariableType(pat.token, al);
+                  typeset.set(vr.typeid(), vr);
+                }
+                ty.klass().appendTParam(try self.compressTypes(&typeset));
+              } else {
+                ty.klass().appendTParam(self.newVariableType(pat.token, al));
+                ty.klass().empty = true;
+              }
+              cons.typ = ty;
+              conses.append(cons);
+              return ty;
+            },
+            .Map => {
+              // {lit_ptn: ptn} -> Map(List(Tuple(Literal(...), Pattern)))
+              var ty = Type.newBuiltinGenericClass(ks.MapVar, al);
+              // save current id to restore namegen to, when this constructor has no args
+              const id_snapshot = self.tc.namegen.getCurrentId();
+              _ = try self.inferPattern(cons.args.itemAt(0), conses, false, al);
+              var list = cons.args.itemAt(0).variant.cons;
+              if (list.args.isNotEmpty()) {
+                // unwrap
+                var typeset_k = TypeHashSet.init(al);
+                var typeset_v = TypeHashSet.init(al);
+                for (list.args.items()) |arg| {
+                  if (arg.isConstructor()) {
+                    var tuple = arg.variant.cons;
+                    const k = self.getPatternType(tuple.args.itemAt(0)).?;
+                    const v = self.getPatternType(tuple.args.itemAt(1)).?;
+                    typeset_k.set(k.typeid(), k);
+                    typeset_v.set(v.typeid(), v);
+                  } else {
+                    // wildcard
+                    var wc = arg.variant.wildc;
+                    _ = wc;
+                  }
+                }
+                if (typeset_k.isNotEmpty()) {
+                  ty.klass().appendTParam(try self.compressTypes(&typeset_k));
+                  ty.klass().appendTParam(try self.compressTypes(&typeset_v));
+                }
+              } else {
+                // reset namegen to this id snapshot. This effectively allows us to just generate a single
+                // variable with a name that matches whatever variable is generated in inferPattern() called above
+                self.tc.namegen.resetTo(id_snapshot);
+                ty.klass().empty = true;
+                ty.klass().appendTParamSlice(&[_]*Type{
+                  self.newVariableType(pat.token, al), self.newVariableType(pat.token, al)
+                });
+              }
+              cons.typ = ty;
+              conses.append(cons);
+              return ty;
+            },
+            .Err => {
+              var ty = Type.newBuiltinGenericClass(ks.ErrVar, al);
+              std.debug.assert(cons.args.len() == 1);
+              ty.klass().appendTParam(try self.inferPattern(cons.args.itemAt(0), conses, expand, al));
+              cons.typ = ty;
+              conses.append(cons);
+              return ty;
+            },
+            .Literal => {
+              var ty = try self.tc.infer(cons.node.?);
+              cons.typ = ty;
+              return ty;
+            },
+            .Or => {
+              // Or is a synthetic constructor
+              var typeset = TypeHashSet.init(al);
+              typeset.ensureTotalCapacity(cons.args.len());
+              for (cons.args.items()) |arg| {
+                var typ = try self.inferPattern(arg, conses, expand, al);
+                typeset.set(typ.typeid(), typ);
+              }
+              return try self.compressTypes(&typeset);
+            },
+            .Other => {
+              // Other represents a user defined constructor
+              var typ = try self.tc.lookupName(&cons.node.?.AstVar, true);
+              var ty = Type.newClass(cons.name, al).box(al);
+              const token = cons.node.?.getToken();
+              if (cons.targs) |targs| {
+                ty.klass().initTParams(al);
+                for (targs.items()) |targ| {
+                  // error if bad type
+                  _ = try self.tc.infer(targ);
+                  ty.klass().appendTParam(targ.getType().?);
+                }
+              }
+              if (typ.isClsGeneric() and !ty.isClsGeneric()) {
+                return self.tc.error_(
+                  true, token, "generic type must be used with type parameters", .{}
+                );
+              } else if (ty.isClsGeneric() and !typ.isClsGeneric()) {
+                return self.tc.error_(
+                  true, token, "non-generic type used with type parameters", .{}
+                );
+              }
+              try self.tc.resolveType(ty, token);
+              const tyname = ty.typename(al);
+              const info = if (cons.rested) " or more" else "";
+              const len = cons.args.len();
+              const cls = ty.klass();
+              if (len > cls.fields.len()) {
+                return self.tc.error_(
+                  true, token, "type '{s}' has {} field(s), but pattern test assumes {}{s}", 
+                  .{tyname, cls.fields.len(), len, info}
+                );
+              }
+              if (cons.rested) {
+                const wc_token = Token.fromWithValue(&token, "_", .TkIdent);
+                var fields_left = ty.klass().fields.len() - len;
+                while (fields_left > 0): (fields_left -= 1) {
+                  cons.args.append(
+                    Pattern.init(ptn.Wildcard.init(wc_token, true).toVariant(al), token, .{}).box(al)
+                  );
+                }
+              }
+              if (cons.args.len() != cls.fields.len()) {
+                return self.tc.error_(
+                  true, token, "type '{s}' has {} field(s), but pattern test assumes {}{s}", 
+                  .{tyname, cls.fields.len(), len, info}
+                );
+              }
+              // try to sort the patterns
+              for (cls.fields.items(), 0..) |field, i| {
+                for (cons.args.items(), 0..) |arg, j| {
+                  if (arg.alat.hasField()) {
+                    if (std.mem.eql(u8, field.AstVarDecl.ident.token.value, arg.alat.field.?.AstVar.token.value)) {
+                      cons.args.items()[j] = cons.args.items()[i];
+                      cons.args.items()[i] = arg;
+                    }
+                  }
+                }
+              }
+              for (cons.args.items(), cls.fields.items()) |arg, field| {
+                var pty = try self.inferPattern(arg, conses, false, al);
+                var fty = try self.tc.inferVarDecl(&field.AstVarDecl);
+                _ = self.resolvePatternType(token, fty, pty) catch |e| {
+                  self.tc.softError(
+                    arg.token,
+                    "illegal argument pattern type. Expected type '{s}'",
+                    .{self.tc.getTypename(fty)}
+                  );
+                  return e;
+                };
+              }
+              cons.typ = ty;
+              return ty;
+            },
+          }
+        },
+        .vari => |*vari| {
+          var ty = Type.newVariable(al).box(al);
+          ty.variable().append(vari.ident.AstVar.token);
+          self.tc.ctx.typScope.insert(vari.ident.AstVar.token.value, ty);
+          return ty;
+        },
+        .wildc => |*wildc| {
+          const ty = self.newVariableType(wildc.token, al);
+          wildc.typ = ty;
+          return ty;
+        },
+        else => {},
+      }
+      unreachable;
+    }
+
+    inline fn copyType(self: *@This(), ty: *Type) *Type {
+      var nty = self.tc.ctx.copyType(ty);
+      nty.tid = 0;
+      return nty;
+    }
+
+    /// resolve type t2 using t1, where t2 is the pattern type and t1 is the core type
+    /// may return null if t1 and t2 are unrelated.
+    fn subPatternType(self: *@This(), token: Token, t1: *Type, t2: *Type) !?*Type {
+      if (t2.isVariable()) {
+        var typ = self.copyType(t1);
+        self.tc.insertType(t2, typ);
+        return typ;
+      }
+      if (t2.isUnion()) {
+        var typeset = TypeHashSet.init(self.tc.ctx.allocator());
+        for (t2.union_().variants.values()) |pty| {
+          if (try self.subPatternType(token, t1, self.copyType(pty))) |typ| {
+            typeset.set(typ.typeid(), typ);
+          }
+        }
+        return try self.compressTypes(&typeset);
+      }
+      switch (t1.kind) {
+        .Class => |*cls| {
+          if (t2.isClass()) {
+            // A{str} , A{str | b} -> builtin
+            // A{str} , A{str} -> non-builtin
+            if (std.mem.eql(u8, cls.name, t2.klass().name)) {
+              var cls2 = t2.klass();
+              if (cls.tparams) |tparams1| {
+                if (cls2.tparams) |tparams2| {
+                  if (cls.tparamsLen() != cls2.tparamsLen()) {
+                    return null;
+                  }
+                  for (tparams2.items(), tparams1.items(), 0..) |tp2, tp1, i| {
+                    if (try self.subPatternType(token, tp1, self.copyType(tp2))) |typ| {
+                      tparams2.items()[i] = typ;
+                    } else {
+                      return error.CheckError;
+                    }
+                  }
+                }
+              } else if (cls2.tparams != null) {
+                return error.CheckError;
+              }
+              return t2; 
+            }
+          }
+        },
+        .Concrete => |*cn| {
+          if (cn.isRelatedTo(t2, .RCAny, self.tc.ctx.allocator())) {
+            return t2;
+          }
+        },
+        .Constant => |*cn| {
+          if (cn.isRelatedTo(t2, .RCAny, self.tc.ctx.allocator())) {
+            return t2;
+          }
+        },
+        .Union => |*uni| {
+          var typeset = TypeHashSet.init(self.tc.ctx.allocator());
+          for (uni.variants.values()) |ty| {
+            if (try self.subPatternType(token, ty, self.copyType(t2))) |typ| {
+              typeset.set(typ.typeid(), typ);
+            }
+          }
+          return try self.compressTypes(&typeset);
+        },
+        .Instance => |*ins| {
+          return self.subPatternType(token, ins.cls, t2);
+        },
+        .Top => |*top| {
+          return self.subPatternType(token, top.child, t2);
+        },
+        else => {
+          return self.tc.error_(true, token, "cannot match on type '{s}'", .{self.tc.getTypename(t1)});
+        }
+      }
+      return null;
+    }
+
+    /// resolve a pattern's type, given the type of the full expression being matched on 
+    fn resolvePatternType(self: *@This(), token: Token, expr_ty: *Type, pat_ty: *Type) !*Type {
+      if (expr_ty.isUnion()) {
+        var typeset = TypeHashSet.init(self.tc.ctx.allocator());
+        for (expr_ty.union_().variants.values()) |ty| {
+          if (try self.subPatternType(token, ty, self.copyType(pat_ty))) |typ| {
+            typeset.set(typ.typeid(), typ);
+          }
+        }
+        return try self.compressTypes(&typeset);
+      }
+      return (
+        try self.subPatternType(token, expr_ty, self.copyType(pat_ty)) orelse 
+        error.CheckError
+      );
+    }
+
+    /// resolve the type of each constructor in `conses` filling up variable types present
+    fn resolveMissingTypes(self: *@This(), token: Token, conses: *ConsList, full_ty: *Type) !void {
+      _ = full_ty;
+      for (conses.items()) |cons| {
+        cons.typ = try self.tc.linker.resolve(cons.typ.?, token);
+      }
+      conses.clearRetainingCapacity();
+    }
+
+    /// recursively find the `is` test expression. Entry node is a ConditionNode.
+    fn getTestFromCondition(self: *@This(), tst: *Node) *Node {
+      if (tst.isVariable()) {
+        return tst;
+      }
+      if (tst.isCondition()) {
+        return self.getTestFromCondition(tst.AstCondition.cond);
+      }
+      if (tst.isBinary()) {
+        const bin = &tst.AstBinary;
+        if (bin.op.optype == .OpIs) {
+          return tst;
+        }
+        var node = self.getTestFromCondition(bin.left);
+        if (node.isVariable()) {
+          return tst;
+        }
+        return node;
+      }
+      unreachable;
+    }
+
+    /// check if a boolean pattern match is exhaustive by walking up the tests 'stack'
+    fn isBoolExhaustive(self: *@This()) bool {
+      // if we are able to gather a `true | false` type along the tests stack,
+      // then the boolean match must be exhaustive.
+      const al = self.tc.ctx.allocator();
+      var uni = Type.newUnion(al);
+      var tty = Type.newConstant(.TyBool, ks.TrueVar);
+      var fty = Type.newConstant(.TyBool, ks.FalseVar);
+      var j = self.tests.len();
+      while (j > 0): (j -= 1) {
+        const nd = self.tests.itemAt(j - 1).AstBinary.right;
+        const typ = if (nd.isBool()) nd.AstBool.token.value else break;
+        if (std.mem.eql(u8, typ, ks.TrueVar)) {
+          uni.union_().set(&tty);
+        } else if (std.mem.eql(u8, typ, ks.FalseVar)) {
+          uni.union_().set(&fty);
+        } else {
+          break;
+        }
+      }
+      return (uni.union_().variants.count() == 2);
+    }
+
+    fn inferMatch(self: *@This(), node: *ast.MatchNode) !*Type {
+      const curr_mn = self.tc.match_node;
+      defer self.tc.match_node = curr_mn;
+      const curr_tests = self.tests;
+      defer self.tests = curr_tests;
+      self.tc.match_node = node;
+      self.tests = NodeList.init(self.tc.ctx.allocator());
+      if (node.decl) |decl| {
+        _ = try self.tc.infer(decl);
+      }
+      var m_expr_ty: *Type = try self.tc.infer(node.expr);
+      var expr_ty: *Type = m_expr_ty;
+      if (m_expr_ty.isInstance()) {
+        expr_ty = m_expr_ty.instance().cls;
+      }
+      const al = self.tc.ctx.allocator();
+      var conses = ConsList.init(al);
+      for (node.cases.items()) |case| {
+        // use a new scope for resolving each pattern, so that each variable type
+        // doesn't conflict with existing types in ctx.
+        self.tc.ctx.enterScope();
+        var expand = case.pattern.isConstructor() and case.pattern.variant.cons.tag != .Map;
+        var ty = try self.inferPattern(case.pattern, &conses, expand, al);
+        std.log.debug("Type before resolution: {s}", .{self.tc.getTypename(ty)});
+        if (case.pattern.isConstructor()) {
+          ty = self.resolvePatternType(case.pattern.token, m_expr_ty, ty) catch ty;
+          std.log.debug("Type after resolution: {s}", .{self.tc.getTypename(ty)});
+          if (expr_ty.canBeAssigned(ty, .RCAny, self.tc.ctx.allocator())) |_| {
+            try self.resolveMissingTypes(case.pattern.token, &conses, ty);
+            case.pattern.variant.cons.typ = ty;
+          } else {
+            self.tc.softError(
+              case.pattern.token, "expected type '{s}' but found '{s}'",
+              .{self.tc.getTypename(m_expr_ty), self.tc.getTypename(ty)},
+            );
+          }
+        }
+        // pop scope off
+        self.tc.ctx.leaveScope();
+      }
+      if (self.tc.diag.hasErrors()) return error.CheckError;
+      var tree = try self.mc.compile(node);
+      var lnode = try self.mc.lowerDecisionTree(tree, node.token);
+      if (node.decl) |decl| {
+        lnode.block().nodes.prepend(decl);
+      }
+      std.log.debug("tree:\n{s}\n", .{lnode.render(0, al) catch ""});
+      const de = (
+        if (self.tc.current_fn) |curr| .{
+          curr.dead, curr.exit
+        } else .{
+          self.tc.cfg.program.dead, self.tc.cfg.program.exit
+        }
+      );
+      var builder = CFGBuilder.initWithDeadAndExit(self.tc.ctx.allocator(), de.@"0", de.@"1");
+      var flo = builder.buildBlock(&self.tc.cfg, lnode);
+      // TODO: type check the transformation
+      _ = try self.tc.flowInferEntry(flo.entry);
+      node.lnode = lnode;
+      // TODO: fix this for functions
+      // unify all types at exit
+      var uni = Union.init(self.tc.ctx.allocator());
+      var prev_flo_nodes = self.tc.getPrevFlowNodes(flo.exit);
+      for (prev_flo_nodes.items()) |flo_nd| {
+        // skip dead node, since it's most likely at exit
+        if (flo_nd.isDeadNode()) continue;
+        if (flo_nd.bb.getNonScopeLast()) |nd| {
+          if (nd.getType()) |ty| {
+           uni.set(ty);
+          } else {
+            uni.set(self.tc.void_ty);
+          }
+        }
+      }
+      return uni.toType().box(al);
+    }
+
+    fn checkMatch(self: *@This(), node: *ast.MatchNode, flo: FlowMeta, lowrd: *Node) !void {
+      _ = lowrd;
+      _ = flo;
+      _ = node;
+      _ = self;
+    }
+
+    fn flowInferMCondition(self: *@This(), flo_node: *FlowNode, ast_node: *Node) !void {
+      const tst = ast_node.AstMCondition.tst;
+      self.tests.append(self.getTestFromCondition(tst));
+      defer _ = self.tests.pop();
+      try self.tc.flowInferCondition(flo_node, tst);
+    }
+
+    fn inferFail(self: *@This(), node: *ast.FailNode) !*Type {
+      const nd = self.tests.getLast();
+      var allow_rested = false;
+      var ident: *ast.VarNode = undefined;
+      if (nd.isBinary()) {
+        allow_rested = nd.AstBinary.allow_rested;
+        ident = &nd.AstBinary.left.AstVar;
+      } else {
+        ident = &nd.AstVar;
+      }
+      var ty = try self.tc.lookupName(ident, false);
+      // check if there are possible remaining constructors:
+      if (ty.isBoolTy()) {
+        if (self.isBoolExhaustive()) {
+          return self.tc.void_ty;
+        }
+      }
+      if (!ty.isNeverTy() and !allow_rested) {
+        // it is possible that this Fail node is from an enclosing `rested` constructor, because the
+        // match compiler tries to produce an optimal decision tree without repeated constructor tests.
+        // Hence, we look up the test 'stack', if we find any test with an allow_rested property,
+        // then the test is exhaustive, but the match arms were (originally) ordered poorly
+        // Iterate from behind, because we're most likely to encounter a match quicker
+        var i = self.tests.len();
+        while (i > 0): (i -= 1) {
+          const tst = self.tests.itemAt(i - 1);
+          if (tst.isBinary() and tst.AstBinary.allow_rested) {
+            allow_rested = true;
+            break;
+          }
+        }
+        if (!allow_rested) {
+          // TODO: better reporting
+          return self.tc.error_(
+            true, node.token,
+            "inexhaustive pattern match.\n\tRemaining case type(s): '{s}'",
+            .{self.tc.getTypename(ty)}
+          );
+        }
+      }
+      return self.tc.void_ty;
+    }
+  };
+
+  pub fn init(allocator: std.mem.Allocator, diag: *Diagnostic) Self {
     var self = Self {
       .ctx = TContext.init(allocator),
       .diag = diag,
+      .namegen = util.NameGen.init(allocator),
       .generics = ds.ArrayHashMap(*Node, *ds.ArrayList(GenInfo)).init(allocator),
       .builder = CFGBuilder.init(allocator),
       .cycles = NodeList.init(allocator),
@@ -258,6 +788,7 @@ pub const TypeChecker = struct {
       .void_ty = Type.newVoid().box(allocator),
       .str_ty = undefined,
       .builtins = TypeList.init(allocator),
+      .pc = undefined,
     };
     self.linker = TypeLinker.init(&self.ctx, self.diag);
     return self;
@@ -271,7 +802,7 @@ pub const TypeChecker = struct {
     self.flowInferEntry(self.cfg.program.entry) catch unreachable;
     for (node.AstProgram.decls.items()) |itm| {
       if (itm.isFun()) {
-        itm.AstFun.body.AstBlock.checked = true;
+        itm.AstFun.body.block().checked = true;
         itm.AstFun.is_builtin = true;
       } else if (itm.isClass()) {
         itm.AstClass.is_builtin = true;
@@ -279,7 +810,7 @@ pub const TypeChecker = struct {
         for (itm.AstClass.methods.items()) |method| {
           method.AstFun.is_builtin = true;
         }
-        if (!std.mem.eql(u8, itm.AstClass.name.token.value, StrVar)) {
+        if (!std.mem.eql(u8, itm.AstClass.name.token.value, ks.StrVar)) {
           self.builtins.append(self.inferClassPartial(itm) catch unreachable);
         } else {
           var ty = try self.inferClassPartial(itm);
@@ -291,12 +822,12 @@ pub const TypeChecker = struct {
     self._prelude = node;
   }
 
-  fn error_(self: *Self, emit: bool, token: Token, comptime fmt: []const u8, args: anytype) TypeCheckError {
+  pub fn error_(self: *Self, emit: bool, token: Token, comptime fmt: []const u8, args: anytype) TypeCheckError {
     if (emit) self.diag.addDiagnostics(.DiagError, token, "TypeError: " ++ fmt, args);
     return error.CheckError;
   }
 
-  fn softError(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
+  pub fn softError(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
     self.diag.addDiagnostics(.DiagError, token, "TypeError: " ++ fmt, args);
   }
 
@@ -304,37 +835,44 @@ pub const TypeChecker = struct {
     if (emit) self.diag.addDiagnostics(.DiagWarn, token, "TypeWarning: " ++ fmt, args);
   }
 
-  fn genName(self: *Self, l1: usize, l2: usize) []const u8 {
-    var name = std.fmt.allocPrint(self.ctx.allocator(), "${}.{}", .{l1, l2}) catch "";
-    return name;
+  inline fn genName(al: std.mem.Allocator, l1: usize, l2: usize) []const u8 {
+    return std.fmt.allocPrint(al, "${}.{}", .{l1, l2}) catch @panic("could not gen name");
   }
 
-  fn createSynthName(self: *Self, name: ?[]const u8, is_builtin: bool, args: *TypeList, targs: ?*NodeList) []const u8 {
+  pub fn makeSynthName(al: std.mem.Allocator, name: ?[]const u8, is_builtin: bool, args: *TypeList, targs: ?*NodeList) []const u8 {
     _ = is_builtin;
     // FIXME: this is unhygienically inefficient.
-    var start = name orelse self.genName(
+    var start = name orelse genName(
+      al,
       if (targs) |ta| ta.len() else 0,
       args.len()
     );
-    var al = self.ctx.allocator();
     var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
     _ = writer.write(start) catch undefined;
+    var buf: [100]u8 = undefined;
     if (targs) |ta| {
       if (args.len() == 0) {
         for (ta.items()) |nd| {
           _ = writer.write(".") catch undefined;
-          _ = writer.write(nd.getType().?.typenameNoAlias(al)) catch undefined;
+          var id_str = std.fmt.bufPrint(&buf, "{}", .{nd.getType().?.typeid()}) catch unreachable;
+          _ = writer.write(id_str) catch undefined;
         }
       }
     }
     for (args.items()) |ty| {
       _ = writer.write(".") catch undefined;
-      _ = writer.write(ty.typenameNoAlias(al)) catch undefined;
+      var id_str = std.fmt.bufPrint(&buf, "{}", .{ty.typeid()}) catch unreachable;
+      _ = writer.write(id_str) catch undefined;
     }
     return writer.context.items;
   }
 
+  inline fn createSynthName(self: *Self, name: ?[]const u8, is_builtin: bool, args: *TypeList, targs: ?*NodeList) []const u8 {
+    return makeSynthName(self.ctx.allocator(), name, is_builtin, args, targs);
+  }
+
   fn createFunSynthName(self: *Self, fun: *ast.FunNode, args: *TypeList, targs: ?*NodeList) []const u8 {
+    if (fun.is_builtin) return fun.name.?.token.value;
     return self.createSynthName(if (fun.name) |nm| nm.token.value else null, fun.is_builtin, args, targs);
   }
 
@@ -354,11 +892,7 @@ pub const TypeChecker = struct {
     if (self.generics.get(origin)) |list| {
       list.append(data);
     } else {
-      var list = util.box(
-        ds.ArrayList(GenInfo),
-        ds.ArrayList(GenInfo).init(self.ctx.allocator()),
-        self.ctx.allocator()
-      );
+      var list = ds.ArrayList(GenInfo).init(self.ctx.allocator()).box();
       list.append(data);
       self.generics.set(origin, list);
     }
@@ -441,21 +975,15 @@ pub const TypeChecker = struct {
     return typ.typename(self.ctx.allocator());
   }
 
-  fn newAstNode(self: *Self) *Node {
-    return util.alloc(Node, self.ctx.allocator());
-  }
-
   fn newUnaryNode(self: *Self, expr: *Node, op: Token) *Node {
-    var node = self.newAstNode();
+    var node = Node.create(self.ctx.allocator());
     node.* = .{.AstUnary = ast.UnaryNode.init(expr, op)};
     return node;
   }
 
   fn newStringNode(self: *Self, val: []const u8, token: Token) Node {
     _ = self;
-    var tok = Token.tokenFrom(&token);
-    tok.value = val;
-    return .{.AstString = ast.LiteralNode.init(tok)};
+    return .{.AstString = ast.LiteralNode.init(Token.fromWithValue(&token, val, .TkString))};
   }
 
   /// copy env to varScope
@@ -481,7 +1009,7 @@ pub const TypeChecker = struct {
   //***********************************************************//
 
   fn _synth(self: *Self,  vr: *ast.VarNode, value: []const u8, env: *TypeEnv) TypeCheckError!*ast.VarNode {
-    var token = ast.Token.tokenFrom(&vr.token);
+    var token = ast.Token.from(&vr.token);
     token.value = std.fmt.allocPrint(
       self.ctx.allocator(), "{s}.{s}",
       .{vr.token.value, value}
@@ -791,6 +1319,7 @@ pub const TypeChecker = struct {
         var bin = node.*;
         bin.op.optype = .OpIs;
         bin.right = node.right.toTypeNode(self.ctx.allocator());
+        bin.allow_consts = true;
         break :b bin;
       };
       try self.narrowBinary(&bin, env, if (node.op.optype == .OpEqq) assume_true else !assume_true);
@@ -829,7 +1358,7 @@ pub const TypeChecker = struct {
       .AstMap,
       .AstNType => try self.narrowAtomic(node, env),
       else => |*d| {
-        std.log.debug("attempt to narrow node: {}\n", .{d});
+        std.log.debug("attempt to narrow node: {}", .{d});
       },
     };
   }
@@ -884,6 +1413,9 @@ pub const TypeChecker = struct {
     // As a branch point, types are narrowed along outgoing edges based 
     // on the condition expression.
     var env = TypeEnv.init(self.ctx.allocator(), null);
+    const curr_tenv = self.tenv;
+    self.tenv = &env;
+    defer self.tenv = curr_tenv;
     env.global.pushScope();
     self.narrow(ast_node.AstCondition.cond, &env, true) catch |e| return e;
     // TODO: rework token extraction for better error reporting
@@ -911,6 +1443,9 @@ pub const TypeChecker = struct {
       try self.flowInfer(nd, false);
     }
     flo_node.res = .Resolved;
+    if (self.match_node) |node| {
+      self.checkTestRedundancy(node, &env, &out_nodes);
+    }
     // when type checking conditions along the false path, check the first sequential node
     // after the nodes on the false path. If that node has only one incoming edge,
     // then don’t pop the type information gathered on the false path
@@ -944,6 +1479,7 @@ pub const TypeChecker = struct {
   inline fn resolveNode(self: *Self, flo_node: *FlowNode, ast_node: *Node) !void {
     switch (ast_node.*) {
       .AstCondition => try self.flowInferCondition(flo_node, ast_node),
+      .AstMCondition => try self.pc.flowInferMCondition(flo_node, ast_node),
       .AstEmpty => try self.flowInferMeta(flo_node, ast_node),
       .AstControl => {},
       .AstFun => |*fun| {
@@ -1004,20 +1540,20 @@ pub const TypeChecker = struct {
   //***********  inference  ***********************************//
   //***********************************************************//
   /// resolves a builtin class type
-  fn resolveBuiltinType(self: *Self, typ: *Type) TypeCheckError!void {
+  fn resolveBuiltinType(self: *Self, typ: *Type, token: Token) TypeCheckError!void {
     if (self.findBuiltinType(typ.klass().name)) |ty| {
       self.resolving.append(typ);
-      typ.* = (try self.synthInferClsType(typ, ty)).*;
+      typ.* = (try self.synthInferClsType(typ, ty, token)).*;
       typ.klass().setAsResolved();
       _ = self.resolving.pop();
     }
   }
 
-  fn resolveUserType(self: *Self, typ: *Type) TypeCheckError!void {
+  fn resolveUserType(self: *Self, typ: *Type, token: Token) TypeCheckError!void {
     if (self.findType(typ.klass().name)) |_ty| {
       self.resolving.append(typ);
       var ty = if (_ty.isTop()) _ty.top().child else _ty;
-      typ.* = (try self.synthInferClsType(typ, ty)).*;
+      typ.* = (try self.synthInferClsType(typ, ty, token)).*;
       if (typ.isClass()) {
         typ.klass().setAsResolved();
       } else {
@@ -1027,21 +1563,21 @@ pub const TypeChecker = struct {
     }
   }
 
-  fn resolveType(self: *Self, typ: *Type) TypeCheckError!void {
+  fn resolveType(self: *Self, typ: *Type, token: Token) TypeCheckError!void {
     if (typ.isClass()) {
       if (typ.klass().resolved) {
         return;
       } else if (self.resolving.contains(typ, Type.ptrEql)) {
         return;
       } else if (typ.klass().builtin) {
-        return try self.resolveBuiltinType(typ);
+        return try self.resolveBuiltinType(typ, token);
       } else {
-        return try self.resolveUserType(typ);
+        return try self.resolveUserType(typ, token);
       }
     }
   }
 
-  fn synthInferClsType(self: *Self, user_ty: *Type, core_ty: *Type) !*Type {
+  fn synthInferClsType(self: *Self, user_ty: *Type, core_ty: *Type, token: Token) !*Type {
     self.ctx.enterScope();
     defer self.ctx.leaveScope();
     var core_cls = core_ty.klass();
@@ -1050,10 +1586,17 @@ pub const TypeChecker = struct {
     // it means user_ty is already undergoing monomorphization from an earlier call
     var tparams: TypeList = undefined;
     if (core_cls.isGeneric()) {
+      if (!user_cls.isGeneric()) {
+        return self.error_(
+          true, token, "type '{s}' is generic but used without generic parameters", 
+          .{self.getTypename(user_ty)}
+        );
+      }
       if (!core_cls.getSlice()[0].isVariable()) {
         return user_ty;
       }
       tparams = user_cls.tparams.?.*;
+      // typelinker & parser ensures that user_cls' tparams and core_cls' tparams are equal in size
       for (core_cls.tparams.?.items(), tparams.items()) |tvar, ty| {
         self.insertType(tvar, ty);
       }
@@ -1108,12 +1651,10 @@ pub const TypeChecker = struct {
 
   inline fn inferCollection(self: *Self, node: *ast.ListNode, name: []const u8) !*Type {
     // create a new type
-    var al = self.ctx.allocator(); 
-    var base = Type.newClass(name, al).box(al);
-    base.klass().initTParams(al);
-    base.klass().builtin = true;
+    const al = self.ctx.allocator();
+    var base = Type.newBuiltinGenericClass(name, al);
     node.typ = base;
-    if (node.elems.len() == 0) {
+    if (node.elems.isEmpty()) {
       base.klass().appendTParam(&UnitTypes.tyAny);
       base.klass().empty = true;
       return base;
@@ -1130,21 +1671,18 @@ pub const TypeChecker = struct {
   }
 
   fn inferList(self: *Self, node: *ast.ListNode) !*Type {
-    return self.inferCollection(node, "list");
+    return self.inferCollection(node, ks.ListVar);
   }
 
   fn inferTuple(self: *Self, node: *ast.ListNode) !*Type {
-    return self.inferCollection(node, "tuple");
+    return self.inferCollection(node, ks.TupleVar);
   }
 
   fn inferMap(self: *Self, node: *ast.MapNode) !*Type {
     // create a new type
-    var al = self.ctx.allocator();
-    var base = Type.newClass("map", al).box(al);
-    base.klass().initTParams(al);
-    base.klass().builtin = true;
+    var base = Type.newBuiltinGenericClass(ks.MapVar, self.ctx.allocator());
     node.typ = base;
-    if (node.pairs.len() == 0) {
+    if (node.pairs.isEmpty()) {
       var any = &UnitTypes.tyAny;
       base.klass().appendTParamSlice(&[_]*Type{any, any});
       base.klass().empty = true;
@@ -1221,6 +1759,7 @@ pub const TypeChecker = struct {
   fn inferIs(self: *Self, node: *ast.BinaryNode) !*Type {
     var lhsTy = try self.infer(node.left);
     var rhsTy = try self.infer(node.right);
+    var ty = node.right.getType().?;
     // lhs must not be type Type, and rhs must be type Type
     if (lhsTy.isTop()) {
       return self.error_(
@@ -1228,21 +1767,20 @@ pub const TypeChecker = struct {
         "Expected type instance in lhs of `is` operator but found '{s}'",
         .{self.getTypename(lhsTy)}
       );
-    } else if (!rhsTy.isTop() and !rhsTy.isClass()) {
+    } else if (!rhsTy.isTop() and !rhsTy.isClass() or (ty.isLikeConstant() and !node.allow_consts)) {
       var help = (
-        if (node.right.isConstLiteral() or rhsTy.isLikeConstant())
+        if (ty.isLikeConstant())
           "\n\tHelp: For constant types, consider using '==' or '!=' operator instead."
         else ""
       );
       return self.error_(
         true, node.op.token,
         "Expected type 'Type' in rhs of `is` operator but found type '{s}'{s}",
-        .{self.getTypename(rhsTy), help}
+        .{self.getTypename(ty), help}
       );
     }
     // at this point, rhs is a TypeNode
-    var ty = node.right.getType().?;
-    if ((ty.isClsGeneric() and ty.klass().tparamsLen() != 0) or ty.isUnion() or ty.isVariable() or ty.isFunction()) {
+    if (ty.isUnion() or ty.isVariable() or ty.isFunction()) {
       return self.error_(
         true, node.op.token,
         "Expected a concrete or class type in the rhs of the `is` operator but found '{s}'",
@@ -1255,6 +1793,7 @@ pub const TypeChecker = struct {
     try self.checkBinary(node, ty, true);
     // `is` returns type bool, so reassign
     node.typ = UnitTypes.bol.toType().box(self.ctx.allocator());
+    try self.resolveType(ty, node.right.getToken());
     return node.typ.?;
   }
 
@@ -1279,7 +1818,7 @@ pub const TypeChecker = struct {
       var fun_ty = typ.function();
       if (
         fun_ty.node != null
-        and !fun_ty.node.?.AstFun.body.AstBlock.checked
+        and !fun_ty.node.?.AstFun.body.block().checked
         and !self.cycles.contains(fun_ty.node.?, Node.eql)
       ) {
         _ = try self.inferFun(fun_ty.node.?, typ);
@@ -1386,7 +1925,7 @@ pub const TypeChecker = struct {
         node.ident.typ = try self.infer(node.value);
       }
     }
-    if (node.is_param) try self.resolveType(node.ident.typ.?);
+    if (node.is_param) try self.resolveType(node.ident.typ.?, node.ident.token);
     self.insertVar(node.ident.token.value, node.ident.typ.?);
     return node.ident.typ.?;
   }
@@ -1425,7 +1964,7 @@ pub const TypeChecker = struct {
     // if this node is not being narrowed (`node.narrowed == null`),
     // try to see if we can obtain an inferred narrow type.
     if (node.narrowed == null and self.canNarrowDeref(node)) {
-      var env = TypeEnv.init(self.ctx.allocator(), null);
+      var env = TypeEnv.init(self.ctx.allocator(), self.tenv);
       env.global.pushScope();
       node.narrowed = self.synthesizeDeref(node, &env, true) catch return error.CheckError;
       if (node.narrowed) |narrowed| {
@@ -1456,7 +1995,7 @@ pub const TypeChecker = struct {
     } else {
       self.ctx.leaveScope();
     }
-    return &UnitTypes.tyVoid;
+    return self.void_ty;
   }
 
   fn inferWhile(self: *Self, node: *ast.WhileNode) !*Type {
@@ -1543,7 +2082,7 @@ pub const TypeChecker = struct {
       self.current_fn = prev_fn;
       _ = self.cycles.pop();
       ty.function().ret = try self.inferFunReturnType(node, flo);
-      fun.body.AstBlock.checked = true;
+      fun.body.block().checked = true;
       try self.analyzer.analyzeDeadCodeWithTypes(flo.entry);
     }
     return ty;
@@ -1584,7 +2123,7 @@ pub const TypeChecker = struct {
     for (prev_flo_nodes.items()) |flo_nd| {
       // skip dead node, since it's most likely at exit
       if (flo_nd.isDeadNode()) continue;
-      if (flo_nd.bb.getLast()) |nd| {
+      if (flo_nd.bb.getNonScopeLast()) |nd| {
         if (nd.isRet()) {
           has_return_node = true;
           if (nd.getType()) |ty| {
@@ -1624,7 +2163,7 @@ pub const TypeChecker = struct {
     for (prev_flo_nodes.items()) |flo_nd| {
       // skip dead node, since it's most likely at exit
       if (flo_nd.isDeadNode()) continue;
-      if (flo_nd.bb.getLast()) |nd| {
+      if (flo_nd.bb.getNonScopeLast()) |nd| {
         var typ = if (!nd.isRet()) void_ty else nd.getType() orelse void_ty;
         if (!has_void_ty and typ.isVoidTy()) {
           continue;
@@ -1647,7 +2186,7 @@ pub const TypeChecker = struct {
       var ret_ty = ret.AstNType.typ;
       for (prev_flo_nodes.items()) |flo_nd| {
         if (flo_nd.isDeadNode()) continue;
-        if (flo_nd.bb.getLast()) |nd| {
+        if (flo_nd.bb.getNonScopeLast()) |nd| {
           if (nd.isRet()) {
             if (nd.AstRet.typ) |typ| {
               if (typ.isRecursive()) {
@@ -1662,7 +2201,7 @@ pub const TypeChecker = struct {
               }
             }
             // TODO: else { what happens here? }
-          } else if (!ret_ty.isLikeVoid() and !ret_ty.isNoreturnTy()) {
+          } else if (!ret_ty.isLikeVoid() and !ret_ty.isLikeNoreturn()) {
             // control reaches exit from this node (`nd`), although this node
             // doesn't return anything hence (void), but return type isn't void
             return self.error_(
@@ -1701,12 +2240,7 @@ pub const TypeChecker = struct {
 
   fn createClsType(self: *Self, node: *Node) *Type {
     var cls = &node.AstClass;
-    var methods = util.boxEnsureCapacity(
-      TypeList,
-      TypeList.init(self.ctx.allocator()),
-      self.ctx.allocator(),
-      cls.methods.capacity()
-    );
+    var methods = TypeList.init(self.ctx.allocator()).boxEnsureCapacity(cls.methods.capacity());
     return Class.init(
       cls.name.token.value, cls.fields, methods,
       cls.tparams, node, false, cls.is_builtin
@@ -1747,14 +2281,16 @@ pub const TypeChecker = struct {
     // generic is infer-by-need - performed on call/reference.
     if (!cls.isGeneric()) {
       self.cycles.append(node);
+      self.ctx.enterScope();
+      defer self.ctx.leaveScope();
       if (!cls.is_builtin) {
         for (cls.fields.items()) |itm| {
           _ = try self.inferVarDecl(&itm.AstVarDecl);
         }
         ty.klass().fields = cls.fields;
         if (cls.methods.isNotEmpty()) {
-          self.insertVar(SelfVar, ty);
-          defer self.deleteVar(SelfVar);
+          self.insertVar(ks.SelfVar, ty);
+          defer self.deleteVar(ks.SelfVar);
           for (cls.methods.items()) |itm| {
             ty.klass().methods.append(try self.inferFunPartial(itm));
           }
@@ -1762,7 +2298,7 @@ pub const TypeChecker = struct {
             var fun_ty = try self.inferFun(itm, ty.klass().methods.itemAt(i));
             ty.klass().methods.items()[i] = (fun_ty);
           }
-          if (ty.klass().getMethod(InitVar)) |mtd| {
+          if (ty.klass().getMethod(ks.InitVar)) |mtd| {
             try self.forbidReturnInInit(mtd);
           }
         }
@@ -1913,7 +2449,7 @@ pub const TypeChecker = struct {
     // if this node is not being narrowed (`node.narrowed == null`),
     // try to see if we can obtain an inferred narrow type.
     if (node.narrowed == null and self.canNarrowDotAccess(node)) {
-      var env = TypeEnv.init(self.ctx.allocator(), null);
+      var env = TypeEnv.init(self.ctx.allocator(), self.tenv);
       env.global.pushScope();
       node.narrowed = self.synthesizeDotAccess(node, &env, true) catch return error.CheckError;
       if (node.narrowed) |narrowed| {
@@ -1937,7 +2473,7 @@ pub const TypeChecker = struct {
       );
     }
     var ty = (if (lhs_ty.isInstance()) lhs_ty.instance().cls else lhs_ty);
-    try self.resolveType(ty);
+    try self.resolveType(ty, node.lhs.getToken());
     try self.checkDotAccess(node, ty, prop);
     return node.typ.?;
   }
@@ -1965,12 +2501,12 @@ pub const TypeChecker = struct {
       ty = _ty;
     } else {
       fun_ty = _ty.method().func.function();
-      self.insertVar(SelfVar, _ty.method().cls);
+      self.insertVar(ks.SelfVar, _ty.method().cls);
       ty = _ty.method().func;
     }
     defer {
       if (_ty.isMethod()) {
-        self.deleteVar(SelfVar);
+        self.deleteVar(ks.SelfVar);
       }
     }
     node.variadic = ty.variadic;
@@ -1987,7 +2523,7 @@ pub const TypeChecker = struct {
       var is_cyclic = false;
       if (fun_ty.node) |fun_node| {
         is_cyclic = self.cycles.contains(fun_node, Node.eql);
-        if (!fun_node.AstFun.body.AstBlock.checked and !is_cyclic) {
+        if (!fun_node.AstFun.body.block().checked and !is_cyclic) {
           _ = try self.inferFun(fun_node, ty);
         }
       }
@@ -2132,7 +2668,7 @@ pub const TypeChecker = struct {
     if (init_mtd) |mtd| {
       // This only verifies definite assignments from direct statements on a seq edge for now
       var stmts = NodeList.init(self.ctx.allocator());
-      for (mtd.AstFun.body.AstBlock.nodes.items()) |itm| {
+      for (mtd.AstFun.body.block().nodes.items()) |itm| {
         if (itm.isExprStmt()) {
           stmts.append(itm);
         }
@@ -2178,13 +2714,13 @@ pub const TypeChecker = struct {
 
   fn inferClsCall(self: *Self, node: *ast.CallNode, ty: *Type, _args_inf: ?*TypeList) !*Type {
     // insert self into current scope
-    self.insertVar(SelfVar, ty);
-    defer self.deleteVar(SelfVar);
-    var al = self.ctx.allocator();
+    self.insertVar(ks.SelfVar, ty);
+    defer self.deleteVar(ks.SelfVar);
+    const al = self.ctx.allocator();
     // infer
     var cls_ty = ty.klass();
-    var init_mtd = cls_ty.getMethodTy(InitVar);
-    var init_mtd_node = cls_ty.getMethod(InitVar);
+    var init_mtd = cls_ty.getMethodTy(ks.InitVar);
+    var init_mtd_node = cls_ty.getMethod(ks.InitVar);
     if (init_mtd_node) |_nd| {
       node.variadic = _nd.AstFun.variadic;
       var fun_ty = try self.createFunType(_nd, null);
@@ -2211,7 +2747,7 @@ pub const TypeChecker = struct {
         if (!cls_node.AstClass.checked and !is_cyclic) {
           _ = try self.inferClass(cls_node, ty);
           // try to obtain the inferred init since this class just got checked
-          init_mtd = cls_ty.getMethodTy(InitVar);
+          init_mtd = cls_ty.getMethodTy(ks.InitVar);
         }
       }
       if (init_mtd_node) |_nd| {
@@ -2317,11 +2853,11 @@ pub const TypeChecker = struct {
     self.ctx.varScope.pushScope();
     defer self.ctx.varScope.popScope();
     var new_cls_ty = try self.inferClassPartial(new_cls_node);
-    new_cls_ty.klass().tparams = util.boxEnsureCapacity(TypeList, TypeList.init(al), al, cls.tparams.?.capacity());
+    new_cls_ty.klass().tparams = TypeList.init(al).boxEnsureCapacity(cls.tparams.?.capacity());
     for (cls.tparams.?.items()) |tvar| {
       new_cls_ty.klass().appendTParam(self.findType(tvar.variable().tokens.itemAt(0).value).?);
     }
-    if (new_cls_ty.klass().getMethodTy(InitVar)) |fun_ty| {
+    if (new_cls_ty.klass().getMethodTy(ks.InitVar)) |fun_ty| {
       for (fun_ty.function().params.items(), 0..) |typ, ppos| {
         if (typ.isFunction() and node.args.itemAt(ppos).isFun()) {
           typ.function().node = node.args.itemAt(ppos);
@@ -2329,7 +2865,7 @@ pub const TypeChecker = struct {
       }
     }
     var typ = try self.inferClass(new_cls_node, new_cls_ty);
-    if (typ.klass().getMethodTy(InitVar)) |mth| {
+    if (typ.klass().getMethodTy(ks.InitVar)) |mth| {
       try self.validateClsCallArguments(
         node, mth, (init_mtd_node orelse new_cls_ty.klass().node.?).getToken()
       );
@@ -2366,13 +2902,18 @@ pub const TypeChecker = struct {
         "Nested error types are unsupported: '{s}'", .{self.getTypename(ty)}
       );
     }
-    var al = self.ctx.allocator();
-    var base = Type.newClass("err", al).box(al);
-    base.klass().initTParams(al);
+    var base = Type.newBuiltinGenericClass(ks.ErrVar, self.ctx.allocator());
     base.klass().appendTParam(ty);
-    base.klass().builtin = true;
     node.typ = base;
     return base;
+  }
+
+  fn inferMatch(self: *Self, node: *ast.MatchNode) !*Type {
+    return self.pc.inferMatch(node);
+  }
+
+  fn inferFail(self: *Self, node: *ast.FailNode) !*Type {
+    return self.pc.inferFail(node);
   }
 
   fn inferOrElse(self: *Self, node: *Node) !*Type {
@@ -2575,6 +3116,32 @@ pub const TypeChecker = struct {
       );
     }
   }
+  
+  /// check if a particular test/condition is redundant, given the variable of interest.
+  fn checkTestRedundancy(self: *@This(), match_node: *ast.MatchNode, env: *TypeEnv, nodes: *FlowList) void {
+    // TODO: Doesn't work properly!
+    // If this variable is type 'never' at the point of this check (usually after narrowing),
+    // then the test from which this check is done must be redundant.
+    const isFail = struct {
+      pub inline fn isFail(n: *Node, _: *Node) bool {
+        return n.isFail();
+      }
+    }.isFail;
+    const token = match_node.getVariableOfInterest();
+    const typ = env.getNarrowed(token.value) orelse env.getGlobal(token.value);
+    if (typ) |nty| {
+      // or bool typ 'cause bool isn't narrowed for exhaustiveness like other types, see inferFail()
+      if (nty.isNeverTy() or nty.isBoolTy()) {
+        if (nodes.isNotEmpty()) {
+          var dummy: *Node = undefined;
+          if (!nodes.getLast().bb.nodes.contains(dummy, isFail)) {
+            const tok = nodes.getLast().bb.getLast().?.getToken();
+            return self.softError(tok, "redundant case", .{});
+          }
+        }
+      }
+    }
+  }
 
   fn excludeError(self: *Self, typ: *Type, debug: Token) !*Type {
     var errors: usize = 0;
@@ -2625,7 +3192,7 @@ pub const TypeChecker = struct {
         }
       }
     }
-    try self.flowInfer(flo.entry, true);
+    try self.flowInferEntry(flo.entry);
     var err_ty = if (oe.err.isBlock()) self.void_ty else oe.err.getType().?;
     if (oe.from_try and oe.err.isRet()) {
       // TODO
@@ -2671,9 +3238,11 @@ pub const TypeChecker = struct {
       .AstClass => try self.inferClass(node, null),
       .AstDotAccess => |*nd| try self.inferDotAccess(nd),
       .AstScope => |*nd| try self.inferScope(nd),
+      .AstMatch => |*nd| self.inferMatch(nd) catch error.CheckError,
+      .AstFail => |*nd| try self.inferFail(nd),
       .AstProgram => |*nd| try self.inferProgram(nd),
       .AstIf, .AstElif, .AstSimpleIf, .AstLblArg,
-      .AstCondition, .AstEmpty, .AstControl => return undefined,
+      .AstCondition, .AstMCondition, .AstEmpty, .AstControl => return undefined,
     };
   }
 
@@ -2696,11 +3265,12 @@ pub const TypeChecker = struct {
   }
 
   pub fn typecheck(self: *Self, node: *Node, va: *VebAllocator, display_diag: bool) TypeCheckError!void {
+    self.pc = PatternChecker.init(self);
     self.ctx.enterScope();
     self.linker.ctx = &self.ctx;
     self.loadBuiltinsPrelude(va);
     try self.buildProgramFlow(node, display_diag);
-    self.flowInferEntry(self.cfg.program.entry) catch  {};
+    self.flowInferEntry(self.cfg.program.entry) catch {};
     self.analyzer.analyzeDeadCodeWithTypes(self.cfg.program.entry) catch {};
     if (self.diag.hasAny()) {
       var has_error = self.diag.hasErrors();

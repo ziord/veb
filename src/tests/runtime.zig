@@ -550,8 +550,8 @@ test "is expression" {
   \\ 'fox' is str
   \\ 5 is num
   \\ nil is nil
-  \\ [] is list
-  \\ {} is map
+  \\ [] is list{any}
+  \\ {} is map{any, any}
   \\ true is bool
   \\ nil is nil
   \\ nil as list{num}? is nil
@@ -561,8 +561,8 @@ test "is expression" {
   \\
   \\ # indirect checks
   \\ let n: str | num | list{num} | map{str, num} = {}
-  \\ assert(n is list == false, 'n should be list')
-  \\ assert(n is map == true, 'n should be map')
+  \\ assert(n is list{num} == false, 'n should be map')
+  \\ assert(n is map{str, num} == true, 'n should be map')
   \\ n = 'foo'
   \\ assert(n is str == true, 'n should be str')
   \\ assert(n is num == false, 'n should be not num')
@@ -577,8 +577,8 @@ test "is expression" {
   \\ 'fox' is not str
   \\ 5 is not num
   \\ nil is not nil
-  \\ [] is not list
-  \\ {} is not map
+  \\ [] is not list{any}
+  \\ {} is not map{any, any}
   \\ true is not bool
   \\ nil is not nil
   \\ nil as list{num}? is not nil
@@ -588,8 +588,8 @@ test "is expression" {
   \\
   \\ # indirect checks
   \\ let n: str | num | list{num} | map{str, num} = {}
-  \\ assert(n is not list != false, 'not list')
-  \\ assert(n is not map != true, 'not map')
+  \\ assert(n is not list{num} != false, 'not list')
+  \\ assert(n is not map{str, num} != true, 'not map')
   \\ n = 'foo'
   \\ assert(n is not str != true, 'not str')
   \\ assert(n is not num != false, 'not num')
@@ -597,7 +597,7 @@ test "is expression" {
   \\ assert(n is not num == false, 'not num?')
   \\ !!n is not bool == true
   \\ bool == bool is not bool == true
-  \\ assert(!({} is not map), 'a map')
+  \\ assert(!({} is not map{str, num}), 'a map')
   \\ assert(((bool == bool) is not bool) != true, 'not true')  # same as above
   \\ assert(num != str, 'num is not str')
   ;
@@ -619,7 +619,7 @@ test "narrowing-2" {
   var src =
   \\ let x: list{num} | map{str, num} = [5]
   \\ let p = 10
-  \\ if x is list
+  \\ if x is list{num}
   \\   p += x[0]
   \\ end
   \\ p
@@ -631,7 +631,7 @@ test "narrowing-3" {
   var src =
   \\ let x: list{num} | map{str, num} = [5]
   \\ let p = 10
-  \\ if x is list and x[0] == 5
+  \\ if x is list{num} and x[0] == 5
   \\   x[0] ^= 12
   \\ end
   \\ x
@@ -643,7 +643,7 @@ test "narrowing-4" {
   var src =
   \\ let x: list{list{num | str}} | map{str, num} = [[5 as num | str]]
   \\ let p = 10
-  \\ if x is list and x[0][0] is num and x[0][0] + 2 > 0
+  \\ if x is list{list{num | str}} and x[0][0] is num and x[0][0] + 2 > 0
   \\   x[0]
   \\ end
   \\ p
@@ -655,7 +655,7 @@ test "narrowing-5" {
   var src =
   \\ let x: list{list{num | str}} | map{str, list{num | str}} = [[5 as num | str]]
   \\ let p = 10
-  \\ if x is map and x['a'][0] is num and x['a'][0] + 2 > 0
+  \\ if x is map{str, list{num | str}} and x['a'][0] is num and x['a'][0] + 2 > 0
   \\   x['foobar'] = [1 as num | str, 2]
   \\ end
   \\ x
@@ -667,7 +667,7 @@ test "narrowing-6" {
   var src =
   \\ let x: list{list{num | str}} | map{str, list{num | str}} = [[5 as num | str]]
   \\ let p = 10
-  \\ if x is map and x['a'][0] is num and x['a'][0] + 2 > 0xff
+  \\ if x is map{str, list{num | str}} and x['a'][0] is num and x['a'][0] + 2 > 0xff
   \\   x['a'][0] + 5
   \\ end
   \\ p
@@ -679,7 +679,7 @@ test "narrowing-7" {
   var src =
   \\ let x: list{list{num | str}} | map{str, list{num | str}} = [[5 as num | str]]
   \\ let p = 10
-  \\ if x is map and x['a'][0] is num and x['a'][0] + 2 > 0
+  \\ if x is map{str, list{num | str}} and x['a'][0] is num and x['a'][0] + 2 > 0
   \\   p += x['a'][0]
   \\ end
   \\ p
@@ -734,8 +734,8 @@ test "narrowing-11" {
   var src =
   \\ let x: list{num | list{num}} | num = [9 as num | list{num}]
   \\ let p = 10
-  \\ if x is list
-  \\    if x[0] is list
+  \\ if x is list{num | list{num}}
+  \\    if x[0] is list{num}
   \\        p /= 5
   \\    else
   \\        p *= x[0]
@@ -790,7 +790,7 @@ test "narrowing-13" {
 test "narrowing-14" {
   var src =
   \\ let x: (list{num} | str)? = [5]
-  \\ if x.? is list and x.?[0] is num
+  \\ if x.? is list{num} and x.?[0] is num
   \\    x.?[0] += 5
   \\ else
   \\    x.?
@@ -859,7 +859,7 @@ test "narrowing-19" {
   var src =
   \\ let x: list{list{num | str}} | map{str, list{num | str}} = [[5 as num | str]]
   \\ let p = 10
-  \\ if x is map 
+  \\ if x is map {str, list{num | str}}
   \\   if x['a'][0] is num and x['a'][0] + 2 > 0xff
   \\      x['a'][0] + 5
   \\   else
@@ -912,7 +912,7 @@ test "narrowing-20" {
   \\ ()
   \\ let t: num = 0
   \\ let v: map{num, num} | tuple{num | str} = (15 as str | num,)
-  \\ if v is tuple 
+  \\ if v is tuple {num | str}
   \\    let p = v[0]
   \\    if p is not str
   \\      t += p + 1
@@ -1027,6 +1027,41 @@ test "narrowing-24" {
   \\  assert(f.u == 12, 'this should be Fox.u')
   \\ else
   \\  print(f) # never
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
+test "narrowing-25" {
+  var src =
+  \\ let j = 5
+  \\ if j is num and j > 5
+  \\  j
+  \\ else
+  \\  assert(j + 4 == 9, 'should be 9')
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
+test "narrowing-26" {
+  var src =
+  \\ let x: num | str? = 4
+  \\ if x.? is num
+  \\    x.? += 5
+  \\ else
+  \\    x.?
+  \\ end
+  \\ assert(x == 9 as num | str, 'should be 9')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "narrowing-27" {
+  var src =
+  \\ let j: list{list{num}} | list{str} = [[5]]
+  \\ if j is list{list{num}} and j.len() == 1
+  \\  assert(j[0] is list{num}, 'is list')
   \\ end
   ;
   try doRuntimeTest(src);
@@ -1486,26 +1521,26 @@ test "functions-8" {
   \\ end
   \\ let mul = higher{num, num}(5)
   \\ assert(mul(12) == 60, 'should be 60')
-    \\ do
-  \\ def add {T} (k: T, t: num)
-  \\    return (k, t)
-  \\ end
-  \\ add(3, 4)
-  \\ add('fox', 12)
-  \\ def add5{T}(a: T)
-  \\  return a + 5
-  \\ end
-  \\ add5(12)
-  \\ def add5(a: num)
-  \\  return a + 5 * 2
-  \\ end
-  \\ add5(12)
-  \\ let minus = [def (a: num, b: num): num
-  \\  return a - b
-  \\ end][0]
-  \\ minus(132, 12)
-  \\ let p = minus
-  \\ p(12, 4)
+  \\ do
+  \\  def add {T} (k: T, t: num)
+  \\     return (k, t)
+  \\  end
+  \\  add(3, 4)
+  \\  add('fox', 12)
+  \\  def add5{T}(a: T)
+  \\   return a + 5
+  \\  end
+  \\  add5(12)
+  \\  def add5(a: num)
+  \\   return a + 5 * 2
+  \\  end
+  \\  add5(12)
+  \\  let minus = [def (a: num, b: num): num
+  \\   return a - b
+  \\  end][0]
+  \\  assert(minus(132, 12) ==  120, 'should be 120')
+  \\  let p = minus
+  \\  assert(p(12, 4) == 8, 'should be 8')
   \\ end
   \\ let j = def => 5
   \\ j()
@@ -1524,9 +1559,9 @@ test "functions-8" {
   \\ end
   \\ add5(12)
   \\ let minus = [def (a: num, b: num) => a - b][0]
-  \\ minus(132, 12)
+  \\ assert(minus(132, 12) ==  120, 'should be 120')
   \\ let p = minus
-  \\ p(12, 4)
+  \\ assert(p(12, 4) == 8, 'should be 8')
   \\
   \\ def funny2{U}(x: U)
   \\    def foo{T}(a: T, b: U): T
@@ -1546,6 +1581,8 @@ test "functions-8" {
   \\    let k = foo(10, x)
   \\    let p = foo(56, x)
   \\    k += 5
+  \\    assert(k == 1215, 'should be 1215')
+  \\    assert(p == 6776, 'should be 6776')
   \\    return (k, p)
   \\ end
   \\ funny2{num}()
@@ -1557,6 +1594,8 @@ test "functions-8" {
   \\    let k = foo(10)
   \\    let p = foo(56)
   \\    k += 5
+  \\    assert(k == 15, 'should be 15')
+  \\    assert(p == 56, 'should be 56')
   \\    return (j, k, p)
   \\ end
   \\ funny()
@@ -1603,7 +1642,12 @@ test "functions-9" {
   \\ end)(12)
   \\
   \\ ret3(7)
-  \\ ret(7)
+  \\ let t = ret(7)
+  \\ if t is num
+  \\  assert(t == 19, 'should be 19')
+  \\ else
+  \\  assert(false, 'yeah')
+  \\ end
   ;
   try doRuntimeTest(src);
 }
@@ -1672,7 +1716,8 @@ test "functions-11" {
   \\ assert([def (x: num) => x * x, def (y: num) => ~y][-1](t + 7) == -8, 'should be -8')
   \\
   \\ let j = [def (x: num) => x * x, def (y: num) => !y]
-  \\ [def (x: num) => x * x, def (y: num) => ~y][t - 1](t + 7)
+  \\ let v = [def (x: num) => x * x, def (y: num) => ~y][t - 1](t + 7)
+  \\ assert(v == -8, 'should be -8')
   ;
   try doRuntimeTest(src);
 }
@@ -1740,7 +1785,7 @@ test "functions-16-varargs" {
   \\ else
   \\  assert(false, 'oops')
   \\ end
-  \\ if res[1] is tuple
+  \\ if res[1] is tuple{num}
   \\  assert(res[1][0]==2, 'should be 2')
   \\  assert(res[1][4]==6, 'should be 6')
   \\ else
@@ -1811,6 +1856,67 @@ test "functions-20" {
   try doRuntimeTest(src);
 }
 
+test "functions-21" {
+  var src =
+  \\ def fun(a*: any)
+  \\  print('a is', a)
+  \\  assert(!a.len(), 'should be 0')
+  \\ end
+  \\
+  \\ fun()
+  ;
+  try doRuntimeTest(src);
+}
+
+test "functions-22.<narrowing with do-blocks>" {
+  var src =
+  \\ def test(n: num)
+  \\ let k = 5
+  \\  if n >= 1 and n <= 3
+  \\    do
+  \\      return n
+  \\    end
+  \\  else
+  \\    do
+  \\      let k = 'f'
+  \\    end
+  \\    do
+  \\      k -= 1
+  \\      return n - 1
+  \\    end
+  \\  end
+  \\ end
+  \\ assert(test(5) - 3 == 1, 'should be 1')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "functions-23.<narrowing in do-blocks>" {
+  var src =
+  \\ def test(n: num)
+  \\  do
+  \\    if n > 2
+  \\      return 5
+  \\    else
+  \\      return 10
+  \\    end
+  \\  end
+  \\ end
+  \\ assert(test(5) + 1 == 6, 'should be 6')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "functions-24.<function arguments>" {
+  var src =
+  \\ def funny(t: list{str})
+  \\  print(t)
+  \\ end
+  \\ funny([] as list{str})
+  ;
+  try doRuntimeTest(src);
+}
+
 test "builtin-functions" {
   var src =
   \\ assert(true, 'ok')
@@ -1861,6 +1967,7 @@ test "errors-1" {
   \\  end
   \\  let j = fun(1) orelse |e| do
   \\   [e]
+  \\   assert(e.value() == 'foo', 'value should be foo')
   \\  end
   \\ end
   \\
@@ -1872,6 +1979,7 @@ test "errors-1" {
   \\ end
   \\ let j = fun(1) orelse |e| do
   \\  [e]
+  \\  assert(e.value() == 'foo', 'value should be foo')
   \\ end
   ;
   try doRuntimeTest(src);
@@ -1892,8 +2000,8 @@ test "errors-2" {
   \\  return k
   \\ end
   \\ let p = test()
+  \\ assert(p == 12, 'p should be 12')
   \\ p += 2
-  \\ p
   ;
   try doRuntimeTest(src);
 }
@@ -1909,10 +2017,11 @@ test "errors-3" {
   \\ end
   \\ fun(2) orelse |e| do
   \\  [e, 'oops']
+  \\  assert(e.value() == 'bad', 'err should be bad')
   \\  def hehe(p: err{str})
   \\    return [p]
   \\  end
-  \\  hehe(e)
+  \\  assert(hehe(e).get(0).?.value() == 'bad', 'should be bad')
   \\ end
   ;
   try doRuntimeTest(src);
@@ -1937,7 +2046,7 @@ test "errors-4" {
   \\  if k is num
   \\   k += 10
   \\  end
-  \\  k
+  \\  assert(k == 19, 'k should be 19')
   \\ end
   ;
   try doRuntimeTest(src);
@@ -1958,7 +2067,7 @@ test "errors-4" {
   \\ if k is num
   \\  k += 10
   \\ end
-  \\ k
+  \\ assert(k == 19, 'k should be 19')
   ;
   try doRuntimeTest(src2);
 }
@@ -1980,7 +2089,7 @@ test "errors-5" {
   \\  end
   \\  let k = fancy(12) orelse 0
   \\  k += 5
-  \\  k
+  \\  assert(k == 25, 'k should be 25')
   \\ end
   \\
   \\ def fun(x: num)
@@ -1997,7 +2106,7 @@ test "errors-5" {
   \\ end
   \\ let k = fancy(12) orelse 0
   \\ k += 5
-  \\ k
+  \\ assert(k == 25, 'k should be 25')
   ;
   try doRuntimeTest(src);
 }
@@ -2016,6 +2125,14 @@ test "errors-6" {
   \\ j += 5
   \\ # print(e, j)
   \\ assert(e == 3 and j == 8, 'e should not change')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "errors-7" {
+  var src =
+  \\ let j = ('bad')!
+  \\ assert(j.value() == 'bad', 'value should be bad')
   ;
   try doRuntimeTest(src);
 }

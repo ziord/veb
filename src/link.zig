@@ -169,13 +169,13 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
       self.varScope.popScope();
     }
 
-    pub fn copyType(self: *Self, typ: *Type) *Type {
+    pub inline fn copyType(self: *Self, typ: *Type) *Type {
       // we need to deepcopy typ
-      var new = typ.clone(self.typScope.allocator());
-      return new;
+      return typ.clone(self.typScope.allocator());
     }
   };
 }
+
 pub const Data = struct {parent: ?*Node = null};
 pub const Scope = GenScope([]const u8, *Type);
 pub const TContext = CreateTContext(Scope, Scope);
@@ -196,8 +196,8 @@ pub const TypeLinker = struct {
 
   const MultiPair = struct {setter: *Type, key: *Type, value: *Type};
   const PairScope = GenScope([]const u8, MultiPair);
-  const TypeLinkError = error{TypeLinkError};
   const MAX_DEPTH = 0x64;
+  pub const TypeLinkError = error{TypeLinkError};
   pub const MAX_SUB_STEPS = types.MAX_RECURSIVE_DEPTH;
 
   const Self = @This();
@@ -484,8 +484,7 @@ pub const TypeLinker = struct {
       for (old_variants.values()) |variant| {
         uni.set(try self.resolveType(variant, debug));
       }
-      // no need to clear and free old variants since, arena
-      return typ;
+      return Type.compressTypes(&uni.variants, typ);
     }
     if (typ.isVariable()) {
       // if this variable occurs in the pair stack before we push it, then it's cyclic/recursive
@@ -530,7 +529,7 @@ pub const TypeLinker = struct {
     return sol;
   }
 
-  fn resolve(self: *Self, typ: *Type, debug: Token) !*Type {
+  pub fn resolve(self: *Self, typ: *Type, debug: Token) !*Type {
     const ty = try self.tryResolveType(typ, debug);
     // set alias info for debugging
     if (typ.alias == null) {
@@ -649,21 +648,21 @@ pub const TypeLinker = struct {
 
   fn linkIf(self: *Self, node: *ast.IfNode) !void {
     try self.link(node.cond);
-    try self.linkBlock(&node.then.AstBlock);
+    try self.linkBlock(node.then.block());
     for (node.elifs.items()) |elif| {
       try self.linkElif(&elif.AstElif);
     }
-    try self.linkBlock(&node.els.AstBlock);
+    try self.linkBlock(node.els.block());
   }
 
   fn linkElif(self: *Self, node: *ast.ElifNode) !void {
     try self.link(node.cond);
-    try self.linkBlock(&node.then.AstBlock);
+    try self.linkBlock(node.then.block());
   }
 
   fn linkWhile(self: *Self, node: *ast.WhileNode) !void {
     try self.link(node.cond);
-    try self.linkBlock(&node.then.AstBlock);
+    try self.linkBlock(node.then.block());
   }
 
   fn linkCall(self: *Self, node: *ast.CallNode) !void {
@@ -791,7 +790,7 @@ pub const TypeLinker = struct {
       .AstSimpleIf => |*nd| try self.linkSimpleIf(nd),
       .AstLblArg => |*nd| try self.linkLblArg(nd),
       .AstProgram => |*nd| try self.linkProgram(nd),
-      .AstCondition, .AstEmpty => {},
+      .AstCondition, .AstMCondition, .AstEmpty, .AstMatch, .AstFail => {},
     }
   }
 };

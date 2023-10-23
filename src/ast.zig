@@ -2,12 +2,13 @@ const std = @import("std");
 const lex = @import("lex.zig");
 const types = @import("type.zig");
 const util = @import("util.zig");
-const ds = @import("ds.zig");
-const Type = types.Type;
+const ptn = @import("pattern.zig");
+pub const ds = @import("ds.zig");
 
+const Type = types.Type;
 const OpType = lex.OpType;
 pub const Token = lex.Token;
-pub const AstNodeList = ds.ArrayList(*AstNode);
+pub const AstList = ds.ArrayList(*AstNode);
 pub const VarDeclList = ds.ArrayList(VarDeclNode);
 
 // ast node types
@@ -34,6 +35,7 @@ pub const AstType = enum {
   AstDeref,
   AstIf,
   AstCondition,
+  AstMCondition,
   AstElif,
   AstSimpleIf,
   AstWhile,
@@ -47,17 +49,10 @@ pub const AstType = enum {
   AstDotAccess,
   AstScope,
   AstLblArg,
+  AstMatch,
+  AstFail,
   AstProgram,
 };
-
-fn cloneNodeList(ori: *AstNodeList, al: std.mem.Allocator) AstNodeList {
-  var new = AstNodeList.init(al);
-  new.ensureTotalCapacity(ori.capacity());
-  for (ori.items()) |itm| {
-    new.append(itm.clone(al));
-  }
-  return new;
-}
 
 // ast nodes
 pub const LiteralNode = struct {
@@ -88,12 +83,24 @@ pub const LiteralNode = struct {
     }
     return new;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = depth;
+    if (self.token.ty == .TkNumber) {
+      return std.fmt.allocPrint(al, "{d}", .{self.value}) catch self.token.value;
+    }
+    return self.token.value;
+  }
 };
 
 pub const BinaryNode = struct {
   left: *AstNode,
   right: *AstNode,
   op: lex.Optr,
+  /// allow const narrowing in `is` op expressions
+  allow_consts: bool = false,
+  /// allow 'rested' tests in `is` op expressions
+  allow_rested: bool = false, 
   typ: ?*Type = null,
 
   pub fn init(left: *AstNode, right: *AstNode, op: Token) @This() {
@@ -114,6 +121,8 @@ pub const BinaryNode = struct {
       .right = self.right.clone(al),
       .op = self.op,
     };
+    bin.allow_consts = self.allow_consts;
+    bin.allow_rested = self.allow_rested;
     var new = util.alloc(AstNode, al);
     switch (node.*) {
       .AstBinary => new.* = .{.AstBinary = bin},
@@ -121,6 +130,19 @@ pub const BinaryNode = struct {
       else => unreachable,
     }
     return new;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
+    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    _ = try writer.write(try self.left.render(depth, al));
+    _ = try writer.write(" ");
+    _ = try writer.write(self.op.token.value);
+    _ = try writer.write(" ");
+    _ = try writer.write(try self.right.render(depth, al));
+    if (self.allow_rested) {
+      _ = try writer.write(" [rested] ");
+    }
+    return writer.context.items;
   }
 };
 
@@ -147,6 +169,15 @@ pub const SubscriptNode = struct {
     new.* = .{.AstSubscript = sub};
     return new;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
+    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    _ = try writer.write(try self.expr.render(depth, al));
+    _ = try writer.write("[");
+    _ = try writer.write(try self.index.render(depth, al));
+    _ = try writer.write("]");
+    return writer.context.items;
+  }
 };
 
 pub const UnaryNode = struct {
@@ -168,18 +199,25 @@ pub const UnaryNode = struct {
     new.* = .{.AstUnary = una};
     return new;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
+    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    _ = try writer.write(self.op.token.value);
+    _ = try writer.write(try self.expr.render(depth, al));
+    return writer.context.items;
+  }
 };
 
 pub const ListNode = struct {
-  elems: AstNodeList,
+  elems: AstList,
   typ: ?*Type = null,
 
   pub fn init(allocator: std.mem.Allocator) @This() {
-    return @This() {.elems = AstNodeList.init(allocator)};
+    return @This() {.elems = AstList.init(allocator)};
   }
 
   pub fn clone(self: *@This(), node: *AstNode, al: std.mem.Allocator) *AstNode {
-    var list = @This() {.elems = cloneNodeList(&self.elems, al)};
+    var list = @This() {.elems = AstList.clone(&self.elems, al)};
     var new = util.alloc(AstNode, al);
     switch (node.*) {
       .AstList => new.* = .{.AstList = list},
@@ -188,16 +226,24 @@ pub const ListNode = struct {
     }
     return new;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = self;
+    _ = al;
+    _ = depth;
+    return "List(args..)";
+  }
 };
 
 pub const MapNode = struct {
-  pairs: ds.ArrayList(Pair),
+  pairs: PairList,
   typ: ?*Type = null,
 
   pub const Pair = struct {key: *AstNode, value: *AstNode};
+  pub const PairList = ds.ArrayList(Pair);
 
   pub fn init(allocator: std.mem.Allocator) @This() {
-    return @This() {.pairs = ds.ArrayList(Pair).init(allocator)};
+    return @This() {.pairs = PairList.init(allocator)};
   }
 
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
@@ -209,6 +255,13 @@ pub const MapNode = struct {
     var new = util.alloc(AstNode, al);
     new.* = .{.AstMap = map};
     return new;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = self;
+    _ = al;
+    _ = depth;
+    return "Map(args..)";
   }
 };
 
@@ -239,6 +292,12 @@ pub const VarNode = struct {
     new.* = .{.AstVar = @This() {.token = self.token, .typ = typ}};
     return new;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    return self.token.value;
+  }
 };
 
 pub const ExprStmtNode = struct {
@@ -267,6 +326,13 @@ pub const ExprStmtNode = struct {
     var new = util.alloc(AstNode, al);
     new.* = .{.AstExprStmt = es};
     return new;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = self;
+    _ = al;
+    _ = depth;
+    return "ExprStmt(expr)";
   }
 };
 
@@ -303,22 +369,31 @@ pub const VarDeclNode = struct {
     new.* = .{.AstVarDecl = vn};
     return new;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
+    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    try util.addDepth(&writer, depth);
+    var decl = std.fmt.allocPrint(
+      al, "let {s} = {s}",
+      .{self.ident.token.value, try self.value.render(depth, al)}
+    ) catch unreachable;
+    _ = try writer.write(decl);
+    return writer.context.items;
+  }
 };
 
 pub const BlockNode = struct {
-  nodes: AstNodeList,
-  /// whether this block is from a branching entry
-  cond: ?*AstNode,
+  nodes: AstList,
   /// whether this block has been successfully typechecked
   checked: bool = false,
 
-  pub fn init(allocator: std.mem.Allocator, cond: ?*AstNode) @This() {
-    return @This() {.nodes = AstNodeList.init(allocator), .cond = cond};
+  pub fn init(allocator: std.mem.Allocator) @This() {
+    return @This() {.nodes = AstList.init(allocator)};
   }
 
-  pub fn newEmptyBlock(alloc: std.mem.Allocator, cond: ?*AstNode) *AstNode {
+  pub fn newEmptyBlock(alloc: std.mem.Allocator) *AstNode {
     var block = util.alloc(AstNode, alloc);
-    block.* = .{.AstBlock = BlockNode.init(alloc, cond)};
+    block.* = .{.AstBlock = BlockNode.init(alloc)};
     return block;
   }
 
@@ -333,10 +408,22 @@ pub const BlockNode = struct {
   }
 
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
-    var bl = @This() {.nodes = cloneNodeList(&self.nodes, al), .cond = self.cond};
+    var bl = @This() {.nodes = AstList.clone(&self.nodes, al)};
     var block = util.alloc(AstNode, al);
     block.* = .{.AstBlock = bl};
     return block;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
+    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    _ = try writer.write("<block>\n");
+    for (self.nodes.items()) |node| {
+      _ = try writer.write(try node.render(depth + 1, al));
+      _ = try writer.write("\n");
+    }
+    try util.addDepth(&writer, depth);
+    _ = try writer.write("</block>\n");
+    return writer.context.items;
   }
 };
 
@@ -359,6 +446,13 @@ pub const TypeNode = struct {
     }};
     return node;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = depth;
+    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    _ = try writer.write(self.typ.typename(al));
+    return writer.context.items;
+  }
 };
 
 pub const AliasNode = struct {
@@ -377,6 +471,13 @@ pub const AliasNode = struct {
     _ = al;
     _ = self;
     return node;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    _ = self;
+    return "<type alias>";
   }
 };
 
@@ -400,6 +501,13 @@ pub const DerefNode = struct {
     new.* = .{.AstDeref = drf};
     return new;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    _ = self;
+    return "<deref>";
+  }
 };
 
 pub const ConditionNode = struct {
@@ -414,6 +522,29 @@ pub const ConditionNode = struct {
     _ = self;
     unreachable;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
+    return self.cond.render(depth, al);
+  }
+};
+
+/// wrapper for a condition/test generated from a match pattern
+pub const MatchConditionNode = struct {
+  tst: *AstNode,
+
+  pub fn init(cond: *AstNode) @This() {
+    return @This() {.tst = cond};
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    _ = al;
+    _ = self;
+    unreachable;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
+    return self.tst.render(depth, al);
+  }
 };
 
 pub const EmptyNode = struct {
@@ -427,6 +558,13 @@ pub const EmptyNode = struct {
     _ = al;
     _ = self;
     return node;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    _ = self;
+    return "<empty>";
   }
 };
 
@@ -448,6 +586,13 @@ pub const CastNode = struct {
     new.* = .{.AstCast = cn};
     return new;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    _ = self;
+    return "<cast>";
+  }
 };
 
 pub const ElifNode = struct {
@@ -459,10 +604,9 @@ pub const ElifNode = struct {
   }
 
   pub fn toIf(self: *ElifNode, alloc: std.mem.Allocator) IfNode {
-    var list = AstNodeList.init(alloc);
     return IfNode.init(
-      self.cond, self.then, list,
-      BlockNode.newEmptyBlock(alloc, self.cond),
+      self.cond, self.then, AstList.init(alloc),
+      BlockNode.newEmptyBlock(alloc),
     );
   }
 
@@ -472,15 +616,22 @@ pub const ElifNode = struct {
     new.* = .{.AstElif = el};
     return new;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    _ = self;
+    return "<elif>";
+  }
 };
 
 pub const IfNode = struct {
   cond: *AstNode,
   then: *AstNode,
-  elifs: AstNodeList,
+  elifs: AstList,
   els: *AstNode,
 
-  pub fn init(cond: *AstNode, then: *AstNode, elifs: AstNodeList, els: *AstNode) @This() {
+  pub fn init(cond: *AstNode, then: *AstNode, elifs: AstList, els: *AstNode) @This() {
     return @This() {.cond = cond, .then = then, .elifs = elifs, .els = els};
   }
 
@@ -488,12 +639,19 @@ pub const IfNode = struct {
     var el = IfNode.init(
       self.cond.clone(al),
       self.then.clone(al),
-      cloneNodeList(&self.elifs, al),
+      AstList.clone(&self.elifs, al),
       self.els.clone(al)
     );
     var new = util.alloc(AstNode, al);
     new.* = .{.AstIf = el};
     return new;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    _ = self;
+    return "<if>";
   }
 };
 
@@ -511,6 +669,23 @@ pub const SimpleIfNode = struct {
     _ = self;
     unreachable;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
+    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    try util.addDepth(&writer, depth);
+    _ = try writer.write("if (");
+    _ = try writer.write(try self.cond.render(depth, al));
+    _ = try writer.write(")\n");
+    try util.addDepth(&writer, depth);
+    _ = try writer.write(try self.then.render(depth, al));
+    try util.addDepth(&writer, depth);
+    _ = try writer.write("else\n");
+    try util.addDepth(&writer, depth);
+    _ = try writer.write(try self.els.render(depth, al));
+    try util.addDepth(&writer, depth);
+    _ = try writer.write("end");
+    return writer.context.items;
+  }
 };
 
 pub const WhileNode = struct {
@@ -526,6 +701,13 @@ pub const WhileNode = struct {
     var new = util.alloc(AstNode, al);
     new.* = .{.AstWhile = wh};
     return new;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    _ = self;
+    return "<while>";
   }
 };
 
@@ -552,6 +734,13 @@ pub const ControlNode = struct {
     new.* = .{.AstControl = cn};
     return new;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    _ = self;
+    return "<control>";
+  }
 };
 
 pub const CallNode = struct {
@@ -559,12 +748,12 @@ pub const CallNode = struct {
   labeled: bool = false,
   va_start: usize = 0,
   expr: *AstNode,
-  targs: ?*AstNodeList = null,
-  args: AstNodeList,
+  targs: ?*AstList = null,
+  args: AstList,
   typ: ?*Type = null,
 
   pub fn init(
-    expr: *AstNode, args: AstNodeList, targs: ?*AstNodeList,
+    expr: *AstNode, args: AstList, targs: ?*AstList,
     va_start: usize, variadic: bool, labeled: bool
   ) @This() {
     return @This() {
@@ -579,7 +768,7 @@ pub const CallNode = struct {
 
   pub fn transformVariadicArgs(self: *@This()) void {
     var al = self.args.allocator();
-    var tuple = AstNodeList.init(al);
+    var tuple = AstList.init(al);
     tuple.appendSlice(self.args.items()[self.va_start..]);
     var node = util.alloc(AstNode, al);
     node.* = .{.AstTuple = .{.elems = tuple}};
@@ -592,17 +781,43 @@ pub const CallNode = struct {
   }
 
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
-    var targs: ?*AstNodeList = null;
+    var targs: ?*AstList = null;
     if (self.targs) |list| {
-      targs = util.box(AstNodeList, cloneNodeList(list, al), al);
+      targs = AstList.clone(list, al).box();
     }
     var call = CallNode.init(
-      self.expr.clone(al), cloneNodeList(&self.args, al), targs,
+      self.expr.clone(al), AstList.clone(&self.args, al), targs,
       self.va_start, self.variadic, self.labeled
     );
     var new = util.alloc(AstNode, al);
     new.* = .{.AstCall = call};
     return new;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
+    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    _ = try writer.write(try self.expr.render(depth, al));
+    if (self.targs) |targs| {
+      _ = try writer.write("{");
+      var len = targs.len() - 1;
+      for (targs.items(), 0..) |node, i| {
+        if (i < len) _ = try writer.write(", ");
+         _ = try writer.write(node.AstNType.typ.typename(al));
+      }
+      _ = try writer.write("}");
+    }
+    if (self.args.isEmpty()) {
+      _ = try writer.write("()");
+      return writer.context.items;
+    }
+    _ = try writer.write("(");
+    const len = self.args.len() -| 1;
+    for (self.args.items(), 0..) |itm, i| {
+      _ = try writer.write(try itm.render(depth, al));
+      if (i < len) _ = try writer.write(",\n");
+    }
+    _ = try writer.write(")");
+    return writer.context.items;
   }
 };
 
@@ -619,6 +834,14 @@ pub const ErrorNode = struct {
     var new = util.alloc(AstNode, al);
     new.* = .{.AstError = er};
     return new;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
+    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    _ = try writer.write("(");
+    _ = try writer.write(try self.expr.render(depth, al));
+    _ = try writer.write(")!");
+    return writer.context.items;
   }
 };
 
@@ -641,6 +864,13 @@ pub const OrElseNode = struct {
     var new = util.alloc(AstNode, al);
     new.* = .{.AstOrElse = oe};
     return new;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    _ = self;
+    return "<orelse>";
   }
 };
 
@@ -704,6 +934,13 @@ pub const FunNode = struct {
     new.* = .{.AstFun = fun};
     return new;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    _ = self;
+    return "<function>";
+  }
 };
 
 pub const DotAccessNode = struct {
@@ -733,21 +970,29 @@ pub const DotAccessNode = struct {
     new.* = .{.AstDotAccess = da};
     return new;
   }
+  
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
+    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    _ = try writer.write(try self.lhs.render(depth, al));
+    _ = try writer.write(".");
+    _ = try writer.write(try self.rhs.render(depth, al));
+    return writer.context.items;
+  }
 };
 
 pub const ClassNode = struct {
   name: *VarNode,
   trait: ?*Type = null,
   tparams: ?*types.TypeList = null,
-  fields: *AstNodeList,
-  methods: *AstNodeList,
+  fields: *AstList,
+  methods: *AstList,
   typ: ?*Type = null,
   is_builtin: bool,
   checked: bool,
 
   pub fn init(
-    name: *VarNode, tparams: ?*types.TypeList, trait: ?*Type, fields: *AstNodeList,
-    methods: *AstNodeList, is_builtin: bool, checked: bool
+    name: *VarNode, tparams: ?*types.TypeList, trait: ?*Type, fields: *AstList,
+    methods: *AstList, is_builtin: bool, checked: bool
   ) @This() {
     return @This() {
       .name = name, .tparams = tparams, .trait = trait, .fields = fields,
@@ -762,15 +1007,11 @@ pub const ClassNode = struct {
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
     var name = &self.name.clone(al).AstVar;
     var trait: ?*Type = if (self.trait) |trait| trait.clone(al) else self.trait;
-    var fields: *AstNodeList = util.boxEnsureCapacity(
-      AstNodeList, AstNodeList.init(al), al, self.fields.capacity()
-    );
+    var fields: *AstList = AstList.init(al).boxEnsureCapacity(self.fields.capacity());
     for (self.fields.items()) |itm| {
       fields.append(itm.AstVarDecl.clone(al));
     }
-    var methods: *AstNodeList = util.boxEnsureCapacity(
-      AstNodeList, AstNodeList.init(al), al, self.methods.capacity()
-    );
+    var methods: *AstList = AstList.init(al).boxEnsureCapacity(self.methods.capacity());
     for (self.methods.items()) |itm| {
       methods.append(itm.AstFun.clone(al));
     }
@@ -782,21 +1023,93 @@ pub const ClassNode = struct {
     new.* = .{.AstClass = cls};
     return new;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    _ = self;
+    return "<class>";
+  }
 };
 
 pub const LblArgNode = struct {
   label: Token,
   value: *AstNode,
+  ident: *AstNode,
 
-  pub fn init(label: Token, value: *AstNode) @This() {
-    return @This() {.label = label, .value = value};
+  pub fn init(label: Token, value: *AstNode, ident: *AstNode) @This() {
+    return @This() {.label = label, .value = value, .ident = ident};
   }
 
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
-    var arg = @This().init(self.label, self.value.clone(al));
+    var arg = @This().init(self.label, self.value.clone(al), self.ident.clone(al));
     var new = util.alloc(AstNode, al);
     new.* = .{.AstLblArg = arg};
     return new;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    _ = self;
+    return "<lbl arg>";
+  }
+};
+
+pub const MatchNode = struct {
+  /// debug token
+  token: Token,
+  /// var decl if expr was converted to one
+  decl: ?*AstNode = null,
+  /// match expr
+  expr: *AstNode,
+  /// case nodes
+  cases: CaseList,
+  /// compiled lowered form
+  lnode: *AstNode = undefined,
+
+  pub const CaseList = ds.ArrayList(*ptn.Case);
+
+  pub fn init(token: Token, expr: *AstNode, cases: CaseList) @This() {
+    return @This() {.token = token, .expr = expr, .cases = cases};
+  }
+
+  pub inline fn getVariableOfInterest(self: *@This()) Token {
+    return self.expr.AstVar.token;
+  }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
+    var match = @This().init(self.token, self.expr.clone(al), ds.ArrayList(*ptn.Case).clone(&self.cases, al));
+    match.decl = if (self.decl) |decl| decl.clone(al) else self.decl;
+    var new = util.alloc(AstNode, al);
+    new.* = .{.AstMatch = match};
+    return new;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![] const u8 {
+    _ = depth;
+    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    _ = try writer.write("match [expr]\n");
+    for (self.cases.items()) |case| {
+      _ = try writer.write(try case.render(0, al));
+    }
+    return writer.context.items;
+  }
+};
+
+pub const FailNode = struct {
+  token: Token,
+
+  pub fn init(token: Token) @This() {
+    return @This() {.token = token};
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = self;
+    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    try util.addDepth(&writer, depth);
+    _ = try writer.write("Fail\n");
+    return writer.context.items;
   }
 };
 
@@ -819,6 +1132,13 @@ pub const RetNode = struct {
     new.* = .{.AstRet = ret};
     return new;
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    _ = self;
+    return "<return>";
+  }
 };
 
 pub const ScopeNode = struct {
@@ -828,20 +1148,35 @@ pub const ScopeNode = struct {
   pub fn init(enter: bool, leave: bool) @This() {
     return @This() {.enter = enter, .leave = leave};
   }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = self;
+    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    try util.addDepth(&writer, depth);
+    _ = try writer.write("<scope>");
+    return writer.context.items;
+  }
 };
 
 // TODO: refactor to BlockNode if no other useful info needs to be added.
 pub const ProgramNode = struct {
-  decls: AstNodeList,
+  decls: AstList,
 
   pub fn init(allocator: std.mem.Allocator) @This() {
-    return @This() {.decls = AstNodeList.init(allocator)};
+    return @This() {.decls = AstList.init(allocator)};
   }
 
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
     _ = al;
     _ = self;
     unreachable;
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    _ = al;
+    _ = depth;
+    _ = self;
+    return "<program>";
   }
 };
 
@@ -870,6 +1205,7 @@ pub const AstNode = union(AstType) {
   AstElif: ElifNode,
   AstSimpleIf: SimpleIfNode,
   AstCondition: ConditionNode,
+  AstMCondition: MatchConditionNode,
   AstWhile: WhileNode,
   AstControl: ControlNode,
   AstFun: FunNode,
@@ -881,6 +1217,8 @@ pub const AstNode = union(AstType) {
   AstDotAccess: DotAccessNode,
   AstScope: ScopeNode,
   AstLblArg: LblArgNode,
+  AstMatch: MatchNode,
+  AstFail: FailNode,
   AstProgram: ProgramNode,
 
   pub inline fn isComptimeConst(self: *@This()) bool {
@@ -953,6 +1291,20 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn isMCondition(self: *@This()) bool {
+    return switch (self.*) {
+      .AstMCondition => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isBool(self: *@This()) bool {
+    return switch (self.*) {
+      .AstBool => true,
+      else => false,
+    };
+  }
+
   pub inline fn isDeref(self: *@This()) bool {
     return switch (self.*) {
       .AstDeref => true,
@@ -977,6 +1329,13 @@ pub const AstNode = union(AstType) {
   pub inline fn isCast(self: *@This()) bool {
     return switch (self.*) {
       .AstCast => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isTypeN(self: *@This()) bool {
+    return switch (self.*) {
+      .AstNType => true,
       else => false,
     };
   }
@@ -1016,9 +1375,23 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn isExitScope(self: *@This()) bool {
+    return switch (self.*) {
+      .AstScope => |sc| sc.leave,
+      else => false,
+    };
+  }
+
   pub inline fn isFun(self: *@This()) bool {
     return switch (self.*) {
       .AstFun => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isFail(self: *@This()) bool {
+    return switch (self.*) {
+      .AstFail => true,
       else => false,
     };
   }
@@ -1058,6 +1431,13 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn isVarDecl(self: *@This()) bool {
+    return switch (self.*) {
+      .AstVarDecl => true,
+      else => false,
+    };
+  }
+
   pub inline fn isLblArg(self: *@This()) bool {
     return switch (self.*) {
       .AstLblArg => true,
@@ -1075,36 +1455,29 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn block(self: *@This()) *BlockNode {
+    return &self.AstBlock;
+  }
+
   pub inline fn eql(self: *@This(), other: *@This()) bool {
     return self == other;
   }
 
   pub fn getType(self: *@This()) ?*Type {
     return switch (self.*) {
-      .AstNumber, .AstString, .AstBool, .AstNil => |lit| lit.typ,
-      .AstBinary, .AstAssign => |bin| bin.typ,
-      .AstUnary => |una| una.typ,
-      .AstList, .AstTuple => |col| col.typ,
-      .AstMap => |map| map.typ,
-      .AstExprStmt => |stmt| stmt.expr.getType(),
-      .AstVarDecl => |decl| decl.ident.typ,
-      .AstVar => |id| id.typ,
-      .AstNType => |*typn| typn.typ,
-      .AstAlias => |ali| ali.typ,
+      .AstExprStmt => |*stmt| stmt.expr.getType(),
+      .AstVarDecl => |*decl| decl.ident.typ,
       .AstCast => |*cst| cst.typn.typ,
       .AstSubscript => |sub| if (sub.narrowed) |nrw| nrw.typ else sub.typ,
       .AstDeref => |der| if (der.narrowed) |nrw| nrw.typ else der.typ,
-      .AstCondition => |cnd| cnd.cond.getType(),
-      .AstFun => |fun| if (fun.ret) |ret| ret.AstNType.typ else null,
-      .AstRet => |ret| ret.typ,
-      .AstCall => |call| call.typ,
-      .AstError => |er| er.typ,
-      .AstOrElse => |oe| oe.typ,
-      .AstClass => |*cls| cls.typ,
-      .AstDotAccess => |*dot| dot.typ,
+      .AstCondition => |*cnd| cnd.cond.getType(),
+      .AstMCondition => |*nd| nd.tst.getType(),
+      .AstFun => |*fun| if (fun.ret) |ret| ret.AstNType.typ else null,
       .AstBlock, .AstIf, .AstElif,
-      .AstWhile, .AstControl, .AstScope, .AstLblArg => null,
-      else => unreachable,
+      .AstWhile, .AstControl, .AstScope,
+      .AstLblArg, .AstMatch, .AstFail,
+      .AstEmpty, .AstSimpleIf, .AstProgram => null,
+      inline else => |*nd| nd.typ,
     };
   }
 
@@ -1131,7 +1504,7 @@ pub const AstNode = union(AstType) {
         lit.typ = typ;
       },
       else => {
-        std.log.debug("Attempt to set type on node: {}\n", .{self});
+        std.log.debug("Attempt to set type on node: {}", .{self});
       },
     }
   }
@@ -1183,6 +1556,12 @@ pub const AstNode = union(AstType) {
     return node;
   }
 
+  pub fn toMatchCondition(self: *@This(), al: std.mem.Allocator) *@This() {
+    var node = AstNode.create(al);
+    node.* = .{.AstMCondition = MatchConditionNode.init(self)};
+    return node;
+  }
+
   pub fn getToken(self: *@This()) Token {
     return switch (self.*) {
       .AstNumber, .AstString, .AstBool, .AstNil => |lit| lit.token,
@@ -1197,6 +1576,7 @@ pub const AstNode = union(AstType) {
       .AstSubscript => |sub| sub.index.getToken(),
       .AstDeref => |der| der.token,
       .AstCondition => |cnd| cnd.cond.getToken(),
+      .AstMCondition => |nd| nd.tst.getToken(),
       .AstControl => |ct| ct.token,
       .AstIf => |ifn| ifn.cond.getToken(),
       .AstElif => |elif| elif.cond.getToken(),
@@ -1209,6 +1589,7 @@ pub const AstNode = union(AstType) {
       .AstDotAccess => |*dot| dot.lhs.getToken(),
       .AstClass => |*cls| cls.name.token,
       .AstLblArg => |*arg| arg.label,
+      .AstMatch => |*match| match.expr.getToken(),
       .AstFun => |*fun| {
         if (fun.name) |name| {
           return name.token;
@@ -1216,8 +1597,8 @@ pub const AstNode = union(AstType) {
         if (fun.params.isNotEmpty()) {
           return fun.params.itemAt(0).ident.token;
         }
-        if (fun.body.AstBlock.nodes.isNotEmpty()) {
-          return fun.body.AstBlock.nodes.itemAt(0).getToken();
+        if (fun.body.block().nodes.isNotEmpty()) {
+          return fun.body.block().nodes.itemAt(0).getToken();
         }
         // std.debug.print("Could not obtain token from node: {}", .{self});
         return Token.getDefault();
@@ -1246,7 +1627,7 @@ pub const AstNode = union(AstType) {
           },
           else => {}
         }
-        // std.debug.print("Could not obtain token from node: {}", .{self});
+        std.log.debug("Could not obtain token from node: {}.\nUsing default", .{self});
         return Token.getDefault();
       },
     };
@@ -1254,37 +1635,23 @@ pub const AstNode = union(AstType) {
 
   pub fn clone(self: *@This(), al: std.mem.Allocator) *@This() {
     return switch (self.*) {
-      .AstNumber, .AstString, .AstBool, .AstNil => |*lit| lit.clone(self, al),
+      .AstAlias, .AstFail, .AstEmpty, .AstScope => self,
+      .AstCondition, .AstMCondition, .AstSimpleIf, .AstProgram => unreachable,
       .AstBinary, .AstAssign => |*bin| bin.clone(self, al),
-      .AstUnary => |*una| una.clone(al),
-      .AstSubscript => |*sub| sub.clone(al),
-      .AstDotAccess => |*dot| dot.clone(al),
       .AstList, .AstTuple => |*lst| lst.clone(self, al),
-      .AstVar => |*vr| vr.clone(al),
-      .AstBlock => |*bl| bl.clone(al),
-      .AstNType => |*tn| tn.clone(al),
-      .AstAlias => self,
-      .AstCast => |*cst| cst.clone(al),
-      .AstDeref => |*der| der.clone(al),
-      .AstCondition => unreachable,
-      .AstWhile => |*wh| wh.clone(al),
-      .AstMap => |*nd| nd.clone(al),
-      .AstExprStmt => |*nd| nd.clone(al),
-      .AstVarDecl => |*nd| nd.clone(al),
-      .AstControl => |*ctr| ctr.clone(al),
-      .AstEmpty, .AstScope => self,
-      .AstIf => |*if_| if_.clone(al),
-      .AstElif => |*elif| elif.clone(al),
-      .AstSimpleIf => unreachable,
-      .AstRet => |*ret| ret.clone(al),
-      .AstCall => |*call| call.clone(al),
-      .AstError => |*er| er.clone(al),
-      .AstOrElse => |*oe| oe.clone(al),
-      .AstFun => |*fun| fun.clone(al),
-      .AstClass => |*cls| cls.clone(al),
-      .AstLblArg => |*arg| arg.clone(al),
-      .AstProgram => unreachable,
+      .AstNumber, .AstString, .AstBool, .AstNil => |*lit| lit.clone(self, al),
+      inline else => |*nd| nd.clone(al),
     };
+  }
+
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+    return switch (self.*) {
+      inline else => |*nd| try nd.render(depth, al),
+    };
+  }
+
+  pub inline fn create(al: std.mem.Allocator) *AstNode {
+    return util.alloc(AstNode, al);
   }
 
   pub fn box(self: @This(), al: std.mem.Allocator) *@This() {

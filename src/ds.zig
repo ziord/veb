@@ -40,6 +40,20 @@ pub fn ArrayList(comptime T: type) type {
       };
     }
 
+    pub inline fn prepend(self: *@This(), item: T) void {
+      self.list.insert(0, item) catch |e| {
+        std.debug.print("error: {}", .{e});
+        std.os.exit(1);
+      };
+    }
+
+    pub inline fn replaceRange(self: *@This(), start: usize, length: usize, new: []const T) void {
+      self.list.replaceRange(start, length, new) catch |e| {
+        std.debug.print("error: {}", .{e});
+        std.os.exit(1);
+      };
+    }
+
     pub inline fn appendSlice(self: *@This(), item: []const T) void {
       self.list.appendSlice(item) catch |e| {
         std.debug.print("error: {}", .{e});
@@ -59,11 +73,22 @@ pub fn ArrayList(comptime T: type) type {
       return self.list.items.len;
     }
 
-    pub fn extend(self: *@This(), src: *@This()) void {
+    pub fn extend(self: *@This(), src: *const @This()) void {
       self.list.appendSlice(src.list.items[0..src.list.items.len]) catch |e| {
         std.debug.print("error: {}", .{e});
         std.os.exit(1);
       };
+    }
+
+    pub fn reverse(self: *@This()) void {
+      if (self.list.items.len == 0) return;
+      var j = self.list.items.len - 1;
+      for (self.list.items, 0..) |itm, i| {
+        if (i >= j) break;
+        self.list.items[i] = self.list.items[j];
+        self.list.items[j] = itm;
+        j -= 1;
+      }
     }
 
     pub inline fn pop(self: *@This()) T {
@@ -98,6 +123,23 @@ pub fn ArrayList(comptime T: type) type {
       return self.list.getLast();
     }
 
+    pub fn clone(ori: *ArrayList(T), al: std.mem.Allocator) ArrayList(T) {
+      var new = ArrayList(T).init(al);
+      new.ensureTotalCapacity(ori.capacity());
+      for (ori.items()) |itm| {
+        new.append(itm.clone(al));
+      }
+      return new;
+    }
+
+    pub inline fn box(self: ArrayList(T)) *ArrayList(T) {
+      return util.box(ArrayList(T), self, self.list.allocator);
+    }
+
+    pub inline fn boxEnsureCapacity(self: ArrayList(T), cap: usize) *ArrayList(T) {
+      return util.boxEnsureCapacity(ArrayList(T), self, self.list.allocator, cap);
+    }
+
     pub inline fn writer(self: *@This()) std.ArrayList(T).Writer {
       return self.list.writer();
     }
@@ -114,6 +156,10 @@ pub fn ArrayHashMap(comptime K: type, comptime V: type) type {
 
     pub inline fn init(al: Allocator) @This() {
       return @This() {.map = std.AutoArrayHashMap(K, V).init(al)};
+    }
+
+    pub inline fn iterator(self: *@This()) std.AutoArrayHashMap(K, V).Iterator {
+      return self.map.iterator();
     }
 
     pub fn set(self: *@This(), key: K, val: V) void {
@@ -141,6 +187,14 @@ pub fn ArrayHashMap(comptime K: type, comptime V: type) type {
 
     pub inline fn allocator(self: *@This()) Allocator {
       return self.map.allocator;
+    }
+
+    pub inline fn isEmpty(self: *@This()) bool {
+      return self.map.count() == 0;
+    }
+
+    pub inline fn isNotEmpty(self: *@This()) bool {
+      return self.map.count() > 0;
     }
 
     pub fn clone(self: *@This()) @This() {

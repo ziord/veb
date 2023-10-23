@@ -80,5 +80,7 @@ pub fn doErrorTest(src: []const u8, comptime size: comptime_int, exp_slice: [siz
   var tych = check.TypeChecker.init(al, &parser.diag);
   tych.typecheck(node, &cna, false) catch {
     try checkEql(tych.diag, size, exp_slice);
+    return;
   };
+  return error.NoError;
 }

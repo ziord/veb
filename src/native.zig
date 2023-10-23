@@ -1,4 +1,5 @@
 const std = @import("std");
+const ks = @import("constants.zig");
 const vl = @import("value.zig");
 const util = @import("util.zig");
 const VM = @import("vm.zig").VM;
@@ -124,7 +125,7 @@ fn createStringClass(vm: *VM) *vl.ObjClass {
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
   }
-  cls.name = newString(vm, "str");
+  cls.name = newString(vm, ks.StrVar);
   vm.classes.string = cls;
   return cls;
 }
@@ -189,7 +190,7 @@ fn createListClass(vm: *VM) *vl.ObjClass {
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
   }
-  cls.name = newString(vm, "list");
+  cls.name = newString(vm, ks.ListVar);
   vm.classes.list = cls;
   return cls;
 }
@@ -233,7 +234,7 @@ fn createTupleClass(vm: *VM) *vl.ObjClass {
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
   }
-  cls.name = newString(vm, "tuple");
+  cls.name = newString(vm, ks.TupleVar);
   vm.classes.tuple = cls;
   return cls;
 }
@@ -315,7 +316,7 @@ fn createMapClass(vm: *VM) *vl.ObjClass {
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
   }
-  cls.name = newString(vm, "map");
+  cls.name = newString(vm, ks.MapVar);
   vm.classes.map = cls;
   return cls;
 }
@@ -347,7 +348,7 @@ fn createErrClass(vm: *VM) *vl.ObjClass {
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
   }
-  cls.name = newString(vm, "err");
+  cls.name = newString(vm, ks.ErrVar);
   vm.classes.err = cls;
   return cls;
 }

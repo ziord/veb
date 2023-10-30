@@ -247,7 +247,7 @@ pub const VM = struct {
     return error.RuntimeError;
   }
 
-  pub fn panickUnwindError(self: *Self, comptime fmt: []const u8, args: anytype) void {
+  pub fn panicUnwindError(self: *Self, comptime fmt: []const u8, args: anytype) void {
     // TODO: unwind the stack
     self.has_error = true;
     std.debug.print(fmt ++ "\n", args);
@@ -291,7 +291,7 @@ pub const VM = struct {
           var bx: u32 = undefined;
           self.read2Args(code, &rx, &bx);
           var glb = vl.asString(self.readConst(bx, fp));
-          var val = self.globals.get(glb);
+          var val = self.globals.get(glb, self);
           self.assert(val != null);
           @setRuntimeSafety(false);
           fp.stack[rx] = val.?;
@@ -876,6 +876,7 @@ pub const VM = struct {
           self.read3Args(code, &rx, &rk1, &rk2);
           var map = vl.asMap(fp.stack[rx]);
           _ = map.meta.set(self.RK(rk1, fp), self.RK(rk2, fp), self);
+          if (self.has_error) return error.RuntimeError;
           continue;
         },
         .Gmap => {
@@ -886,7 +887,7 @@ pub const VM = struct {
           self.read3Args(code, &rx, &rk1, &rk2);
           var map = vl.asMap(self.RK(rk2, fp));
           const key = self.RK(rk1, fp);
-          if (map.meta.get(key)) |v| {
+          if (map.meta.get(key, self)) |v| {
             fp.stack[rx] = v;
             continue;
           }

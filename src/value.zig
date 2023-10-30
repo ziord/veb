@@ -846,15 +846,18 @@ pub fn hashBits(val: Value) u64 {
   return @truncate((hash & 0x3fffffff));
 }
 
-pub fn hashObject(val: Value) u64 {
+pub fn hashObject(val: Value, vm: *VM) u64 {
   return switch (asObj(val).id) {
     .objstring => asString(val).hash,
-    else => |id| std.debug.panic("unhashable type: '{}'", .{id})
+    else => {
+      vm.panicUnwindError("unhashable type: '{s}'", .{asString(objectToString(val, vm)).string()});
+      return 0;
+    }
   };
 }
 
-pub fn hashValue(val: Value) u64 {
-  if (isObj(val)) return hashObject(val);
+pub fn hashValue(val: Value, vm: *VM) u64 {
+  if (isObj(val)) return hashObject(val, vm);
   return hashBits(val);
 }
 

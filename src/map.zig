@@ -51,7 +51,8 @@ pub fn Map(comptime K: type, comptime V: type) type {
 
     pub const StringContext = struct {
       const CtxK = *const vl.ObjString;
-      pub fn hash(self: @This(), k: CtxK) u64 {
+      pub fn hash(self: @This(), k: CtxK, vm: *VM) u64 {
+        _ = vm;
         _ = self;
         return k.hash;
       }
@@ -69,9 +70,9 @@ pub fn Map(comptime K: type, comptime V: type) type {
 
     pub const ValueContext = struct {
       const CtxK = vl.Value;
-      pub fn hash(self: @This(), k: CtxK) u64 {
+      pub fn hash(self: @This(), k: CtxK, vm: *VM) u64 {
         _ = self;
-        return vl.hashValue(k);
+        return vl.hashValue(k, vm);
       }
 
       pub fn eql(self: @This(), k1: CtxK, k2: CtxK) bool {
@@ -161,7 +162,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
       } else if (self.shouldResizeItems()) {
         self.resizeItemsIfNecessary(vm, 0, true);
       }
-      const hash = ctx.hash(key);
+      const hash = ctx.hash(key, vm);
       const slot = self.findEntry(self.entries, self.entries_cap, key, hash);
       const is_new_key = self.isFreeEntry(self.entries[slot]);
       if (is_new_key) {
@@ -174,20 +175,20 @@ pub fn Map(comptime K: type, comptime V: type) type {
       return is_new_key;
     }
 
-    pub fn get(self: *Self, key: K) ?V {
+    pub fn get(self: *Self, key: K, vm: *VM) ?V {
       if (self.entries_cap == 0) {
         return null;
       }
-      const slot = self.findEntry(self.entries, self.entries_cap, key, ctx.hash(key));
+      const slot = self.findEntry(self.entries, self.entries_cap, key, ctx.hash(key, vm));
       return if (self.isUsedEntry(self.entries[slot])) self.items[usize_(self.entries[slot])].value else null;
     }
 
     /// ordered delete
-    pub fn delete(self: *Self, key: K) bool {
+    pub fn delete(self: *Self, key: K, vm: *VM) bool {
       if (self.entries_cap == 0) {
         return false;
       }
-      const slot = self.findEntry(self.entries, self.entries_cap, key, ctx.hash(key));
+      const slot = self.findEntry(self.entries, self.entries_cap, key, ctx.hash(key, vm));
       if (self.isUsedEntry(self.entries[slot])) {
         // move all items after `slot` forward
         const len = self.len - 1;
@@ -213,11 +214,11 @@ pub fn Map(comptime K: type, comptime V: type) type {
     }
 
     /// swap delete
-    pub fn remove(self: *Self, key: K) bool {
+    pub fn remove(self: *Self, key: K, vm: *VM) bool {
       if (self.entries_cap == 0) {
         return false;
       }
-      const slot = self.findEntry(self.entries, self.entries_cap, key, ctx.hash(key));
+      const slot = self.findEntry(self.entries, self.entries_cap, key, ctx.hash(key, vm));
       if (self.isUsedEntry(self.entries[slot])) {
         // swap item at slot with item at last
         const last_item = self.items[self.len - 1];

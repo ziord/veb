@@ -392,6 +392,17 @@ test "type summation" {
   try doRuntimeTest(src);
 }
 
+test "multitype-maps" {
+  var src =
+  \\ # multitype maps should no longer require casts to unionify types
+  \\ let k = {true: 6, false: 'x'}
+  \\ let j = {'a': 5, 5: k, nil: 'boo!'}
+  \\ assert(j[5] == k and j['a'] == 5, 'should be true')
+  \\ assert(j[nil] == 'boo!', 'should be true')
+  ;
+  try doRuntimeTest(src);
+}
+
 test "nil access" {
   var src =
   \\ let x: num? = 5

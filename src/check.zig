@@ -1742,7 +1742,8 @@ pub const TypeChecker = struct {
 
   fn inferMap(self: *Self, node: *ast.MapNode) !*Type {
     // create a new type
-    var base = Type.newBuiltinGenericClass(ks.MapVar, self.ctx.allocator());
+    const al = self.ctx.allocator();
+    var base = Type.newBuiltinGenericClass(ks.MapVar, al);
     node.typ = base;
     if (node.pairs.isEmpty()) {
       var any = &UnitTypes.tyAny;
@@ -1750,33 +1751,17 @@ pub const TypeChecker = struct {
       base.klass().empty = true;
       return base;
     }
+    var keys = TypeHashSet.init(al);
+    var vals = TypeHashSet.init(al);
     // infer type of items stored in the map
-    var first_pair = node.pairs.itemAt(0);
-    var key_typ = try self.infer(first_pair.key);
-    var val_typ = try self.infer(first_pair.value);
-
-    if (node.pairs.len() > 1) {
-      for (node.pairs.items()[1..]) |pair| {
-        var typ = try self.infer(pair.key);
-        var debug = pair.key.getToken();
-        _ = self.checkAssign(key_typ, typ, debug, false) catch {
-          return self.error_(
-            true, debug,
-            "expected key type '{s}', but found '{s}'",
-            .{self.getTypename(key_typ), self.getTypename(typ)}
-          );
-        };
-        typ = try self.infer(pair.value);
-        debug = pair.value.getToken();
-        _ = self.checkAssign(val_typ, typ, debug, false) catch {
-          return self.error_(
-            true, debug,
-            "expected value type '{s}', but found '{s}'",
-            .{self.getTypename(val_typ), self.getTypename(typ)}
-          );
-        };
-      }
+    for (node.pairs.items()) |pair| {
+      var typ = try self.infer(pair.key);
+      keys.set(typ.typeid(), typ);
+      typ = try self.infer(pair.value);
+      vals.set(typ.typeid(), typ);
     }
+    var key_typ = Type.compressTypes(&keys, null);
+    var val_typ = Type.compressTypes(&vals, null);
     if (key_typ.isUnion()) {
       // we don't want active types in a map's key union as this can 
       // confuse the type checker on permissible operations during casting

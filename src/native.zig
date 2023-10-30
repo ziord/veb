@@ -67,7 +67,7 @@ pub fn fnAssert(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   if (vl.valueFalsy(getArg(vm, args))) {
     var msg = vl.asString(vl.valueToString(getArg(vm, args + 1), vm));
-    vm.panickUnwindError("AssertionError: '{s}'", .{msg.str[0..msg.len]});
+    vm.panicUnwindError("AssertionError: '{s}'", .{msg.str[0..msg.len]});
     return vl.FALSE_VAL;
   }
   return NOTHING_VAL;
@@ -85,7 +85,7 @@ pub fn fnExit(vm: *VM, argc: u32, args: u32) Value {
 pub fn fnPanic(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var msg = vl.asString(vl.valueToString(getArg(vm, args), vm));
-  vm.panickUnwindError("Error: '{s}'", .{msg.str[0..msg.len]});
+  vm.panicUnwindError("Error: '{s}'", .{msg.str[0..msg.len]});
   vm.deinit();
   std.os.exit(1);
 }
@@ -163,7 +163,7 @@ fn listPop(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var list = vl.asList(getArg(vm, args));
   if (list.len == 0) {
-    vm.panickUnwindError("Error: pop from empty list", .{});
+    vm.panicUnwindError("Error: pop from empty list", .{});
     return NOTHING_VAL;
   }
   var val = list.items[list.len - 1];
@@ -263,23 +263,23 @@ fn mapSet(vm: *VM, argc: u32, args: u32) Value {
 // get(key: K): V?
 fn mapGet(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
-  if (vl.asMap(getArg(vm, args)).meta.get(getArg(vm, args + 1))) |res| {
+  if (vl.asMap(getArg(vm, args)).meta.get(getArg(vm, args + 1), vm)) |res| {
     return res;
   }
   return vl.NIL_VAL;
 }
 
 // delete(key: K): bool
-fn mapDel(vm: *VM, argc: u32, args: u32) Value {
+fn mapDelete(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
-  const val = vl.asMap(getArg(vm, args)).meta.delete(getArg(vm, args + 1));
+  const val = vl.asMap(getArg(vm, args)).meta.delete(getArg(vm, args + 1), vm);
   return vl.boolVal(val);
 }
 
 // remove(key: K): bool
 fn mapRemove(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
-  const val = vl.asMap(getArg(vm, args)).meta.remove(getArg(vm, args + 1));
+  const val = vl.asMap(getArg(vm, args)).meta.remove(getArg(vm, args + 1), vm);
   return vl.boolVal(val);
 }
 
@@ -330,7 +330,7 @@ fn createMapClass(vm: *VM) *vl.ObjClass {
   const methods = [_]NativeFn {
     mapSet,
     mapGet,
-    mapDel,
+    mapDelete,
     mapRemove,
     mapKeys,
     mapValues,

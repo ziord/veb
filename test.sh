@@ -1,8 +1,8 @@
 #!/bin/sh
 
-folder="src/tests/"
+folder="tests/"
 skip="test.zig"
-pkg="--main-pkg-path src"
+pkg="--main-pkg-path ."
 for file in "$folder"/*; do
     if [ -f "$file" ]; then
         if [ "$file" != "$folder/$skip" ]; then

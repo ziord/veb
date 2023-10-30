@@ -22,6 +22,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
+        .main_pkg_path = .{.path = "."},
     });
 
     // This declares intent for the executable to be installed into the
@@ -54,10 +55,11 @@ pub fn build(b: *std.Build) void {
 
     // Creates a step for unit testing.
     const exe_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = .{ .path = "tests/test.zig" },
         .target = target,
         .optimize = optimize,
-    });
+        .main_pkg_path = .{.path = "."},
+    }); 
 
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request

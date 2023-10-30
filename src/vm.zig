@@ -86,14 +86,14 @@ pub const VM = struct {
   }
 
   pub fn deinit(self: *Self) void {
-    self.strings.free(self);
-    self.globals.free(self);
     var curr = self.objects;
     while (curr) |cur| {
       var next = cur.next;
       self.gc.freeObject(cur, self);
       curr = next;
     }
+    self.strings.free(self);
+    self.globals.free(self);
     self.gc.deinit();
     self.mem.deinit();
   }
@@ -157,7 +157,7 @@ pub const VM = struct {
     const cap = Mem.alignTo(Mem.growCapacity(self.fiber.stack_cap), MAX_LOCAL_ITEMS);
     self.fiber.stack = self.mem.resizeBuf(
       Value, self,
-      self.fiber.stack[0..self.fiber.stack_cap],
+      self.fiber.stack,
       self.fiber.stack_cap,
       cap
     ).ptr;
@@ -194,7 +194,7 @@ pub const VM = struct {
     var cap = Mem.alignTo(Mem.growCapacity(self.fiber.frame_cap), Mem.BUFFER_INIT_SIZE);
     self.fiber.frames = self.mem.resizeBuf(
       CallFrame, self,
-      self.fiber.frames[0..self.fiber.frame_cap],
+      self.fiber.frames,
       self.fiber.frame_cap,
       cap
     ).ptr;

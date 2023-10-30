@@ -15,14 +15,14 @@ pub fn Vec(comptime T: type) type {
       return Self {.capacity = 0, .len = 0, .items = &[_]T{}};
     }
 
-    inline fn allocatedSlice(self: Self) Slice {
+    pub inline fn allocatedSlice(self: Self) Slice {
       return self.items[0..self.capacity];
     }
 
     pub fn push(self: *Self, item: T, vm: *VM) void {
       if (self.len >= self.capacity) {
         const new_capacity = Mem.growCapacity(self.capacity);
-        self.items = vm.mem.resizeBuf(T, vm, self.allocatedSlice(), self.capacity, new_capacity).ptr;
+        self.items = vm.mem.resizeBuf(T, vm, self.items, self.capacity, new_capacity).ptr;
         self.capacity = new_capacity;
       }
       self.items[self.len] = item;

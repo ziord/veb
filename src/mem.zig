@@ -32,8 +32,6 @@ pub inline fn deinit(self: *Self) void {
 pub fn alloc(self: *Self, comptime T: type, vm: *VM) *T {
   const size = @sizeOf(T);
   vm.gc.bytes_allocated += size;
-  vm.gc.forceCollect(vm, (util.getMode() == .Debug));
-  vm.gc.tryCollect(vm);
   return self.allocator.create(T) catch |e| {
     util.error_("AllocationError: {}", .{e});
   };
@@ -41,24 +39,26 @@ pub fn alloc(self: *Self, comptime T: type, vm: *VM) *T {
 
 pub fn allocBuf(self: *Self, comptime T: type, len: usize, vm: *VM) []T {
   vm.gc.bytes_allocated += @sizeOf(T) * len;
-  // TODO: refactor this.
-  vm.gc.forceCollect(vm, (util.getMode() == .Debug));
-  vm.gc.tryCollect(vm);
   return self.allocator.alloc(T, len) catch |e| {
     util.error_("AllocationError: {}", .{e});
   };
 }
 
-pub fn resizeBuf(self: *Self, comptime T: type, vm: *VM, ptr: []T, old_len: usize, new_len: usize) []T {
+pub fn dupeStr(self: *Self, vm: *VM, str: []const u8) []u8 {
+  vm.gc.bytes_allocated += @sizeOf(u8) * str.len;
+  return self.allocator.dupe(u8, str) catch |e| {
+    util.error_("AllocationError: {}", .{e});
+  };
+}
+
+pub fn resizeBuf(self: *Self, comptime T: type, vm: *VM, buf: [*]T, old_len: usize, new_len: usize) []T {
   const old_size = @sizeOf(T) * old_len;
   const new_size = @sizeOf(T) * new_len;
   vm.gc.bytes_allocated += (new_size - old_size);
-  // TODO: refactor this.
-  if (new_size > old_size) {
-    vm.gc.forceCollect(vm, (util.getMode() == .Debug));
-    vm.gc.tryCollect(vm);
+  if (self.allocator.resize(buf[0..old_len], new_len)) {
+    return buf[0..new_len];
   }
-  return self.allocator.realloc(ptr, new_len) catch |e| {
+  return self.allocator.realloc(buf[0..old_len], new_len) catch |e| {
     util.error_("AllocationError: {}", .{e});
   };
 }

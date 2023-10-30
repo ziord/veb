@@ -99,6 +99,10 @@ pub const Constant = struct {
     return @This() {.kind = kind, .val = val};
   }
 
+  pub inline fn isTrue(self: *Constant) bool {
+    return std.mem.eql(u8, self.val, ks.TrueVar);
+  }
+
   pub fn toType(self: Constant) Type {
     return Type.init(.{.Constant = self});
   }
@@ -755,6 +759,14 @@ pub const Type = struct {
     return Self.init(.{.Concrete = conc});
   }
 
+  pub fn newBoolUnion(al: std.mem.Allocator) *Self {
+    var uni = Union.init(al);
+    const t1 = Type.newConstant(.TyBool, "true").box(al);
+    const t2 = Type.newConstant(.TyBool, "false").box(al);
+    uni.addSlice(&[_]*Type{t1, t2});
+    return Self.init(.{.Union = uni}).box(al);
+  }
+
   pub fn newConstant(kind: TypeKind, val: []const u8) Self {
     return Self.init(.{.Constant = Constant.init(kind, val)});
   }
@@ -1018,6 +1030,18 @@ pub const Type = struct {
     return false;
   }
 
+  inline fn isBoolUnionTy(self: *Self) bool {
+    if (self.isUnion()) {
+      const uni = self.union_();
+      return (
+        uni.variants.count() == 2 and
+        uni.variants.get(getConstantTrueHash()) != null and
+        uni.variants.get(getConstantFalseHash()) != null
+      );
+    }
+    return false;
+  }
+
   /// more qol helper methods
   pub inline fn isBoolTy(self: *Self) bool {
     return self.isConcreteTypeEq(.TyBool);
@@ -1122,6 +1146,23 @@ pub const Type = struct {
 
   pub inline fn recursive(self: *Self) Recursive {
     return self.kind.Recursive;
+  }
+
+  pub inline fn classOrInstanceClass(self: *Self) *Type {
+    return if (self.isInstance()) self.instance().cls else self;
+  }
+
+  /// check if a class type contains a recursive type (param)
+  pub fn hasRecursive(self: *Self) bool {
+    for (self.klass().getSlice()) |ty| {
+      if (ty.isRecursive() or ty.isLikeXTy(isRecursive)) {
+        return true;
+      }
+      if (ty.isClass() and ty.hasRecursive()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   pub fn getName(self: *Self) []const u8 {
@@ -1573,6 +1614,9 @@ pub const Type = struct {
         }
       },
       .Union => |*uni| {
+        if (self.isBoolUnionTy()) {
+          return "bool";
+        }
         var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
         var values = uni.variants.values();
         for (values, 0..) |typ, i| {

@@ -1,6 +1,5 @@
-const tests = @import("test.zig");
-const doErrorTest = tests.doErrorTest;
-const doRuntimeTest = tests.doRuntimeTest;
+const lib = @import("lib.zig");
+const doErrorTest = lib.doErrorTest;
 
 test "binary operators" {
   var src =
@@ -90,6 +89,21 @@ test "casting" {
   });
 }
 
+test "casting.<active types>" {
+  var src =
+  \\ let j: num | str = 5
+  \\ let p = j as str
+  \\ print(p)
+  \\ let j: list{tuple{num}} | list{list{str}} = [['a'], ['b']]
+  \\ let p = j as list{tuple{num}}
+  \\ print(p)
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "Cannot cast from type 'num | str' to type 'str' because the active type is 'num'",
+    "Cannot cast from type 'list{tuple{num}} | list{list{str}}' to type 'list{tuple{num}}' because the active type is 'list{list{str}}'"
+  });
+}
+
 test "noreturn" {
   var src =
   \\ def foo(): noreturn
@@ -100,6 +114,43 @@ test "noreturn" {
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "Control flow reaches exit; function declared type 'noreturn' returns",
+  });
+}
+
+test "never & noreturn" {
+  var src =
+  \\ def foo()
+  \\  foo()
+  \\ end
+  \\
+  \\ let j: noreturn = foo()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Cannot initialize type 'noreturn' with type 'never'",
+  });
+}
+
+test "never & void .1" {
+  var src =
+  \\ def foo(): never
+  \\  foo()
+  \\ end
+  \\ let j: void = foo()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Cannot initialize type 'void' with type 'never'",
+  });
+}
+
+test "never & void .2" {
+  var src =
+  \\ def foo(): never
+  \\  3
+  \\ end
+  \\ let j: void = foo()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Expected return type 'never', but got 'void'",
   });
 }
 
@@ -925,6 +976,18 @@ test "labeled argument 6" {
   });
 }
 
+test "class init" {
+  var src =
+  \\ class Err{B}
+  \\  val: B
+  \\ end
+  \\ Err('box')
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Too many arguments to class call. Expected none, but got 1",
+  });
+}
+
 test "patterns-1.<ordinary match>" {
   var src =
   \\ match ('a', 'b')
@@ -1217,7 +1280,7 @@ test "patterns-15.<match on bool (exhaustiveness)>" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "inexhaustive pattern match.\n\tRemaining case type(s): 'bool'",
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'true'",
   });
 }
 
@@ -1228,7 +1291,7 @@ test "patterns-16.<match on bool (exhaustiveness)>" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "inexhaustive pattern match.\n\tRemaining case type(s): 'bool'",
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'false'",
   });
 }
 
@@ -1276,7 +1339,26 @@ test "patterns-19.<redundancy>" {
   });
 }
 
-test "patterns-20.<match on nil (exhaustiveness)>" {
+test "patterns-20.<redundancy>" {
+  var src =
+  \\ class Ant
+  \\ end
+  \\ class Rat
+  \\ end
+  \\ let j: Ant | Rat = Rat()
+  \\ match j
+  \\  case Ant() => 12
+  \\  case Rat() => 15
+  \\  case _ => 5
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "redundant case",
+    "case _ => 5"
+  });
+}
+
+test "patterns-21.<match on nil (exhaustiveness)>" {
   var src =
   \\ let j: ("a" | "b")? = "b"
   \\ match j
@@ -1286,5 +1368,196 @@ test "patterns-20.<match on nil (exhaustiveness)>" {
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "inexhaustive pattern match.\n\tRemaining case type(s): 'nil'",
+  });
+}
+
+test "patterns-22.<match on generics (exhaustiveness)>" {
+  var src =
+  \\ class Fox{T}
+  \\  j: T
+  \\  def init(j: T)
+  \\    self.j = j
+  \\  end
+  \\ end
+  \\ let z = false
+  \\ let j: Fox{str} | Fox{num} = Fox{str}('pin')
+  \\ match j
+  \\  case Fox{str}('pin') as x => z = true
+  \\  case Fox{num}(6) => print('whew')
+  \\  case Fox{num}(_) => print('caught ya num')
+  \\ end
+  \\ assert(z, 'should be matched')
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'str'",
+  });
+}
+
+test "patterns-23.<match on generics (exhaustiveness)>" {
+  var src =
+  \\ class Fox{T}
+  \\  j: tuple{T}
+  \\  def init(j*: T)
+  \\    self.j = j
+  \\  end
+  \\ end
+  \\ class Ant{T}
+  \\ end
+  \\ let j: Fox{str} | Fox{num} | Ant{str} = Ant{str}()
+  \\ match j
+  \\  case Fox{str}(..) as x => print('yes', x)
+  \\  case Fox{num}((6,)) => print('whew')
+  \\  case Fox{num}(_) => print('caught ya num')
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'Ant{str}'"
+  });
+}
+
+test "patterns-24.<match on generics (redundancy)>" {
+  var src =
+  \\ class Fox{T}
+  \\  j: tuple{T}
+  \\  def init(j*: T)
+  \\    self.j = j
+  \\  end
+  \\ end
+  \\ let j: Fox{str} | Fox{num} = Fox{str}('pin', 'pan')
+  \\ match j
+  \\  case Fox{str}(..) as x => print('yes', x)
+  \\  case Fox{str}(_) => print('caught ya str')
+  \\  case Fox{num}((6,)) => print('whew')
+  \\  case Fox{num}(_) => print('caught ya num')
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "possible redundant case",
+    "case Fox{str}(_) => print('caught ya str')"
+  });
+}
+
+test "patterns-25.<match on generics (redundancy)>" {
+  var src =
+  \\ class Fox{T}
+  \\  j: tuple{T}
+  \\  def init(j*: T)
+  \\    self.j = j
+  \\  end
+  \\ end
+  \\ class Ant{T}
+  \\ end
+  \\ let j: Fox{str} | Fox{num} | Ant{str} = Ant{str}()
+  \\ match j
+  \\  case Fox{str}(..) as x => print('yes', x)
+  \\  case Fox{num}((6,)) => print('whew')
+  \\  case Fox{num}(_) => print('caught ya num')
+  \\  case Ant{str}() => print('no')
+  \\  case _ => 'oops'
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "redundant case",
+    "case _ => 'oops'"
+  });
+}
+
+test "patterns-26.<redundancy>" {
+  var src =
+  \\ type Type = "a" | "b" | "c"
+  \\ let j: Type = "a"
+  \\ match j
+  \\   case "a" as k => print(j, k)
+  \\   case _ as t => match t
+  \\      case "b" => print("B.1")
+  \\      case "c" => print("C.1")
+  \\      case _ => print('err.1')
+  \\   end
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "redundant case",
+    "case _ => print('err.1')"
+  });
+}
+
+test "patterns-27.<redundancy>" {
+  var src =
+  \\ let j = true
+  \\ match j
+  \\   case false as k => print(j, k)
+  \\   case _ as t => match t
+  \\      case true => print("B.1")
+  \\      case _ => print('err.2')
+  \\   end
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "redundant case",
+    "case _ => print('err.2')"
+  });
+}
+
+test "patterns-28.<match on maps (redundancy)>" {
+  var src =
+  \\ class Fox
+  \\  url: str
+  \\  def init(url: str)
+  \\    self.url = url
+  \\  end
+  \\ end
+  \\ let foo = {"sound": Fox('fin.co') as Fox | str, "format": "txt"}
+  \\ match foo
+  \\  case {"sound": _, "format": _} => print(1)
+  \\  case {"sound" as a: Fox(url) as b, "format": "ogg",} => print(12, url, a, b)
+  \\  case {..} => print('default')
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "possible redundant case",
+    "case {\"sound\" as a: Fox(url) as b, \"format\": \"ogg\",} => print(12, url, a, b)"
+  });
+}
+
+test "patterns-29.<match on maps (exhaustiveness)>" {
+  var src =
+  \\ class Fox
+  \\  url: str
+  \\  def init(url: str)
+  \\    self.url = url
+  \\  end
+  \\ end
+  \\ let foo = {"sound": Fox('fin.co') as Fox | str, "format": "txt"}
+  \\ match foo
+  \\  case {"sound" as a: Fox(url) as b, "format": "ogg",} => print(12, url, a, b)
+  \\  case {"sound": _, "format": _} => print(1)
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'str | Fox'",
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'list{str | Fox}'",
+  });
+}
+
+test "patterns-30.<match on maps (redundancy)>" {
+  var src =
+  \\ class Fox
+  \\  url: str
+  \\  def init(url: str)
+  \\    self.url = url
+  \\  end
+  \\ end
+  \\ let foo = {"sound": Fox('fin.co') as Fox | str, "format": "txt"}
+  \\ match foo
+  \\  case {..} => print('default')
+  \\  case {"sound" as a: Fox(url) as b, "format": "ogg",} => print(12, url, a, b)
+  \\  case {"sound": _, "format": _} => print(1)
+  \\ end
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "possible redundant case",
+    "case {\"sound\" as a: Fox(url) as b, \"format\": \"ogg\",} => print(12, url, a, b)",
+    "possible redundant case",
+    "case {\"sound\": _, \"format\": _} => print(1)",
   });
 }

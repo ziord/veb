@@ -917,7 +917,7 @@ pub const Compiler = struct {
     self.optimizeConstRK();
     var rk_inst = try self.c(node.lhs, dst);
     var tmp = node.lhs.getType().?;
-    var ty = (if (tmp.isInstance()) tmp.instance().cls.klass() else tmp.klass());
+    var ty = tmp.classOrInstanceClass().klass();
     var prop = node.rhs.getToken(); // should be a VarNode's token
     var prop_idx: u32 = 0;
     var op: OpCode = undefined;
@@ -1659,7 +1659,8 @@ pub const Compiler = struct {
       .AstAssign => |*nd| self.cAssign(nd, reg),
       .AstBlock => |*nd| self.cBlock(nd, reg),
       .AstNType => |*nd| self.cNType(nd, reg),
-      .AstAlias, .AstScope, .AstFail => reg,
+      .AstAlias, .AstScope, .AstFailMarker,
+      .AstRedundantMarker, .AstLiftMarker, => reg,
       .AstNil => |*nd| self.cNil(nd, reg),
       .AstCast => |*nd| self.cCast(nd, reg),
       .AstSubscript => |*nd| self.cSubscript(nd, reg),

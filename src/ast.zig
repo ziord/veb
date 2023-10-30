@@ -50,7 +50,9 @@ pub const AstType = enum {
   AstScope,
   AstLblArg,
   AstMatch,
-  AstFail,
+  AstFailMarker,
+  AstLiftMarker,
+  AstRedundantMarker,
   AstProgram,
 };
 
@@ -1097,18 +1099,18 @@ pub const MatchNode = struct {
   }
 };
 
-pub const FailNode = struct {
+pub const MarkerNode = struct {
   token: Token,
 
   pub fn init(token: Token) @This() {
     return @This() {.token = token};
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator, comptime str: []const u8) ![]const u8 {
     _ = self;
     var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
     try util.addDepth(&writer, depth);
-    _ = try writer.write("Fail\n");
+    _ = try writer.write(str ++ "\n");
     return writer.context.items;
   }
 };
@@ -1218,7 +1220,9 @@ pub const AstNode = union(AstType) {
   AstScope: ScopeNode,
   AstLblArg: LblArgNode,
   AstMatch: MatchNode,
-  AstFail: FailNode,
+  AstFailMarker: MarkerNode,
+  AstLiftMarker: MarkerNode,
+  AstRedundantMarker: MarkerNode,
   AstProgram: ProgramNode,
 
   pub inline fn isComptimeConst(self: *@This()) bool {
@@ -1389,9 +1393,23 @@ pub const AstNode = union(AstType) {
     };
   }
 
-  pub inline fn isFail(self: *@This()) bool {
+  pub inline fn isFailMarker(self: *@This()) bool {
     return switch (self.*) {
-      .AstFail => true,
+      .AstFailMarker => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isLiftMarker(self: *@This()) bool {
+    return switch (self.*) {
+      .AstLiftMarker => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isRedundantMarker(self: *@This()) bool {
+    return switch (self.*) {
+      .AstRedundantMarker => true,
       else => false,
     };
   }
@@ -1475,7 +1493,8 @@ pub const AstNode = union(AstType) {
       .AstFun => |*fun| if (fun.ret) |ret| ret.AstNType.typ else null,
       .AstBlock, .AstIf, .AstElif,
       .AstWhile, .AstControl, .AstScope,
-      .AstLblArg, .AstMatch, .AstFail,
+      .AstLblArg, .AstMatch, .AstFailMarker,
+      .AstLiftMarker, .AstRedundantMarker,
       .AstEmpty, .AstSimpleIf, .AstProgram => null,
       inline else => |*nd| nd.typ,
     };
@@ -1590,6 +1609,7 @@ pub const AstNode = union(AstType) {
       .AstClass => |*cls| cls.name.token,
       .AstLblArg => |*arg| arg.label,
       .AstMatch => |*match| match.expr.getToken(),
+      .AstFailMarker, .AstLiftMarker, .AstRedundantMarker => |*nd| nd.token,
       .AstFun => |*fun| {
         if (fun.name) |name| {
           return name.token;
@@ -1635,7 +1655,7 @@ pub const AstNode = union(AstType) {
 
   pub fn clone(self: *@This(), al: std.mem.Allocator) *@This() {
     return switch (self.*) {
-      .AstAlias, .AstFail, .AstEmpty, .AstScope => self,
+      .AstAlias, .AstFailMarker, .AstEmpty, .AstScope, .AstLiftMarker, .AstRedundantMarker => self,
       .AstCondition, .AstMCondition, .AstSimpleIf, .AstProgram => unreachable,
       .AstBinary, .AstAssign => |*bin| bin.clone(self, al),
       .AstList, .AstTuple => |*lst| lst.clone(self, al),
@@ -1646,6 +1666,9 @@ pub const AstNode = union(AstType) {
 
   pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
     return switch (self.*) {
+      .AstFailMarker => |*nd| try nd.render(depth, al, "Fail"),
+      .AstLiftMarker => |*nd| try nd.render(depth, al, "Lift"),
+      .AstRedundantMarker => |*nd| try nd.render(depth, al, "Redundant"),
       inline else => |*nd| try nd.render(depth, al),
     };
   }

@@ -1,8 +1,6 @@
-const tests = @import("test.zig");
+const doStaticTest = @import("lib.zig").doStaticTest;
 
-const doStaticTest = tests.doStaticTest;
-
-test "functions-2" {
+test "functions.<recursive>" {
   var src =
   \\ # mutually recursive
   \\ def mutA{U}(x: U)
@@ -45,6 +43,36 @@ test "functions-2" {
   \\  return fox(x, y)
   \\ end
   \\ fox('a', nil)
+  ;
+  try doStaticTest(src);
+}
+
+test "functions.<never>" {
+  var src =
+  \\ def foo(): never
+  \\  foo()
+  \\ end
+  \\ let j = foo()
+  ;
+  try doStaticTest(src);
+}
+
+test "functions.<noreturn>" {
+  var src =
+  \\ def foo()
+  \\  exit(1)
+  \\ end
+  \\ let j:noreturn = foo()
+  ;
+  try doStaticTest(src);
+}
+
+test "functions.<void>" {
+  var src =
+  \\ def foo()
+  \\  print('yay')
+  \\ end
+  \\ let j:void = foo()
   ;
   try doStaticTest(src);
 }

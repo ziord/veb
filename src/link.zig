@@ -790,7 +790,8 @@ pub const TypeLinker = struct {
       .AstSimpleIf => |*nd| try self.linkSimpleIf(nd),
       .AstLblArg => |*nd| try self.linkLblArg(nd),
       .AstProgram => |*nd| try self.linkProgram(nd),
-      .AstCondition, .AstMCondition, .AstEmpty, .AstMatch, .AstFail => {},
+      .AstCondition, .AstMCondition, .AstEmpty, .AstMatch,
+      .AstFailMarker, .AstLiftMarker, .AstRedundantMarker => {},
     }
   }
 };

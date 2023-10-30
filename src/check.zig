@@ -269,6 +269,8 @@ pub const TypeChecker = struct {
   const PatternChecker = struct {
     tc: *TypeChecker,
     mc: MatchCompiler,
+    /// current redundant marker node
+    redmarker: ?*ast.MarkerNode = null,
     /// list of conditions for which we may infer inexhaustiveness
     tests: NodeList,
 
@@ -332,41 +334,34 @@ pub const TypeChecker = struct {
               return ty;
             },
             .Map => {
-              // {lit_ptn: ptn} -> Map(List(Tuple(Literal(...), Pattern)))
+              // {lit_ptn: ptn} -> Map(List(Literal(...), Pattern))
               var ty = Type.newBuiltinGenericClass(ks.MapVar, al);
-              // save current id to restore namegen to, when this constructor has no args
-              const id_snapshot = self.tc.namegen.getCurrentId();
-              _ = try self.inferPattern(cons.args.itemAt(0), conses, false, al);
               var list = cons.args.itemAt(0).variant.cons;
+              const inf_ty = try self.inferPattern(cons.args.itemAt(0), conses, false, al);
               if (list.args.isNotEmpty()) {
                 // unwrap
                 var typeset_k = TypeHashSet.init(al);
                 var typeset_v = TypeHashSet.init(al);
-                for (list.args.items()) |arg| {
-                  if (arg.isConstructor()) {
-                    var tuple = arg.variant.cons;
-                    const k = self.getPatternType(tuple.args.itemAt(0)).?;
-                    const v = self.getPatternType(tuple.args.itemAt(1)).?;
-                    typeset_k.set(k.typeid(), k);
-                    typeset_v.set(v.typeid(), v);
-                  } else {
-                    // wildcard
-                    var wc = arg.variant.wildc;
-                    _ = wc;
-                  }
+                var i = @as(usize, 0);
+                while (i < list.args.len()): (i += 2) {
+                  const k = self.getPatternType(list.args.itemAt(i)).?;
+                  const v = self.getPatternType(list.args.itemAt(i + 1)).?;
+                  typeset_k.set(k.typeid(), k);
+                  typeset_v.set(v.typeid(), v);
                 }
-                if (typeset_k.isNotEmpty()) {
-                  ty.klass().appendTParam(try self.compressTypes(&typeset_k));
-                  ty.klass().appendTParam(try self.compressTypes(&typeset_v));
-                }
+                ty.klass().appendTParam(try self.compressTypes(&typeset_k));
+                ty.klass().appendTParam(try self.compressTypes(&typeset_v));
               } else {
-                // reset namegen to this id snapshot. This effectively allows us to just generate a single
-                // variable with a name that matches whatever variable is generated in inferPattern() called above
-                self.tc.namegen.resetTo(id_snapshot);
                 ty.klass().empty = true;
-                ty.klass().appendTParamSlice(&[_]*Type{
-                  self.newVariableType(pat.token, al), self.newVariableType(pat.token, al)
-                });
+                const slice = &[_]*Type{
+                  self.newVariableType(pat.token, al),
+                  self.newVariableType(pat.token, al)
+                };
+                ty.klass().appendTParamSlice(slice);
+                // set the list type to union of map's key-value i.e. list{T} = list{K | V}
+                var uni = Type.newUnion(al).box(al);
+                uni.union_().addSlice(slice);
+                self.tc.insertType(inf_ty.klass().tparams.?.itemAt(0), uni);
               }
               cons.typ = ty;
               conses.append(cons);
@@ -533,7 +528,7 @@ pub const TypeChecker = struct {
               } else if (cls2.tparams != null) {
                 return error.CheckError;
               }
-              return t2; 
+              return t2;
             }
           }
         },
@@ -557,7 +552,9 @@ pub const TypeChecker = struct {
           return try self.compressTypes(&typeset);
         },
         .Instance => |*ins| {
-          return self.subPatternType(token, ins.cls, t2);
+          if (try self.subPatternType(token, ins.cls, t2)) |typ| {
+            return typ.toInstance(self.tc.ctx.allocator());
+          }
         },
         .Top => |*top| {
           return self.subPatternType(token, top.child, t2);
@@ -641,27 +638,32 @@ pub const TypeChecker = struct {
     }
 
     fn inferMatch(self: *@This(), node: *ast.MatchNode) !*Type {
+      // save current redundancy marker on the stack, restore on exit
+      const redmarker = self.redmarker;
+      defer self.redmarker = redmarker;
+      // save current match node on the stack, restore on exit
       const curr_mn = self.tc.match_node;
       defer self.tc.match_node = curr_mn;
+      // save current tests on the stack, restore on exit
       const curr_tests = self.tests;
       defer self.tests = curr_tests;
+      // reset match node, tests & redmarker for a new match check
       self.tc.match_node = node;
       self.tests = NodeList.init(self.tc.ctx.allocator());
+      self.redmarker = null;
+      // infer all
       if (node.decl) |decl| {
         _ = try self.tc.infer(decl);
       }
-      var m_expr_ty: *Type = try self.tc.infer(node.expr);
-      var expr_ty: *Type = m_expr_ty;
-      if (m_expr_ty.isInstance()) {
-        expr_ty = m_expr_ty.instance().cls;
-      }
+      var m_expr_ty = try self.tc.infer(node.expr);
+      var expr_ty = m_expr_ty.classOrInstanceClass();
       const al = self.tc.ctx.allocator();
       var conses = ConsList.init(al);
       for (node.cases.items()) |case| {
         // use a new scope for resolving each pattern, so that each variable type
         // doesn't conflict with existing types in ctx.
         self.tc.ctx.enterScope();
-        var expand = case.pattern.isConstructor() and case.pattern.variant.cons.tag != .Map;
+        const expand = case.pattern.isConstructor() and case.pattern.variant.cons.tag != .Map;
         var ty = try self.inferPattern(case.pattern, &conses, expand, al);
         std.log.debug("Type before resolution: {s}", .{self.tc.getTypename(ty)});
         if (case.pattern.isConstructor()) {
@@ -682,6 +684,7 @@ pub const TypeChecker = struct {
       }
       if (self.tc.diag.hasErrors()) return error.CheckError;
       var tree = try self.mc.compile(node);
+      if (self.tc.diag.hasErrors()) return error.CheckError;
       var lnode = try self.mc.lowerDecisionTree(tree, node.token);
       if (node.decl) |decl| {
         lnode.block().nodes.prepend(decl);
@@ -717,13 +720,6 @@ pub const TypeChecker = struct {
       return uni.toType().box(al);
     }
 
-    fn checkMatch(self: *@This(), node: *ast.MatchNode, flo: FlowMeta, lowrd: *Node) !void {
-      _ = lowrd;
-      _ = flo;
-      _ = node;
-      _ = self;
-    }
-
     fn flowInferMCondition(self: *@This(), flo_node: *FlowNode, ast_node: *Node) !void {
       const tst = ast_node.AstMCondition.tst;
       self.tests.append(self.getTestFromCondition(tst));
@@ -731,7 +727,7 @@ pub const TypeChecker = struct {
       try self.tc.flowInferCondition(flo_node, tst);
     }
 
-    fn inferFail(self: *@This(), node: *ast.FailNode) !*Type {
+    fn inferFail(self: *@This(), node: *ast.MarkerNode) !*Type {
       const nd = self.tests.getLast();
       var allow_rested = false;
       var ident: *ast.VarNode = undefined;
@@ -742,12 +738,6 @@ pub const TypeChecker = struct {
         ident = &nd.AstVar;
       }
       var ty = try self.tc.lookupName(ident, false);
-      // check if there are possible remaining constructors:
-      if (ty.isBoolTy()) {
-        if (self.isBoolExhaustive()) {
-          return self.tc.void_ty;
-        }
-      }
       if (!ty.isNeverTy() and !allow_rested) {
         // it is possible that this Fail node is from an enclosing `rested` constructor, because the
         // match compiler tries to produce an optimal decision tree without repeated constructor tests.
@@ -772,6 +762,48 @@ pub const TypeChecker = struct {
         }
       }
       return self.tc.void_ty;
+    }
+
+    fn inferRedundant(self: *@This(), node: *ast.MarkerNode) !*Type {
+      if (self.tc.diag.hasErrors()) {
+        return self.tc.void_ty;
+      }
+      if (self.tc.match_node) |nd| {
+        self.checkTestRedundancy(nd, self.tc.tenv.?, node.token);
+      }
+      // set redundancy marker after going through this node - helps
+      // to disambiguate the fact that the body containing this marker 
+      // isn't redundant, when possible.
+      self.redmarker = node;
+      return self.tc.void_ty;
+    }
+
+    fn checkMatch(self: *@This(), node: *ast.MatchNode, flo: FlowMeta, lowrd: *Node) !void {
+      _ = lowrd;
+      _ = flo;
+      _ = node;
+      _ = self;
+    }
+
+    /// check if a particular test/condition is redundant, given the variable of interest.
+    fn checkTestRedundancy(self: *@This(), match_node: *ast.MatchNode, env: *TypeEnv, err_token: Token) void {
+      //* If this variable is type 'never' at the point of this check (usually after narrowing),
+      //* then the test from which this check is done must be redundant.
+      //* We also add an extra check that `redmarker` MUST be null, because in some cases,
+      //* a non-redundant case (for ex. a legit wildcard case which makes a pattern match exhaustive)
+      //* might contain a redundant marker node because the case is used to satisfy exhaustiveness across
+      //* multiple bodys (of the lowered tree) i.e. shared across the tree.
+      //* In such cases, we shouldn't error, because the case is required for exhaustiveness. And as such,
+      //* `redmarker` will never be null for such cases. See `inferRedundant()`.
+      //* Hence, if we only error when redmarker is actually null and nty is never type, it means the
+      //* pattern is truly redundant.
+      const token = match_node.getVariableOfInterest();
+      const typ = env.getNarrowed(token.value) orelse env.getGlobal(token.value);
+      if (typ) |nty| {
+        if (nty.isNeverTy() and self.redmarker == null) {
+          return self.tc.softError(err_token, "redundant case", .{});
+        }
+      }
     }
   };
 
@@ -1162,7 +1194,14 @@ pub const TypeChecker = struct {
       node.typ = ty;
     } else {
       var ty = try self.lookupName(node, true);
-      env.putGlobal(node.token.value, ty);
+      if (!ty.isBoolTy()) {
+        env.putGlobal(node.token.value, ty);
+      } else {
+        // translate `bool` into `true | false`
+        const typ = Type.newBoolUnion(self.ctx.allocator());
+        env.putGlobal(node.token.value, typ);
+        self.insertVar(node.token.value, typ);
+      }
       node.typ = ty;
     }
   }
@@ -1443,9 +1482,6 @@ pub const TypeChecker = struct {
       try self.flowInfer(nd, false);
     }
     flo_node.res = .Resolved;
-    if (self.match_node) |node| {
-      self.checkTestRedundancy(node, &env, &out_nodes);
-    }
     // when type checking conditions along the false path, check the first sequential node
     // after the nodes on the false path. If that node has only one incoming edge,
     // then don’t pop the type information gathered on the false path
@@ -1563,7 +1599,7 @@ pub const TypeChecker = struct {
     }
   }
 
-  fn resolveType(self: *Self, typ: *Type, token: Token) TypeCheckError!void {
+  fn resolveClassType(self: *Self, typ: *Type, token: Token) TypeCheckError!void {
     if (typ.isClass()) {
       if (typ.klass().resolved) {
         return;
@@ -1577,50 +1613,76 @@ pub const TypeChecker = struct {
     }
   }
 
+  fn resolveType(self: *Self, typ: *Type, token: Token) TypeCheckError!void {
+    return switch (typ.kind) {
+      .Class => self.resolveClassType(typ, token),
+      .Union => |*uni| {
+        var tset = TypeHashSet.init(self.ctx.allocator());
+        for (uni.variants.values()) |ty| {
+          try self.resolveType(ty, token); 
+          tset.set(ty.typeid(), ty);
+        }
+        std.debug.assert(tset.count() > 1);
+        typ.* = Type.compressTypes(&tset, typ).*;
+      },
+      .Constant, .Concrete, .Variable, .Recursive, .Function, .Top => return,
+      else => unreachable,
+    };
+  }
+
   fn synthInferClsType(self: *Self, user_ty: *Type, core_ty: *Type, token: Token) !*Type {
     self.ctx.enterScope();
     defer self.ctx.leaveScope();
     var core_cls = core_ty.klass();
     var user_cls = user_ty.klass();
-    // if any type params in core_cls is already substituted, just return user_ty because
-    // it means user_ty is already undergoing monomorphization from an earlier call
-    var tparams: TypeList = undefined;
+    // generic
     if (core_cls.isGeneric()) {
+      // FIXME: this check is a hack since resolving a CastNode's type after linking
+      // (sometimes) breaks in the presence of recursive types.
+      if (user_ty.hasRecursive()) return user_ty;
       if (!user_cls.isGeneric()) {
         return self.error_(
           true, token, "type '{s}' is generic but used without generic parameters", 
           .{self.getTypename(user_ty)}
         );
       }
+      // if any type params in core_cls is already substituted, just return user_ty because
+      // it means user_ty is already undergoing monomorphization from an earlier call
       if (!core_cls.getSlice()[0].isVariable()) {
         return user_ty;
       }
-      tparams = user_cls.tparams.?.*;
+      var tparams = user_cls.tparams.?.*;
       // typelinker & parser ensures that user_cls' tparams and core_cls' tparams are equal in size
       for (core_cls.tparams.?.items(), tparams.items()) |tvar, ty| {
         self.insertType(tvar, ty);
       }
-    } else {
-      tparams = TypeList.init(self.ctx.allocator());
+      var synth_name = self.createSynthName(core_cls.name, core_cls.builtin, &tparams, null);
+      if (self.findGenInfo(core_cls.node.?, synth_name)) |info| {
+        return info.typ;
+      }
+      var cloned = core_cls.node.?.AstClass.clone(self.ctx.allocator());
+      // we only link when we're sure core_cls is an unsubstituted generic type
+      try self.linker.linkClass(&cloned.AstClass, true);
+      // make class non-generic to allow inference
+      cloned.AstClass.tparams = null;
+      user_cls.node = cloned;
+      var typ = try self.inferClass(cloned, user_ty);
+      self.addGenInfo(
+        core_cls.node.?,
+        cloned,
+        self.boxSynthName(core_cls.node.?.getToken(), synth_name),
+        typ
+      );
+      return typ;
     }
-    var synth_name = self.createSynthName(core_cls.name, core_cls.builtin, &tparams, null);
-    if (self.findGenInfo(core_cls.node.?, synth_name)) |info| {
-      return info.typ;
+    // non-generic
+    if (core_cls.node) |cls_node| {
+      var is_cyclic = self.cycles.contains(cls_node, Node.eql);
+      if (!cls_node.AstClass.checked and !is_cyclic) {
+        return try self.inferClass(cls_node, core_ty);
+      }
     }
-    var cloned = core_cls.node.?.AstClass.clone(self.ctx.allocator());
-    // we only link when we're sure core_cls is an unsubstituted generic type
-    try self.linker.linkClass(&cloned.AstClass, true);
-    // make class non-generic to allow inference
-    cloned.AstClass.tparams = null;
-    user_cls.node = cloned;
-    var typ = try self.inferClass(cloned, user_ty);
-    self.addGenInfo(
-      core_cls.node.?,
-      cloned,
-      self.boxSynthName(core_cls.node.?.getToken(), synth_name),
-      typ
-    );
-    return typ;
+    return core_ty;
   }
 
   fn inferLiteral(self: *Self, node: *ast.LiteralNode, kind: types.Concrete) !*Type {
@@ -1840,7 +1902,8 @@ pub const TypeChecker = struct {
     try self.linker.linkCast(node);
     var typ = try self.infer(node.expr);
     var cast_typ = node.typn.typ;
-    var true_ctx: RelationContext = undefined; 
+    try self.resolveType(cast_typ, node.typn.token);
+    var true_ctx: RelationContext = undefined;
     switch (node.expr.*) {
       .AstList, .AstTuple => |*col| {
         if (col.elems.len() == 0) {
@@ -1881,7 +1944,7 @@ pub const TypeChecker = struct {
       .AstDotAccess => |*da| {
         if (lhsTy.isFunction()) {
           if (da.lhs.getType()) |_ty| {
-            var ty = if (_ty.isInstance()) _ty.instance().cls else _ty;
+            var ty = _ty.classOrInstanceClass();
             if (ty.klass().getMethodTy(da.rhs.AstVar.token.value).? == lhsTy) {
               return self.error_(true, node.op.token,
                 "Cannot modify immutable type '{s}'",
@@ -2081,7 +2144,7 @@ pub const TypeChecker = struct {
       try self.flowInfer(flo.entry, true);
       self.current_fn = prev_fn;
       _ = self.cycles.pop();
-      ty.function().ret = try self.inferFunReturnType(node, flo);
+      ty.function().ret = try self.inferFunReturnType(node, flo, ty);
       fun.body.block().checked = true;
       try self.analyzer.analyzeDeadCodeWithTypes(flo.entry);
     }
@@ -2109,7 +2172,24 @@ pub const TypeChecker = struct {
     return uni.toType().box(self.ctx.allocator());
   }
 
-  fn inferFunReturnType(self: *Self, node: *Node, flo: FlowMeta) !*Type {
+  fn looksLikeNeverType(self: *Self, flo_nodes: *FlowList, fun_ty: *Type) bool {
+    // Conservatively check if a function calls itself infinitely
+    _ = self;
+    if (flo_nodes.len() == 1) {
+      if (flo_nodes.itemAt(0).bb.len() == 1) {
+        const node = flo_nodes.itemAt(0).bb.getLast().?;
+        if (node.isExprStmt() and node.AstExprStmt.expr.isCall()) {
+          const call = &node.AstExprStmt.expr.AstCall;
+          if (call.expr.getType()) |typ| {
+            return typ == fun_ty;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  fn inferFunReturnType(self: *Self, node: *Node, flo: FlowMeta, fun_ty: *Type) !*Type {
     if (node.AstFun.is_builtin) {
       // builtin function types are fully well-typed
       return node.AstFun.ret.?.AstNType.typ;
@@ -2150,9 +2230,18 @@ pub const TypeChecker = struct {
         }
       }
     }
+    var add_never_ty = false;
+    // if it looks like a never type function, set rec & never
+    if (self.looksLikeNeverType(&prev_flo_nodes, fun_ty)) {
+      add_never_ty = true;
+      has_rec_ty = true;
+      has_void_ty = false;
+    }
     // if we find the function has type noreturn, and there's no return node in the function,
     // simply turn off has_void_ty:
-    if (has_noreturn_ty and !has_return_node) has_void_ty = false;
+    if (has_noreturn_ty and !has_return_node) {
+      has_void_ty = false;
+    }
     // When inferring a function's return type:
     // - if we find a recursive type, and a non-void type, use the non-void type as the function's return type
     // - if we find a recursive type, and a void type or only a recursive type, then use the type 'never'
@@ -2180,6 +2269,7 @@ pub const TypeChecker = struct {
         uni.set(typ);
       }
     }
+    if (add_never_ty) uni.set(nvr_ty);
     if (has_noreturn_ty) uni.set(Type.newConcrete(.TyNoReturn).box(self.ctx.allocator()));
     var inf_ret_ty = uni.toType();
     if (node.AstFun.ret) |ret| {
@@ -2202,13 +2292,15 @@ pub const TypeChecker = struct {
             }
             // TODO: else { what happens here? }
           } else if (!ret_ty.isLikeVoid() and !ret_ty.isLikeNoreturn()) {
-            // control reaches exit from this node (`nd`), although this node
-            // doesn't return anything hence (void), but return type isn't void
-            return self.error_(
-              true, nd.getToken(),
-              "Control flow reaches exit from this point without returning type '{s}'",
-              .{self.getTypename(ret_ty)}
-            );
+            if (!(ret_ty.isRecursive() and ret_ty.recursive().base.isNeverTy())) {
+              // control reaches exit from this node (`nd`), although this node
+              // doesn't return anything hence (void), but return type isn't void
+              return self.error_(
+                true, nd.getToken(),
+                "Control flow reaches exit from this point without returning type '{s}'",
+                .{self.getTypename(ret_ty)}
+              );
+            }
           }
         }
       }
@@ -2247,23 +2339,21 @@ pub const TypeChecker = struct {
     ).toType().box(self.ctx.allocator());
   }
 
-  fn forbidReturnInInit(self: *Self, node: *Node) !void {
-    // we do not any return statements in an init method, to aid
+  fn forbidReturnInInit(self: *Self, node: *Node) void {
+    // we do not want any return statements in an init method, to aid
     // auto-returning of the self parameter after init() is called
     var list = self.getPrevFlowNodes(self.cfg.lookupFunc(node).?.exit);
-    var errors = false;
     for (list.items()) |flo_nd| {
       for (flo_nd.bb.items()) |nd| {
         if (nd.isRet()) {
-          errors = true;
           self.softError(
             nd.getToken(),
             "illegal return statement in `init` method", .{}
           );
+          break;
         }
       }
     }
-    if (errors) return error.CheckError;
   }
 
   fn inferClassPartial(self: *Self, node: *Node) !*Type {
@@ -2299,7 +2389,7 @@ pub const TypeChecker = struct {
             ty.klass().methods.items()[i] = (fun_ty);
           }
           if (ty.klass().getMethod(ks.InitVar)) |mtd| {
-            try self.forbidReturnInInit(mtd);
+            self.forbidReturnInInit(mtd);
           }
         }
       } else {
@@ -2314,6 +2404,7 @@ pub const TypeChecker = struct {
       }
       _ = self.cycles.pop();
       cls.checked = true;
+      ty.klass().resolved = true;
     }
     cls.typ = ty;
     return ty;
@@ -2472,7 +2563,7 @@ pub const TypeChecker = struct {
         .{self.getTypename(lhs_ty), prop.token.value}
       );
     }
-    var ty = (if (lhs_ty.isInstance()) lhs_ty.instance().cls else lhs_ty);
+    var ty = lhs_ty.classOrInstanceClass();
     try self.resolveType(ty, node.lhs.getToken());
     try self.checkDotAccess(node, ty, prop);
     return node.typ.?;
@@ -2729,7 +2820,7 @@ pub const TypeChecker = struct {
       // if the class has no init method, it shouldn't be called with arguments
       return self.error_(
         true, node.expr.getToken(),
-        "Too many arguments to class call: {}", .{node.args.len()}
+        "Too many arguments to class call. Expected none, but got {}.", .{node.args.len()}
       );
     }
     // check fields
@@ -2910,10 +3001,6 @@ pub const TypeChecker = struct {
 
   fn inferMatch(self: *Self, node: *ast.MatchNode) !*Type {
     return self.pc.inferMatch(node);
-  }
-
-  fn inferFail(self: *Self, node: *ast.FailNode) !*Type {
-    return self.pc.inferFail(node);
   }
 
   fn inferOrElse(self: *Self, node: *Node) !*Type {
@@ -3116,32 +3203,6 @@ pub const TypeChecker = struct {
       );
     }
   }
-  
-  /// check if a particular test/condition is redundant, given the variable of interest.
-  fn checkTestRedundancy(self: *@This(), match_node: *ast.MatchNode, env: *TypeEnv, nodes: *FlowList) void {
-    // TODO: Doesn't work properly!
-    // If this variable is type 'never' at the point of this check (usually after narrowing),
-    // then the test from which this check is done must be redundant.
-    const isFail = struct {
-      pub inline fn isFail(n: *Node, _: *Node) bool {
-        return n.isFail();
-      }
-    }.isFail;
-    const token = match_node.getVariableOfInterest();
-    const typ = env.getNarrowed(token.value) orelse env.getGlobal(token.value);
-    if (typ) |nty| {
-      // or bool typ 'cause bool isn't narrowed for exhaustiveness like other types, see inferFail()
-      if (nty.isNeverTy() or nty.isBoolTy()) {
-        if (nodes.isNotEmpty()) {
-          var dummy: *Node = undefined;
-          if (!nodes.getLast().bb.nodes.contains(dummy, isFail)) {
-            const tok = nodes.getLast().bb.getLast().?.getToken();
-            return self.softError(tok, "redundant case", .{});
-          }
-        }
-      }
-    }
-  }
 
   fn excludeError(self: *Self, typ: *Type, debug: Token) !*Type {
     var errors: usize = 0;
@@ -3239,10 +3300,12 @@ pub const TypeChecker = struct {
       .AstDotAccess => |*nd| try self.inferDotAccess(nd),
       .AstScope => |*nd| try self.inferScope(nd),
       .AstMatch => |*nd| self.inferMatch(nd) catch error.CheckError,
-      .AstFail => |*nd| try self.inferFail(nd),
+      .AstFailMarker => |*nd| try self.pc.inferFail(nd),
+      .AstRedundantMarker => |*nd| try self.pc.inferRedundant(nd),
       .AstProgram => |*nd| try self.inferProgram(nd),
       .AstIf, .AstElif, .AstSimpleIf, .AstLblArg,
       .AstCondition, .AstMCondition, .AstEmpty, .AstControl => return undefined,
+      .AstLiftMarker => unreachable,
     };
   }
 

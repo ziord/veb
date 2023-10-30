@@ -8,30 +8,45 @@ const StringType = *const vl.ObjString;
 const LOAD_FACTOR: f64 = @as(f64, vl.LOAD_FACTOR) / @as(f64, 100);
 
 pub fn Map(comptime K: type, comptime V: type) type {
-  const KVEntry = struct {key: K, value: V};
+  const MapItem = struct {hash: u64, key: K, value: V};
   return extern struct {
-    entries: [*]KVEntry,
-    capacity: usize,
+    /// actual entries, but with indices
+    entries: [*]i32,
+    /// compact entries
+    items: [*]MapItem,
+    /// helpers
+    entries_cap: usize,
+    items_cap: usize,
     len: usize,
     
     const Self = @This();
 
     const ctx = if (K == StringType) StringContext{} else ValueContext {};
-    const NullKey = if (K == StringType) &vl.StringNullKey else vl.NOTHING_VAL;
-    const TombVal = @as(vl.Value, vl.TRUE_VAL | vl.NOTHING_VAL);
+    const FreeEntry = -1;
+    const TombEntry = -2;
 
     pub fn init() Self {
-      return Self {.entries = &[_]KVEntry{}, .capacity = 0, .len = 0};
+      return Self {
+        .entries = &[_]i32{},
+        .items = &[_]MapItem{},
+        .entries_cap = 0,
+        .items_cap = 0,
+        .len = 0
+      };
     }
 
-    pub inline fn isNullKey(self: *Self, key: K) bool {
+    pub inline fn isFreeEntry(self: *Self, entry: i32) bool {
       _ = self;
-      return key == NullKey;
+      return entry == FreeEntry;
     }
 
-    inline fn isNullVal(self: *Self, value: V) bool {
+    pub inline fn isTombEntry(self: *Self, entry: i32) bool {
       _ = self;
-      return value == vl.NOTHING_VAL;
+      return entry == TombEntry;
+    }
+
+    pub inline fn isUsedEntry(self: *Self, entry: i32) bool {
+      return !self.isFreeEntry(entry) and !self.isTombEntry(entry);
     }
 
     pub const StringContext = struct {
@@ -65,144 +80,190 @@ pub fn Map(comptime K: type, comptime V: type) type {
       }
     };
 
-    fn resizeMap(self: *Self, vm: *VM, ensure: usize) void {
-      const new_capacity = Mem.growCapacity(self.capacity + ensure);
-      var tmp = vm.mem.allocBuf(KVEntry, new_capacity, vm);
-      std.debug.assert(new_capacity == tmp.len);
-      for (tmp) |*entry| {
-        entry.key = NullKey;
-        entry.value = vl.NOTHING_VAL;
+    inline fn shouldResizeEntries(self: *Self) bool {
+      return (self.len >= @as(usize, @intFromFloat((@as(f64, @floatFromInt(self.entries_cap)) * LOAD_FACTOR))));
+    }
+
+    inline fn shouldResizeItems(self: *Self) bool {
+      return (self.len >= self.items_cap);
+    }
+
+    fn resizeItemsIfNecessary(self: *Self, vm: *VM, ensure: usize, likely: bool) void {
+      if (likely) {
+        const new_capacity = Mem.growCapacity(self.items_cap + ensure);
+        self.items = Mem.resizeBuf(&vm.mem, MapItem, vm, self.items, self.items_cap, new_capacity).ptr;
+        self.items_cap = new_capacity;
       }
-      var new_entries: [*]KVEntry = @ptrCast(tmp);
+    }
+
+    inline fn usize_(val: i32) usize {
+      return @intCast(@as(u32, @bitCast(val)));
+    }
+
+    inline fn i32_(val: usize) i32 {
+      return @intCast(@as(i64, @bitCast(val)));
+    }
+
+    fn resizeMap(self: *Self, vm: *VM, ensure: usize) void {
+      self.resizeItemsIfNecessary(vm, ensure, self.shouldResizeItems());
+      const new_capacity = Mem.growCapacity(self.entries_cap + ensure);
+      const tmp = vm.mem.allocBuf(i32, new_capacity, vm);
+      std.debug.assert(new_capacity == tmp.len);
+      @memset(tmp, FreeEntry);
+      var new_entries: [*]i32 = tmp.ptr;
       self.len = 0; // reset len for resizing.
-      for (self.entries[0..self.capacity]) |*entry| {
-        if (!self.isNullKey(entry.key)) {
-          var slot = self.findEntry(new_entries, new_capacity, entry.key);
-          slot.* = entry.*;
+      for (self.entries[0..self.entries_cap]) |entry| {
+        if (self.isUsedEntry(entry)) {
+          const item = self.items[usize_(entry)];
+          const slot = self.findEntry(new_entries, new_capacity, item.key, item.hash);
+          new_entries[slot] = entry;
           self.len += 1;
         }
       }
-      vm.mem.freeBuf(KVEntry, vm, self.entries[0..self.capacity]);
+      vm.mem.freeBuf(i32, vm, self.entries[0..self.entries_cap]);
       self.entries = new_entries;
-      self.capacity = new_capacity;
+      self.entries_cap = new_capacity;
     }
 
-    fn findEntry(self: *Self, entries: [*]KVEntry, capacity: usize, key: K) *KVEntry {
+    fn findEntry(self: *Self, entries: [*]i32, capacity: usize, key: K, hash: u64) usize {
       const mask = capacity - 1;
-      var index: u64 = ctx.hash(key) & mask;
-      var start_index = index;
-      var deleted: ?*KVEntry = null;
-      var entry: *KVEntry = undefined;
+      var i = hash & mask;
+      var start = i;
+      var deleted: ?usize = null;
+      var entry: i32 = undefined;
       while (true) {
-        entry = &entries[index];
-        if (self.isNullKey(entry.key)) {
-          // means fresh entry
-          if (self.isNullVal(entry.value)) {
-            return if (deleted) |delt| delt else entry;
-          }
-          // means deleted entry
-          else if (deleted == null) {
-            // save first deleted entry for reuse when possible
-            deleted = entry;
-          }
-        } else if (ctx.eql(entry.key, key)) {
-          return entry;
+        entry = entries[i];
+        if (self.isFreeEntry(entry)) {
+          // if we've encountered a tomb entry, return that, otherwise this fresh entry
+          return if (deleted) |delt| delt else i;
+        } else if (self.isTombEntry(entry)) {
+          // save first deleted entry for reuse when possible
+          deleted = i;
+        } else if (ctx.eql(self.items[usize_(entry)].key, key)) {
+          return i;
         }
-        index = (index + 1) & mask;
-        // TODO: how to lift this out of the loop body, since zig doesn't support do-while loops
-        if (index == start_index) break;
+        i = (i + 1) & mask;
+        if (i == start) break;
       }
       util.assert(deleted != null, "map must have at least one deleted slot");
       return deleted.?;
     }
 
-    pub fn ensureCapacity(self: *Self, vm: *VM, len: usize) void {
-      if (self.capacity < len) {
-        self.resizeMap(vm, len);
+    pub fn ensureCapacity(self: *Self, vm: *VM, capacity: usize) void {
+      if (self.entries_cap < capacity) {
+        self.resizeMap(vm, capacity);
       }
     }
 
     pub fn set(self: *Self, key: K, value: V, vm: *VM) bool {
-      if (self.len >= @as(usize, @intFromFloat((@as(f64, @floatFromInt(self.capacity)) * LOAD_FACTOR)))) {
+      if (self.shouldResizeEntries()) {
         self.resizeMap(vm, 0);
+      } else if (self.shouldResizeItems()) {
+        self.resizeItemsIfNecessary(vm, 0, true);
       }
-      var entry = self.findEntry(self.entries, self.capacity, key);
-      var is_new_key = self.isNullKey(entry.key);
-      if (is_new_key) self.len += 1;
-      entry.key = key;
-      entry.value = value;
+      const hash = ctx.hash(key);
+      const slot = self.findEntry(self.entries, self.entries_cap, key, hash);
+      const is_new_key = self.isFreeEntry(self.entries[slot]);
+      if (is_new_key) {
+        self.items[self.len] = .{.hash = hash, .key = key, .value = value};
+        self.entries[slot] = i32_(self.len);
+        self.len += 1;
+      } else {
+        self.items[usize_(self.entries[slot])].value = value;
+      }
       return is_new_key;
     }
 
     pub fn get(self: *Self, key: K) ?V {
-      if (self.capacity == 0) {
+      if (self.entries_cap == 0) {
         return null;
       }
-      var entry = self.findEntry(self.entries, self.capacity, key);
-      return if (self.isNullKey(entry.key)) null else entry.value;
+      const slot = self.findEntry(self.entries, self.entries_cap, key, ctx.hash(key));
+      return if (self.isUsedEntry(self.entries[slot])) self.items[usize_(self.entries[slot])].value else null;
     }
 
-    pub fn del(self: *Self, key: K) bool {
-      if (self.capacity == 0) {
+    /// ordered delete
+    pub fn delete(self: *Self, key: K) bool {
+      if (self.entries_cap == 0) {
         return false;
       }
-      var entry = self.findEntry(self.entries, self.capacity, key);
-      if (self.isNullKey(entry.key)) {
-        return false;
-      } else {
-        self.len -= 1;
-        entry.key = NullKey;
-        entry.value = TombVal;
+      const slot = self.findEntry(self.entries, self.entries_cap, key, ctx.hash(key));
+      if (self.isUsedEntry(self.entries[slot])) {
+        // move all items after `slot` forward
+        const len = self.len - 1;
+        const deleted = self.entries[slot];
+        const start = usize_(deleted);
+        for (start..len) |i| {
+          self.items[i] = self.items[i + 1];
+          if (i == len) break;
+        }
+        self.len = len;
+        // set tomb entry
+        self.entries[slot] = TombEntry;
+        for (self.entries[0..self.entries_cap], 0..) |entry, i| {
+          if (self.isUsedEntry(entry)) {
+            if (entry >= deleted) {
+              self.entries[i] -= 1;
+            }
+          }
+        }
         return true;
       }
+      return false;
+    }
+
+    /// swap delete
+    pub fn remove(self: *Self, key: K) bool {
+      if (self.entries_cap == 0) {
+        return false;
+      }
+      const slot = self.findEntry(self.entries, self.entries_cap, key, ctx.hash(key));
+      if (self.isUsedEntry(self.entries[slot])) {
+        // swap item at slot with item at last
+        const last_item = self.items[self.len - 1];
+        self.items[usize_(self.entries[slot])] = last_item;
+        const last_item_slot = self.findEntry(self.entries, self.entries_cap, last_item.key, last_item.hash);
+        self.entries[last_item_slot] = self.entries[slot];
+        // set tomb entry
+        self.entries[slot] = TombEntry;
+        self.len -= 1;
+        return true;
+      }
+      return false;
     }
 
     pub fn display(self: *Self) void {
       util.print("{s}", .{"{"});
       var i: u32 = 0;
       var last = @as(i64, @intCast(self.len)) - 1;
-      for (self.entries[0..self.capacity]) |entry| {
-        if (!self.isNullKey(entry.key)) {
-          @call(.always_inline, vl.display, .{entry.key});
-          util.print(": ", .{});
-          @call(.always_inline, vl.display, .{entry.value});
-          if (i < last) {
-            util.print(", ", .{});
-          }
-          i += 1;
+      for (self.items[0..self.len]) |itm| {
+        @call(.always_inline, vl.display, .{itm.key});
+        util.print(": ", .{});
+        @call(.always_inline, vl.display, .{itm.value});
+        if (i < last) {
+          util.print(", ", .{});
         }
+        i += 1;
       }
       util.print("{s}", .{"}"});
     }
 
     pub fn keys(self: *Self, vm: *VM) vl.Value {
       var list = vl.createList(vm, self.len);
-      var entry: *KVEntry = undefined;
-      var idx: usize = 0;
       var keyc: usize = 0;
-      while (keyc < self.len) {
-        entry = &self.entries[idx];
-        if (!self.isNullKey(entry.key)) {
-          list.items[keyc] = entry.key;
-          keyc += 1;
-        }
-        idx += 1;
+      for (self.items[0..self.len]) |itm| {
+        list.items[keyc] = itm.key;
+        keyc += 1;
       }
       return vl.objVal(list);
     }
 
     pub fn values(self: *Self, vm: *VM) vl.Value {
       var list = vl.createList(vm, self.len);
-      var entry: *KVEntry = undefined;
-      var idx: usize = 0;
-      var valc: usize = 0;
-      while (valc < self.len) {
-        entry = &self.entries[idx];
-        if (!self.isNullKey(entry.key)) {
-          list.items[valc] = entry.value;
-          valc += 1;
-        }
-        idx += 1;
+      var keyc: usize = 0;
+      for (self.items[0..self.len]) |itm| {
+        list.items[keyc] = itm.value;
+        keyc += 1;
       }
       return vl.objVal(list);
     }
@@ -214,33 +275,37 @@ pub fn Map(comptime K: type, comptime V: type) type {
           @compileError("findInterned() called with non-stringmap\n");
         }
       }
-      if (self.capacity == 0) {
+      if (self.entries_cap == 0) {
         return null;
       }
-      const mask = self.capacity - 1;
-      var index = hash & mask;
-      var entry: *KVEntry = undefined;
+      const mask = self.entries_cap - 1;
+      var i = hash & mask;
+      var entry: i32 = undefined;
       while (true) {
-        entry = &self.entries[index];
-        if (self.isNullKey(entry.key)) {
-          if (self.isNullVal(entry.value)) {
-            return null;
-          }
-        } else if (ctx.cmpInterned(entry.key, str, hash)) {
-          return entry.key;
+        entry = self.entries[i];
+        if (self.isFreeEntry(entry)) {
+          // if we've encountered a tomb entry, return that otherwise this fresh entry
+          return null;
+        } else if (self.isTombEntry(entry)) {
+          // noop
+        } else if (ctx.cmpInterned(self.items[usize_(entry)].key, str, hash)) {
+          return self.items[usize_(entry)].key;
         }
-        index = (index + 1) & mask;
+        i = (i + 1) & mask;
       }
       unreachable;
     }
 
     pub fn free(self: *Self, vm: *VM) void {
-      vm.mem.freeBuf(KVEntry, vm, self.entries[0..self.capacity]);
+      vm.mem.freeBuf(i32, vm, self.entries[0..self.entries_cap]);
+      vm.mem.freeBuf(MapItem, vm, self.items[0..self.items_cap]);
     }
 
     pub fn clearAndFree(self: *Self, vm: *VM) void {
-      vm.mem.freeBuf(KVEntry, vm, self.entries);
-      self.capacity = 0;
+      vm.mem.freeBuf(i32, vm, self.entries[0..self.entries_cap]);
+      vm.mem.freeBuf(MapItem, vm, self.items[0..self.items_cap]);
+      self.entries_cap = 0;
+      self.items_cap = 0;
       self.len = 0;
     }
 
@@ -257,17 +322,14 @@ pub fn Map(comptime K: type, comptime V: type) type {
       }
 
       pub fn next(self: *@This()) ?K {
-        var entry: *KVEntry = undefined;
+        var entry: *MapItem = undefined;
         while (self.curr < self.map.capacity) {
-          entry = &self.map.entries[self.curr];
+          entry = &self.map.items[self.curr];
           self.curr += 1;
-          if (!self.map.isNullKey(entry.key)) {
-            return entry.key;
-          }
+          return entry.key;
         }
         return null;
       }
     };
-
   };
 }

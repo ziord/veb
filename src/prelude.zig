@@ -54,11 +54,19 @@ pub const BuiltinsSrc =
 \\ end
 \\
 \\ class map{K, V}
-\\  def set(key: K, value: V): void
+\\  def set(key: K, value: V): bool
 \\    #[[internal]]
 \\  end
 \\
 \\  def get(key: K): V?
+\\    #[[internal]]
+\\  end
+\\
+\\  def delete(key: K): bool
+\\    #[[internal]]
+\\  end
+\\
+\\  def remove(key: K): bool
 \\    #[[internal]]
 \\  end
 \\
@@ -71,6 +79,10 @@ pub const BuiltinsSrc =
 \\  end
 \\  
 \\  def items(): list{tuple{K | V}}
+\\    #[[internal]]
+\\  end
+\\
+\\  def listItems(): list{K | V}
 \\    #[[internal]]
 \\  end
 \\

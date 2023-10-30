@@ -24,6 +24,9 @@ pub const NativeFns = [_][]const u8 {
   "keys",
   "values",
   "items",
+  "listItems",
+  "delete",
+  "remove",
 };
 
 
@@ -121,12 +124,13 @@ fn createStringClass(vm: *VM) *vl.ObjClass {
   const arities = [_]u32 {0};
   //*** index into NativeFns array ***//
   const names = [_]usize{5};
-  var cls = vl.createClass(vm, (@sizeOf(@TypeOf(methods)) / methods.len));
+  // important to do this first
+  var cls = vl.createClass(vm, methods.len);
+  vm.classes.string = cls;
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
   }
   cls.name = newString(vm, ks.StrVar);
-  vm.classes.string = cls;
   return cls;
 }
 
@@ -186,7 +190,7 @@ fn createListClass(vm: *VM) *vl.ObjClass {
   const arities = [_]u32 {VarArgC, 1, 0, 0, 1};
   //*** index into NativeFns array ***//
   const names = [_]usize{7, 4, 5, 8, 10};
-  var cls = vl.createClass(vm, (@sizeOf(@TypeOf(methods)) / methods.len));
+  var cls = vl.createClass(vm, methods.len);
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
   }
@@ -230,7 +234,7 @@ fn createTupleClass(vm: *VM) *vl.ObjClass {
   const arities = [_]u32 {0, VarArgC, 1};
   //*** index into NativeFns array ***//
   const names = [_]usize{7, 5, 10};
-  var cls = vl.createClass(vm, (@sizeOf(@TypeOf(methods)) / methods.len));
+  var cls = vl.createClass(vm, methods.len);
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
   }
@@ -248,12 +252,12 @@ fn mapLen(vm: *VM, argc: u32, args: u32) Value {
   return vl.numberVal(@floatFromInt(map.meta.len));
 }
 
-// set(key: K, value: V): void
+// set(key: K, value: V): bool
 fn mapSet(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var map = vl.asMap(getArg(vm, args));
-  _ = map.meta.set(getArg(vm, args + 1), getArg(vm, args + 2), vm);
-  return NOTHING_VAL;
+  var res = map.meta.set(getArg(vm, args + 1), getArg(vm, args + 2), vm);
+  return vl.boolVal(res);
 }
 
 // get(key: K): V?
@@ -263,6 +267,20 @@ fn mapGet(vm: *VM, argc: u32, args: u32) Value {
     return res;
   }
   return vl.NIL_VAL;
+}
+
+// delete(key: K): bool
+fn mapDel(vm: *VM, argc: u32, args: u32) Value {
+  _ = argc;
+  const val = vl.asMap(getArg(vm, args)).meta.delete(getArg(vm, args + 1));
+  return vl.boolVal(val);
+}
+
+// remove(key: K): bool
+fn mapRemove(vm: *VM, argc: u32, args: u32) Value {
+  _ = argc;
+  const val = vl.asMap(getArg(vm, args)).meta.remove(getArg(vm, args + 1));
+  return vl.boolVal(val);
 }
 
 // keys(): list{K}
@@ -282,18 +300,27 @@ fn mapItems(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var map = vl.asMap(getArg(vm, args));
   var list = vl.createList(vm, map.meta.len);
-  var idx: usize = 0;
   var valc: usize = 0;
-  while (valc < map.meta.len) {
-    var entry = &map.meta.entries[idx];
-    if (!map.meta.isNullKey(entry.key)) {
-      var tuple = vl.createTuple(vm, 2);
-      tuple.items[0] = entry.key;
-      tuple.items[1] = entry.value;
-      list.items[valc] = vl.objVal(tuple);
-      valc += 1;
-    }
-    idx += 1;
+  for (map.meta.items[0..map.meta.len]) |item| {
+    var tuple = vl.createTuple(vm, 2);
+    tuple.items[0] = item.key;
+    tuple.items[1] = item.value;
+    list.items[valc] = vl.objVal(tuple);
+    valc += 1;
+  }
+  return vl.objVal(list);
+}
+
+// listItems(): list{K | V}
+fn mapListItems(vm: *VM, argc: u32, args: u32) Value {
+  _ = argc;
+  var map = vl.asMap(getArg(vm, args));
+  var list = vl.createList(vm, map.meta.len << 1);
+  var kvc: usize = 0;
+  for (map.meta.items[0..map.meta.len]) |item| {
+    list.items[kvc] = item.key;
+    list.items[kvc + 1] = item.value;
+    kvc += 2;
   }
   return vl.objVal(list);
 }
@@ -303,16 +330,19 @@ fn createMapClass(vm: *VM) *vl.ObjClass {
   const methods = [_]NativeFn {
     mapSet,
     mapGet,
+    mapDel,
+    mapRemove,
     mapKeys,
     mapValues,
     mapItems,
+    mapListItems,
     mapLen
   };
   //*** arity of each method ***//
-  const arities = [_]u32 {2, 1, 0, 0, 0, 0};
+  const arities = [_]u32 {2, 1, 1, 1, 0, 0, 0, 0, 0};
   //*** index into NativeFns array ***//
-  const names = [_]usize{5, 9, 10, 11, 12, 5};
-  var cls = vl.createClass(vm, (@sizeOf(@TypeOf(methods)) / methods.len));
+  const names = [_]usize{5, 9, 15, 16, 10, 11, 12, 14, 5};
+  var cls = vl.createClass(vm, methods.len);
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
   }
@@ -344,7 +374,7 @@ fn createErrClass(vm: *VM) *vl.ObjClass {
   const arities = [_]u32 {1, 0};
   //*** index into NativeFns array ***//
   const names = [_]usize{7, 6};
-  var cls = vl.createClass(vm, (@sizeOf(@TypeOf(methods)) / methods.len));
+  var cls = vl.createClass(vm, methods.len);
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
   }
@@ -354,17 +384,18 @@ fn createErrClass(vm: *VM) *vl.ObjClass {
 }
 
 pub fn addBuiltins(vm: *VM) void {
+  // Add builtin classes
+  // NOTE: string class should always be created first, as other things
+  //       like addNativeFn, and other classes depend on it!
+  addNativeClass(vm, createStringClass(vm));
+  addNativeClass(vm, createListClass(vm));
+  addNativeClass(vm, createTupleClass(vm));
+  addNativeClass(vm, createMapClass(vm));
+  addNativeClass(vm, createErrClass(vm));
   // Add builtin functions
   //** VM, fn-name, fn-name-index, arity, fn-exec **//
   addNativeFn(vm, "assert", 0, 2, fnAssert);
   addNativeFn(vm, "exit", 1, 1, fnExit);
   addNativeFn(vm, "panic", 2, 1, fnPanic);
   addNativeFn(vm, "print", 3, 1, fnPrint);
-
-  // Add builtin classes
-  addNativeClass(vm, createStringClass(vm));
-  addNativeClass(vm, createListClass(vm));
-  addNativeClass(vm, createTupleClass(vm));
-  addNativeClass(vm, createMapClass(vm));
-  addNativeClass(vm, createErrClass(vm));
 }

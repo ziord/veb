@@ -1,15 +1,15 @@
 pub const std = @import("std");
-pub const parse = @import("../parse.zig");
-pub const compile = @import("../compile.zig");
-pub const vm = @import("../vm.zig");
-pub const debug = @import("../debug.zig");
-pub const value = @import("../value.zig");
-pub const link = @import("../link.zig");
-pub const check = @import("../check.zig");
-pub const flow = @import("../flow.zig");
-pub const ast = @import("../ast.zig");
-pub const diagnostics = @import("../diagnostics.zig");
-pub const VebAllocator = @import("../allocator.zig");
+pub const parse = @import("../src/parse.zig");
+pub const compile = @import("../src/compile.zig");
+pub const vm = @import("../src/vm.zig");
+pub const debug = @import("../src/debug.zig");
+pub const value = @import("../src/value.zig");
+pub const link = @import("../src/link.zig");
+pub const check = @import("../src/check.zig");
+pub const flow = @import("../src/flow.zig");
+pub const ast = @import("../src/ast.zig");
+pub const diagnostics = @import("../src/diagnostics.zig");
+pub const VebAllocator = @import("../src/allocator.zig");
 
 pub fn doRuntimeTest(src: []const u8) !void {
   var cna = VebAllocator.init(std.heap.ArenaAllocator.init(std.heap.page_allocator));

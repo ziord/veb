@@ -18,9 +18,10 @@ pub const Constructor = struct {
   builtin: bool,
   /// has rest pattern
   rested: bool,
-  name: []const u8,
   tag: ConsTag,
   args: ds.ArrayList(*Pattern),
+  name: []const u8,
+  synth_name: ?[]const u8 = null,
   targs: ?*ast.AstList = null,
   node: ?*ast.AstNode = null,
   typ: ?*Type = null,
@@ -30,7 +31,7 @@ pub const Constructor = struct {
   }
 
   pub fn eql(self: *@This(), other: *@This()) bool {
-    return std.mem.eql(u8, self.name, other.name);
+    return std.mem.eql(u8, self.cname(), other.cname());
   }
 
   pub fn newOrCons(al: std.mem.Allocator) @This() {
@@ -73,6 +74,31 @@ pub const Constructor = struct {
     return this;
   }
 
+  pub fn cname(self: *@This()) []const u8 {
+    if (self.synth_name) |name| {
+      return name;
+    }
+    if (self.typ) |typ| {
+      if (!typ.isClsGeneric()) {
+        self.synth_name = self.name;
+        return self.name;
+      } else if (self.synth_name) |name| {
+        return name;
+      } else {
+        const name = TypeChecker.makeSynthName(
+          self.args.allocator(),
+          self.name,
+          typ.klass().builtin,
+          typ.klass().tparams.?,
+          null
+        );
+        self.synth_name = name;
+        return name;
+      }
+    }
+    return self.name;
+  }
+
   pub fn toVariant(self: @This(), al: std.mem.Allocator) *MatchVariant {
     return util.box(MatchVariant, .{.cons = self}, al);
   }
@@ -91,6 +117,7 @@ pub const Constructor = struct {
     if (self.typ) |typ| {
       new.typ = typ.clone(al);
     }
+    new.synth_name = self.synth_name;
     return new;
   }
 
@@ -193,7 +220,8 @@ pub const Relation = struct {
     std.debug.assert(self.pattern.isVariable());
     var node = ast.AstNode.create(al);
     // TODO: clone var?
-    node.* = .{.AstVarDecl = ast.VarDeclNode.init(&self.pattern.variant.vari.ident.AstVar, self.ident, false)};
+    const vr = self.pattern.variant.vari.ident.clone(al);
+    node.* = .{.AstVarDecl = ast.VarDeclNode.init(&vr.AstVar, self.ident.clone(al), false)};
     return node;
   }
 
@@ -426,6 +454,13 @@ const Result = union(enum) {
       inline else => |*this| try this.render(depth, al),
     };
   }
+
+  pub fn clone(self: *@This(), al: std.mem.Allocator) *@This() {
+    return switch (self.*) {
+      .leaf => |*nd| util.box(Result, .{.leaf = nd.clone(al)}, al),
+      inline else => |*nd| nd.clone(al),
+    };
+  }
 };
 
 /// Leaf(k) -> success(k)
@@ -444,6 +479,10 @@ const Fail = struct {
 
   inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer) !*ast.AstNode {
     return t.tFail(self);
+  }
+
+  fn clone(self: *@This(), al: std.mem.Allocator) *Result {
+    return util.box(Result, .{.fail = self.*}, al);
   }
 };
 
@@ -472,6 +511,11 @@ pub const Guard = struct {
     try addDepth(&writer, depth + 1);
     _ = try writer.write(")\n");
     return writer.context.items;
+  }
+
+  fn clone(self: *@This(), al: std.mem.Allocator) *Result {
+    const cln: Guard = .{.cond = self.cond.clone(al), .body = self.body.clone(al), .fallback = self.fallback.clone(al)};
+    return util.box(Result, .{.gard = cln}, al);
   }
 
   inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer) !*ast.AstNode {
@@ -507,6 +551,13 @@ const Switch = struct {
     _ = try writer.write(")\n");
     return writer.context.items;
   }
+    
+  fn clone(self: *@This(), al: std.mem.Allocator) *Result {
+    var swch = @This().init(self.occ.clone(al), self.token);
+    swch.branches[0] = self.branches[0].clone(al);
+    swch.branches[1] = self.branches[1].clone(al);
+    return util.box(Result, .{.swch = swch}, al);
+  }
 
   inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer) !*ast.AstNode {
     return t.tSwitch(self);
@@ -518,14 +569,14 @@ const Test = union (enum) {
   cons: Constructor,
   wildc: Wildcard,
 
-  fn isConstructor(self: *@This()) bool {
+  fn isConstructor(self: *const @This()) bool {
     return switch (self.*) {
       .cons => true,
       else => false,
     };
   }
 
-  fn isWildcard(self: *@This()) bool {
+  fn isWildcard(self: *const @This()) bool {
     return switch (self.*) {
       .wildc => true,
       else => false,
@@ -547,6 +598,12 @@ const Branch = struct {
   lhs: Test,
   /// Switch | Guard | Leaf | Fail
   rhs: *Result,
+
+  fn clone(self: *@This(), al: std.mem.Allocator) @This() {
+    const lhs: Test = if (self.lhs.isConstructor()) .{.cons = self.lhs.cons.clone(al)} else .{.wildc = self.lhs.wildc.clone(al)};
+    const rhs = self.rhs.clone(al);
+    return .{.lhs = lhs, .rhs = rhs};
+  }
 
   pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
     var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
@@ -706,22 +763,23 @@ pub const MatchCompiler = struct {
     /// save this constructor, its position (row) in the pattern matrix, and its frequency
     /// of occurrence in the matrix
     fn addRow(self: *@This(), cons: *Constructor, i: usize) void {
-      if (self.row.get(cons.name)) |row| {
+      const name = cons.cname();
+      if (self.row.get(name)) |row| {
         if (row.pos != i) {
-          self.row.put(cons.name, .{.pos = row.pos, .count = row.count + 1}) catch {};
+          self.row.put(name, .{.pos = row.pos, .count = row.count + 1}) catch {};
         }
       } else {
-        self.row.put(cons.name, .{.pos = i, .count = 1}) catch {};
+        self.row.put(name, .{.pos = i, .count = 1}) catch {};
       }
     }
 
     /// save this constructor's column in the pattern matrix, and its frequency of occurrence
     /// accross the column, in the matrix
     fn addColumn(self: *@This(), cons: *Constructor, i: usize) void {
-      if (self.col.getEntry(.{.name = cons.name, .column = i})) |entry| {
+      if (self.col.getEntry(.{.name = cons.cname(), .column = i})) |entry| {
         self.col.put(entry.key_ptr.*, entry.value_ptr.* + 1) catch {};
       } else {
-        self.col.put(.{.name = cons.name, .column = i}, 1) catch {};
+        self.col.put(.{.name = cons.cname(), .column = i}, 1) catch {};
       }
     }
 
@@ -729,10 +787,11 @@ pub const MatchCompiler = struct {
       defer self.disamb.clearRetainingCapacity();
       for (mrel.relations.items()) |rel| {
         if (rel.pattern.isConstructor()) {
-          if (self.disamb.get(rel.pattern.variant.cons.name)) |val| {
-            self.disamb.put(rel.pattern.variant.cons.name, val + 1) catch {};
+          const cons_name = rel.pattern.variant.cons.cname();
+          if (self.disamb.get(cons_name)) |val| {
+            self.disamb.put(cons_name, val + 1) catch {};
           } else {
-            self.disamb.put(rel.pattern.variant.cons.name, 1) catch {};
+            self.disamb.put(cons_name, 1) catch {};
           }
           if (self.disamb.get(name)) |val| {
             if (val > 1) {
@@ -775,11 +834,11 @@ pub const MatchCompiler = struct {
       // select a constructor from the first clause that has the highest occurrence in other clauses
       for (mrel.relations.items(), 0..) |rel, i| {
         if (rel.pattern.isConstructor()) {
-          const cons = &rel.pattern.variant.cons;
-          if (self.row.get(cons.name)) |row| {
+          const cons_name = rel.pattern.variant.cons.cname();
+          if (self.row.get(cons_name)) |row| {
             if (row.count > maxc) {
               maxc = row.count;
-              best = cons.name;
+              best = cons_name;
               idx = i;
             }
           }
@@ -810,12 +869,12 @@ pub const MatchCompiler = struct {
         var nmaxc: usize = 0;
         for (mrel.relations.items(), 0..) |rel, i| {
           if (rel.pattern.isConstructor()) {
-            const cons = &rel.pattern.variant.cons;
-            if (self.col.get(.{.name = cons.name, .column = i})) |count| {
+            const cons_name = rel.pattern.variant.cons.cname();
+            if (self.col.get(.{.name = cons_name, .column = i})) |count| {
               if (count > nmaxc) {
                 nmaxc = count;
                 nidx = i;
-                nbest = cons.name;
+                nbest = cons_name;
               }
             }
           }
@@ -1044,9 +1103,10 @@ pub const MatchCompiler = struct {
   /// transform a constructor to a new one with args replaced with Variables()
   fn transformConstructor(self: *Self, cons: *Constructor, ident: *ast.VarNode) Constructor {
     // TODO: move `node` & `typ` to init
-    var new = Constructor.init(cons.name, cons.builtin, cons.tag, cons.rested, self.allocator);
+    var new = Constructor.init(cons.cname(), cons.builtin, cons.tag, cons.rested, self.allocator);
     new.node = cons.node;
     new.typ = cons.typ;
+    new.synth_name = cons.synth_name;
     if (cons.targs) |targs| {
       new.targs = targs.clone(self.allocator).box();
     }
@@ -1103,6 +1163,10 @@ pub const MatchCompiler = struct {
                   cases_b.append(case);
                   continue;
                 }
+              }
+              // FIXME: this is a hack. Needs a proper fix.
+              else if (cons.tag != .Other and tcons.rested != cons.rested and cons.rested) {
+                cases_b.append(case);
               }
               var mrel = MultiRelation.init(self.allocator);
               for (tcons.args.items(), cons.args.items()[0..tcons.args.len()]) |vr, pat| {
@@ -1279,6 +1343,8 @@ pub const MatchCompiler = struct {
     return util.box(Result, .{.swch = swch}, self.allocator);
   }
 
+  /// This implements pattern matching as described by Jules Jacobs, with modifications & extensions.
+  /// Some inspiration from Maranget is also utilized.
   pub fn compile(self: *Self, node: *ast.MatchNode) !*DecisionTree {
     // we match on m_expr
     std.log.debug("match ast dump:\n{s}\n", .{node.render(0, self.allocator) catch ""});
@@ -1408,7 +1474,7 @@ pub const DecisionTreeTransformer = struct {
   fn constructorMethodToVarDecl(self: *Self, cons: *Constructor, ident: *Node, method_name: []const u8) *Node {
     var decl = Node.create(self.allocator);
     std.debug.assert(cons.args.len() == 1);
-    const call = self.newMethodCall(ident.clone(self.allocator), method_name);
+    const call = self.newMethodCall(ident, method_name);
     decl.* = .{.AstVarDecl = ast.VarDeclNode.init(&cons.args.itemAt(0).variant.vari.ident.AstVar, call, false)};
     return decl;
   }
@@ -1447,100 +1513,102 @@ pub const DecisionTreeTransformer = struct {
     var els_branch = swch.branches[1];
     // make occ is test(..)
     std.debug.assert(if_branch.lhs.isConstructor());
-    const cons = &if_branch.lhs.cons;
-    const cons_ty = cons.typ.?;
-    var typs = if (cons_ty.isUnion()) cons_ty.union_().variants.values() else &[_]*Type{cons_ty};
+    const ty = if_branch.lhs.cons.typ.?.classOrInstanceClass();
+    if (ty.isUnion()) {
+      return self.tc.error_(
+        true, swch.token,
+        "cannot match on constructor with ambiguous multiple types.\n\t" ++
+        "Consider narrowing one of this type: '{s}'",
+        .{ty.typename(self.allocator)}
+      );
+    }
     var node = self.newBlock();
-    for (typs) |ty| {
-      var if_cond: *Node = undefined;
-      var if_body = self.newBlock();
-      var id = swch.occ.clone(self.allocator);
-      var skip_construction = false;
-      _ = skip_construction;
-      switch (cons.tag) {
-        .List, .Tuple, .Map, .Err, .Other => {
-          var lhs = Node.create(self.allocator);
-          const tyn = self.newTypeNode(ty, swch.token);
-          lhs.* = .{.AstBinary = ast.BinaryNode.init(id, tyn, self.isToken(swch.token))};
-          // list/tuple
-          if (cons.tag == .List or cons.tag == .Tuple) {
-            // length check & rested: id.len() (>= || ==) cons.args.len
-            var rhs = Node.create(self.allocator);
-            const len = self.newNumberNode(swch.token, @floatFromInt(cons.args.len()));
-            const op = if (cons.rested) self.geqToken(swch.token) else self.eqeqToken(swch.token);
-            rhs.* = .{.AstBinary = ast.BinaryNode.init(self.newMethodCall(id, "len"), len, op)};
-            if_cond = Node.create(self.allocator);
-            if_cond.* = .{.AstBinary = ast.BinaryNode.init(lhs, rhs, self.andToken(swch.token))};
-            lhs.AstBinary.allow_rested = cons.rested;
-            for (cons.args.items(), 0..) |arg, index| {
+    var if_cond: *Node = undefined;
+    var if_body = self.newBlock();
+    var id = swch.occ.clone(self.allocator);
+    var cons = &if_branch.lhs.cons;
+    switch (cons.tag) {
+      .List, .Tuple, .Map, .Err, .Other => {
+        var lhs = Node.create(self.allocator);
+        const tyn = self.newTypeNode(ty, swch.token);
+        lhs.* = .{.AstBinary = ast.BinaryNode.init(id, tyn, self.isToken(swch.token))};
+        // list/tuple
+        if (cons.tag == .List or cons.tag == .Tuple) {
+          // length check & rested: id.len() (>= || ==) cons.args.len
+          var rhs = Node.create(self.allocator);
+          const len = self.newNumberNode(swch.token, @floatFromInt(cons.args.len()));
+          const op = if (cons.rested) self.geqToken(swch.token) else self.eqeqToken(swch.token);
+          rhs.* = .{.AstBinary = ast.BinaryNode.init(self.newMethodCall(id, "len"), len, op)};
+          if_cond = Node.create(self.allocator);
+          if_cond.* = .{.AstBinary = ast.BinaryNode.init(lhs, rhs, self.andToken(swch.token))};
+          lhs.AstBinary.allow_rested = cons.rested;
+          for (cons.args.items(), 0..) |arg, index| {
+            // don't capture wildcard patterns
+            if (arg.isWildcard()) continue;
+            // transform vars to var decl
+            if_body.block().nodes.append(self.constructorSubscriptToVarDecl(arg, id, index));
+          }
+        } else if (cons.tag == .Map) {
+          // transform constructor `map(var)` into `var = id.listItems()`
+          if_body.block().nodes.append(self.constructorMethodToVarDecl(cons, id, "listItems"));
+          if_cond = lhs;
+        } else if (cons.tag == .Err) {
+          // transform constructor `err(var)` into `var = id.value()`
+          if_body.block().nodes.append(self.constructorMethodToVarDecl(cons, id, "value"));
+          if_cond = lhs;
+        } else {
+          // .Other -> validate fields
+          // C(a, b, ..)
+          var cls = ty.klass();
+          if (cons.args.isNotEmpty()) {
+            // verify class fields.
+            const tyname = ty.typename(self.allocator);
+            for (cons.args.items(), cls.fields.items()) |arg, field| {
               // don't capture wildcard patterns
               if (arg.isWildcard()) continue;
-              // transform vars to var decl
-              if_body.block().nodes.append(self.constructorSubscriptToVarDecl(arg, id, index));
-            }
-          } else if (cons.tag == .Map) {
-            // transform constructor `map(var)` into `var = id.items()`
-            if_body.block().nodes.append(self.constructorMethodToVarDecl(cons, id, "items"));
-            if_cond = lhs;
-          } else if (cons.tag == .Err) {
-            // transform constructor `err(var)` into `var = id.value()`
-            if_body.block().nodes.append(self.constructorMethodToVarDecl(cons, id, "value"));
-            if_cond = lhs;
-          } else {
-            // .Other -> validate fields
-            // C(a, b, ..)
-            var cls = ty.klass();
-            if (cons.args.isNotEmpty()) {
-              // verify class fields.
-              const tyname = ty.typename(self.allocator);
-              for (cons.args.items(), cls.fields.items()) |arg, field| {
-                // don't capture wildcard patterns
-                if (arg.isWildcard()) continue;
-                if (arg.alat.hasField()) {
-                  var fd = &arg.alat.field.?.AstVar;
-                  if (cls.getField(fd.token.value) == null) {
-                    self.tc.softError(fd.token, "type '{s}' has no field '{s}'", .{tyname, fd.token.value});
-                    continue;
-                  } else {
-                    // transform field access to a var decl
-                    if_body.block().nodes.append(self.fieldAccessToVarDecl(id, fd, arg.variant.vari.ident));
-                    continue;
-                  }
+              if (arg.alat.hasField()) {
+                var fd = &arg.alat.field.?.AstVar;
+                if (cls.getField(fd.token.value) == null) {
+                  self.tc.softError(fd.token, "type '{s}' has no field '{s}'", .{tyname, fd.token.value});
+                  continue;
+                } else {
+                  // transform field access to a var decl
+                  if_body.block().nodes.append(self.fieldAccessToVarDecl(id, fd, arg.variant.vari.ident));
+                  continue;
                 }
-                // transform field access - by position, to a var decl
-                if_body.block().nodes.append(self.fieldAccessToVarDecl(id, field.AstVarDecl.ident, arg.variant.vari.ident));
               }
-              if (self.tc.diag.hasErrors()) {
-                return error.CheckError;
-              }
+              // transform field access - by position, to a var decl
+              if_body.block().nodes.append(self.fieldAccessToVarDecl(id, field.AstVarDecl.ident, arg.variant.vari.ident));
             }
-            if_cond = lhs;
+            if (self.tc.diag.hasErrors()) {
+              return error.CheckError;
+            }
           }
-        },
-        .Literal => {
-          if_cond = Node.create(self.allocator);
-          if_cond.* = .{.AstBinary = ast.BinaryNode.init(id, cons.node.?, self.eqeqToken(swch.token))};
-        },
-        else => unreachable,
-      }
-      // make if body
-      var body = try self.tDecision(if_branch.rhs);
-      if (body.isBlock()) {
-        if_body.block().nodes.extend(&body.block().nodes);
-      } else {
-        if_body.block().nodes.append(body);
-      }
-      // make else:
-      // for else, test is always a wildcard, so transpile the rhs directly
-      std.debug.assert(els_branch.lhs.isWildcard());
-      var ife = self.newIfElseNode(
-        if_cond.toMatchCondition(self.allocator),
-        if_body,
-        self.elsOrToBlock(try self.tDecision(els_branch.rhs))
-      );
-      node.block().nodes.append(ife);
-      // break;
+          if_cond = lhs;
+        }
+      },
+      .Literal => {
+        if_cond = Node.create(self.allocator);
+        if_cond.* = .{.AstBinary = ast.BinaryNode.init(id, cons.node.?, self.eqeqToken(swch.token))};
+      },
+      else => unreachable,
     }
+    // make if body
+    var body = try self.tDecision(if_branch.rhs);
+    if (body.isBlock()) {
+      if_body.block().nodes.extend(&body.block().nodes);
+    } else {
+      if_body.block().nodes.append(body);
+    }
+    // make else:
+    // for else, test is always a wildcard, so transpile the rhs directly
+    std.debug.assert(els_branch.lhs.isWildcard());
+    const ife = self.newIfElseNode(
+      if_cond.toMatchCondition(self.allocator),
+      if_body,
+      self.elsOrToBlock(try self.tDecision(els_branch.rhs))
+    );
+    node.block().nodes.append(ife);
     if (node.block().nodes.len() == 1) {
       return node.block().nodes.getLast();
     } else {
@@ -1560,27 +1628,27 @@ pub const DecisionTreeTransformer = struct {
   fn tFail(self: *Self, fail: *Fail) !*Node {
     _ = fail;
     var node = Node.create(self.allocator);
-    node.* = .{.AstFail = ast.FailNode.init(self.fail_token)};
+    node.* = .{.AstFailMarker = ast.MarkerNode.init(self.fail_token)};
     return node;
   }
 
   fn tGuard(self: *Self, gard: *Guard) !*Node {
     // create a block node to house the entire guard clause
     var block = ast.BlockNode.newEmptyBlock(self.allocator);
-    // lift all declarations prior to scope-entry node into the new block
+    // lift all declarations prior to liftmarker node into the new block
     var nodes = &(try self.tLeaf(&gard.body)).block().nodes;
-    var delto: usize = 0;
-    for (nodes.items(), 0..) |node, i| {
-      delto = i;
-      if (!node.isScope()) {
-        block.block().nodes.append(node);
-      } else {
-        break;
-      }
-    }
     if (nodes.isNotEmpty()) {
-      // remove all declarations before entry scope
-      nodes.replaceRange(0, delto, &[_]*Node{});
+      var delto: usize = 0;
+      for (nodes.items(), 0..) |node, i| {
+        delto = i;
+        if (!node.isLiftMarker()) {
+          block.block().nodes.append(node);
+        } else {
+          break;
+        }
+      }
+      // remove all declarations up to liftmarker
+      nodes.replaceRange(0, delto + 1, &[_]*Node{});
     }
     block.block().nodes.append(
       self.newIfElseNode(

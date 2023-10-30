@@ -178,7 +178,6 @@ pub const TRUE_VAL = @as(Value, (QNAN | TAG_TRUE));
 pub const NOTHING_VAL = @as(Value, (QNAN | TAG_NOTHING));
 
 pub const NativeFn = *const fn (*VM, argc: u32, args: u32) Value;
-pub const StringNullKey = ObjString {.obj = .{.id = .objstring, .next = null}, .hash = 0, .str = "", .len = 0};
 pub const StringHashMap = Map(*const ObjString, Value);
 pub const ValueHashMap = Map(Value, Value);
 
@@ -210,7 +209,7 @@ pub const ObjString = extern struct {
   len: usize,
   str: [*]const u8,
 
-  pub inline fn string(this: *@This()) []const u8 {
+  pub inline fn string(this: *const @This()) []const u8 {
     return this.str[0..this.len];
   }
 };
@@ -221,14 +220,10 @@ pub const ObjList = extern struct {
   capacity: usize,
   items: [*]Value,
 
-  inline fn allocatedSlice(self: *@This()) []Value {
-    return self.items[0..self.capacity];
-  }
-
   pub fn append(self: *@This(), vm: *VM, item: Value) void {
     if (self.len >= self.capacity) {
       const new_capacity = Mem.growCapacity(self.capacity);
-      self.items = vm.mem.resizeBuf(Value, vm, self.allocatedSlice(), self.capacity, new_capacity).ptr;
+      self.items = vm.mem.resizeBuf(Value, vm, self.items, self.capacity, new_capacity).ptr;
       self.capacity = new_capacity;
     }
     self.items[self.len] = item;
@@ -879,18 +874,15 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
   var string = map.findInterned(str, hash);
   if (string == null) {
     var tmp = @call(.always_inline, createObject, .{vm, .objstring, vm.classes.string, ObjString});
-    tmp.str = @ptrCast(str);
-    tmp.hash = hash;
     tmp.len = str.len;
+    tmp.hash = hash;
     if (!is_alloc) {
-      var s = vm.mem.allocBuf(u8, str.len, vm);
-      std.mem.copy(u8, s, str);
-      tmp.str = @ptrCast(s);
+      tmp.str = vm.mem.dupeStr(vm, str).ptr;
     } else {
+      tmp.str = str.ptr;
       vm.gc.bytes_allocated += str.len;
     }
     _ = map.set(tmp, FALSE_VAL, vm);
-    string = tmp;
     return tmp;
   }
   return string.?;

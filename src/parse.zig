@@ -1574,7 +1574,7 @@ pub const Parser = struct {
 
   fn _mappingPattern(self: *Self) !*Pattern {
     // '{' has been skipped
-    var token = self.previous_tok;
+    const token = self.previous_tok;
     if (self.match(.TkRCurly)) {
       var map = Pattern.init(
         ptn.Constructor.newMapCons(self.allocator).toVariant(self.allocator),
@@ -1611,15 +1611,13 @@ pub const Parser = struct {
         }
       };
       try self.consume(.TkColon);
-      var cons = ptn.Constructor.newTupleCons(self.allocator);
-      cons.args.appendSlice(&[_]*Pattern{key, try self._pattern()});
-      list.args.append(Pattern.init(cons.toVariant(self.allocator), tok, .{}).box(self.allocator));
+      list.args.appendSlice(&[_]*Pattern{key, try self._pattern()});
     }
     self.assertMaxArgs(list.args.len(), "mapping patterns");
     try self.consume(.TkRCurly);
     var map = ptn.Constructor.newMapCons(self.allocator);
     // {lit_ptn: ptn} ->
-    // Map(List(Tuple(Literal(...), Pattern)))
+    // Map(List(Literal(...), Pattern))
     map.args.append(Pattern.init(list.toVariant(self.allocator), token, .{}).box(self.allocator));
     return Pattern.init(map.toVariant(self.allocator), token, .{}).box(self.allocator);
   }
@@ -1761,18 +1759,9 @@ pub const Parser = struct {
       guard = try self.parseExpr();
     }
     try self.consume(.TkEqGrt);
-    //* Add scopes to the body of a case which defines a guard.
-    //* this will later allow us to hoist any added declarations in the case's body (during ptn compilation),
-    //* out of the body to the scope of the guard clause/condition, because guards can
-    //* use the variables being matched in their condition expressions. For ex:
-    //* case x if x > 5 => do...end
-    //* Here, what ever `x` is bound to in do..end, we can easily hoist out to be in scope
-    //* for the guard condition because scope nodes will serve as markers for us.
     var body = try self.statement();
     if (self.meta.m_literals.isNotEmpty()) {
       // take all {name, id} pairs, and generate conditions
-      const op_eq = Token.fromWithValue(&token, "==", .Tk2Eq);
-      _ = op_eq;
       const op_and = Token.fromWithValue(&token, "and", .TkAnd);
       var last: ?*Node = null;
       for (self.meta.m_literals.items()) |itm| {
@@ -1793,15 +1782,18 @@ pub const Parser = struct {
       }
       guard = last;
     }
-    // a case with a guard must have a block body with scope markers
-    if (guard != null and !body.isBlock()) {
-      var tmp = ast.BlockNode.newEmptyBlock(self.allocator).box(self.allocator);
-      const enter = @as(Node, .{.AstScope = ast.ScopeNode.init(true, false)}).box(self.allocator);
-      const leave = @as(Node, .{.AstScope = ast.ScopeNode.init(false, true)}).box(self.allocator);
-      tmp.block().nodes.append(enter);
-      tmp.block().nodes.append(body);
-      tmp.block().nodes.append(leave);
-      body = tmp;
+    // a case with a guard must have a block body with lift markers for
+    // hoisting any added declarations in the case's body during ptn compilation
+    if (guard != null) {
+      const marker = @as(Node, .{.AstLiftMarker = ast.MarkerNode.init(token)}).box(self.allocator);
+      if (!body.isBlock()) {
+        var tmp = ast.BlockNode.newEmptyBlock(self.allocator).box(self.allocator);
+        tmp.block().nodes.append(marker);
+        tmp.block().nodes.append(body);
+        body = tmp;
+      } else {
+        body.block().nodes.prepend(marker);
+      }
     }
     var node = self.createObj(ptn.Case);
     node.* = ptn.Case.init(pat, guard, body, false, self.allocator);
@@ -1822,7 +1814,7 @@ pub const Parser = struct {
 
   fn matchStmt(self: *Self) !*Node {
     // match_stmt: "match" match_expr 'with'? NEWLINE case_block+ "end"
-    var tok = self.previous_tok;
+    const tok = self.previous_tok;
     var expr = try self.parseExpr();
     _ = self.match(.TkWith);
     try self.consume(.TkNewline);
@@ -1835,6 +1827,17 @@ pub const Parser = struct {
     try self.consume(.TkEnd);
     if (cases.isEmpty()) {
       self.softErrMsg(tok, "match statement missing case arms");
+    } else {
+      const last = cases.getLast();
+      var red = self.newNode();
+      red.* = .{.AstRedundantMarker = ast.MarkerNode.init(last.pattern.token)};
+      if (last.body.node.isBlock()) {
+        last.body.node.block().nodes.append(red);
+      } else {
+        var tmp = ast.BlockNode.newEmptyBlock(self.allocator).box(self.allocator);
+        tmp.block().nodes.appendSlice(&[_]*Node{red, last.body.node});
+        last.body.node = tmp;
+      }
     }
     var node = self.newNode();
     node.* = .{.AstMatch = ast.MatchNode.init(tok, expr, cases)};

@@ -7,6 +7,7 @@ pub const ds = @import("ds.zig");
 
 const Type = types.Type;
 const OpType = lex.OpType;
+const U8Writer = util.U8Writer;
 pub const Token = lex.Token;
 pub const AstList = ds.ArrayList(*AstNode);
 pub const VarDeclList = ds.ArrayList(VarDeclNode);
@@ -86,12 +87,13 @@ pub const LiteralNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
+    var str: []const u8 = undefined;
     if (self.token.ty == .TkNumber) {
-      return std.fmt.allocPrint(al, "{d}", .{self.value}) catch self.token.value;
-    }
-    return self.token.value;
+      str = std.fmt.allocPrint(u8w.allocator(), "{d}", .{self.value}) catch self.token.value;
+    } else str = self.token.value;
+    _ = try u8w.writer().write(str);
   }
 };
 
@@ -134,17 +136,16 @@ pub const BinaryNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
-    _ = try writer.write(try self.left.render(depth, al));
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    var writer = u8w.writer();
+    try self.left.render(depth, u8w);
     _ = try writer.write(" ");
     _ = try writer.write(self.op.token.value);
     _ = try writer.write(" ");
-    _ = try writer.write(try self.right.render(depth, al));
+    try self.right.render(depth, u8w);
     if (self.allow_rested) {
       _ = try writer.write(" [rested] ");
     }
-    return writer.context.items;
   }
 };
 
@@ -172,13 +173,12 @@ pub const SubscriptNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
-    _ = try writer.write(try self.expr.render(depth, al));
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    var writer = u8w.writer();
+    try self.expr.render(depth, u8w);
     _ = try writer.write("[");
-    _ = try writer.write(try self.index.render(depth, al));
+    try self.index.render(depth, u8w);
     _ = try writer.write("]");
-    return writer.context.items;
   }
 };
 
@@ -202,11 +202,10 @@ pub const UnaryNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    var writer = u8w.writer();
     _ = try writer.write(self.op.token.value);
-    _ = try writer.write(try self.expr.render(depth, al));
-    return writer.context.items;
+    try self.expr.render(depth, u8w);
   }
 };
 
@@ -229,11 +228,10 @@ pub const ListNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = self;
-    _ = al;
     _ = depth;
-    return "List(args..)";
+    _ = try u8w.writer().write("List(args..)");
   }
 };
 
@@ -259,11 +257,10 @@ pub const MapNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = self;
-    _ = al;
     _ = depth;
-    return "Map(args..)";
+    _ = try u8w.writer().write("Map(args..)");
   }
 };
 
@@ -295,10 +292,9 @@ pub const VarNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
-    return self.token.value;
+    _ = try u8w.writer().write(self.token.value);
   }
 };
 
@@ -330,11 +326,10 @@ pub const ExprStmtNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = self;
-    _ = al;
     _ = depth;
-    return "ExprStmt(expr)";
+    _ = try u8w.writer().write("ExprStmt(expr)");
   }
 };
 
@@ -372,15 +367,12 @@ pub const VarDeclNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    var writer = u8w.writer();
     try util.addDepth(&writer, depth);
-    var decl = std.fmt.allocPrint(
-      al, "let {s} = {s}",
-      .{self.ident.token.value, try self.value.render(depth, al)}
-    ) catch unreachable;
+    var decl = std.fmt.allocPrint(u8w.allocator(), "let {s} = ", .{self.ident.token.value}) catch unreachable;
     _ = try writer.write(decl);
-    return writer.context.items;
+    try self.value.render(depth, u8w);
   }
 };
 
@@ -396,6 +388,13 @@ pub const BlockNode = struct {
   pub fn newEmptyBlock(alloc: std.mem.Allocator) *AstNode {
     var block = util.alloc(AstNode, alloc);
     block.* = .{.AstBlock = BlockNode.init(alloc)};
+    return block;
+  }
+
+  pub fn newBlockWithNodes(alloc: std.mem.Allocator, slice: []const *AstNode) *AstNode {
+    var block = util.alloc(AstNode, alloc);
+    block.* = .{.AstBlock = BlockNode.init(alloc)};
+    block.block().nodes.appendSlice(slice);
     return block;
   }
 
@@ -416,16 +415,15 @@ pub const BlockNode = struct {
     return block;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    var writer = u8w.writer();
     _ = try writer.write("<block>\n");
     for (self.nodes.items()) |node| {
-      _ = try writer.write(try node.render(depth + 1, al));
+      try node.render(depth + 1, u8w);
       _ = try writer.write("\n");
     }
     try util.addDepth(&writer, depth);
     _ = try writer.write("</block>\n");
-    return writer.context.items;
   }
 };
 
@@ -449,11 +447,9 @@ pub const TypeNode = struct {
     return node;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
-    _ = try writer.write(self.typ.typename(al));
-    return writer.context.items;
+    self.typ.typenameInPlace(u8w);
   }
 };
 
@@ -475,11 +471,10 @@ pub const AliasNode = struct {
     return node;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    return "<type alias>";
+    _ = try u8w.writer().write("<type alias>");
   }
 };
 
@@ -504,11 +499,10 @@ pub const DerefNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    return "<deref>";
+    _ = try u8w.writer().write("<deref>");
   }
 };
 
@@ -525,8 +519,8 @@ pub const ConditionNode = struct {
     unreachable;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    return self.cond.render(depth, al);
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    return self.cond.render(depth, u8w);
   }
 };
 
@@ -544,8 +538,8 @@ pub const MatchConditionNode = struct {
     unreachable;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    return self.tst.render(depth, al);
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    return self.tst.render(depth, u8w);
   }
 };
 
@@ -562,11 +556,10 @@ pub const EmptyNode = struct {
     return node;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    return "<empty>";
+    _ = try u8w.writer().write("<empty>");
   }
 };
 
@@ -589,11 +582,10 @@ pub const CastNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    return "<cast>";
+    _ = try u8w.writer().write("<cast>");
   }
 };
 
@@ -619,11 +611,10 @@ pub const ElifNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    return "<elif>";
+    _ = try u8w.writer().write("<elif>");
   }
 };
 
@@ -649,11 +640,10 @@ pub const IfNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    return "<if>";
+    _ = try u8w.writer().write("<if>");
   }
 };
 
@@ -672,21 +662,20 @@ pub const SimpleIfNode = struct {
     unreachable;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    var writer = u8w.writer();
     try util.addDepth(&writer, depth);
     _ = try writer.write("if (");
-    _ = try writer.write(try self.cond.render(depth, al));
+    try self.cond.render(depth, u8w);
     _ = try writer.write(")\n");
     try util.addDepth(&writer, depth);
-    _ = try writer.write(try self.then.render(depth, al));
+    try self.then.render(depth, u8w);
     try util.addDepth(&writer, depth);
     _ = try writer.write("else\n");
     try util.addDepth(&writer, depth);
-    _ = try writer.write(try self.els.render(depth, al));
+    try self.els.render(depth, u8w);
     try util.addDepth(&writer, depth);
     _ = try writer.write("end");
-    return writer.context.items;
   }
 };
 
@@ -705,11 +694,10 @@ pub const WhileNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    return "<while>";
+    _ = try u8w.writer().write("<while>");
   }
 };
 
@@ -737,11 +725,10 @@ pub const ControlNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    return "<control>";
+    _ = try u8w.writer().write("<control>");
   }
 };
 
@@ -796,30 +783,29 @@ pub const CallNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
-    _ = try writer.write(try self.expr.render(depth, al));
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    var writer = u8w.writer();
+    try self.expr.render(depth, u8w);
     if (self.targs) |targs| {
       _ = try writer.write("{");
       var len = targs.len() - 1;
       for (targs.items(), 0..) |node, i| {
         if (i < len) _ = try writer.write(", ");
-         _ = try writer.write(node.AstNType.typ.typename(al));
+        node.AstNType.typ.typenameInPlace(u8w);
       }
       _ = try writer.write("}");
     }
     if (self.args.isEmpty()) {
       _ = try writer.write("()");
-      return writer.context.items;
+      return;
     }
     _ = try writer.write("(");
     const len = self.args.len() -| 1;
     for (self.args.items(), 0..) |itm, i| {
-      _ = try writer.write(try itm.render(depth, al));
+      try itm.render(depth, u8w);
       if (i < len) _ = try writer.write(",\n");
     }
     _ = try writer.write(")");
-    return writer.context.items;
   }
 };
 
@@ -838,12 +824,11 @@ pub const ErrorNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    var writer = u8w.writer();
     _ = try writer.write("(");
-    _ = try writer.write(try self.expr.render(depth, al));
+    try self.expr.render(depth, u8w);
     _ = try writer.write(")!");
-    return writer.context.items;
   }
 };
 
@@ -868,11 +853,10 @@ pub const OrElseNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    return "<orelse>";
+    _ = try u8w.writer().write("<orelse>");
   }
 };
 
@@ -937,11 +921,10 @@ pub const FunNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    return "<function>";
+    _ = try u8w.writer().write("<function>");
   }
 };
 
@@ -973,12 +956,11 @@ pub const DotAccessNode = struct {
     return new;
   }
   
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
-    _ = try writer.write(try self.lhs.render(depth, al));
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    var writer = u8w.writer();
+    try self.lhs.render(depth, u8w);
     _ = try writer.write(".");
-    _ = try writer.write(try self.rhs.render(depth, al));
-    return writer.context.items;
+    try self.rhs.render(depth, u8w);
   }
 };
 
@@ -1026,11 +1008,10 @@ pub const ClassNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    return "<class>";
+    _ = try u8w.writer().write("<class>");
   }
 };
 
@@ -1050,11 +1031,10 @@ pub const LblArgNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    return "<lbl arg>";
+    _ = try u8w.writer().write("<lbl arg>");
   }
 };
 
@@ -1090,14 +1070,13 @@ pub const MatchNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![] const u8 {
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    var writer = u8w.writer();
     _ = try writer.write("match [expr]\n");
     for (self.cases.items()) |case| {
-      _ = try writer.write(try case.render(0, al));
+      try case.render(0, u8w);
     }
-    return writer.context.items;
   }
 };
 
@@ -1108,12 +1087,11 @@ pub const MarkerNode = struct {
     return @This() {.token = token};
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator, comptime str: []const u8) ![]const u8 {
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer, comptime str: []const u8) !void {
     _ = self;
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    var writer = u8w.writer();
     try util.addDepth(&writer, depth);
     _ = try writer.write(str ++ "\n");
-    return writer.context.items;
   }
 };
 
@@ -1137,11 +1115,10 @@ pub const RetNode = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    return "<return>";
+    _ = try u8w.writer().write("<return>");
   }
 };
 
@@ -1153,12 +1130,11 @@ pub const ScopeNode = struct {
     return @This() {.enter = enter, .leave = leave};
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = self;
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    var writer = u8w.writer();
     try util.addDepth(&writer, depth);
     _ = try writer.write("<scope>");
-    return writer.context.items;
   }
 };
 
@@ -1176,11 +1152,10 @@ pub const ProgramNode = struct {
     unreachable;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    return "<program>";
+    _ = try u8w.writer().write("<program>");
   }
 };
 
@@ -1539,7 +1514,7 @@ pub const AstNode = union(AstType) {
         lit.typ = typ;
       },
       else => {
-        std.log.debug("Attempt to set type on node: {}", .{self});
+        util.logger.debug("Attempt to set type on node: {}", .{self});
       },
     }
   }
@@ -1663,7 +1638,7 @@ pub const AstNode = union(AstType) {
           },
           else => {}
         }
-        std.log.debug("Could not obtain token from node: {}.\nUsing default", .{self});
+        util.logger.debug("Could not obtain token from node: {}.\nUsing default", .{self});
         return Token.getDefault();
       },
     };
@@ -1680,13 +1655,13 @@ pub const AstNode = union(AstType) {
     };
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    return switch (self.*) {
-      .AstFailMarker => |*nd| try nd.render(depth, al, "Fail"),
-      .AstLiftMarker => |*nd| try nd.render(depth, al, "Lift"),
-      .AstRedundantMarker => |*nd| try nd.render(depth, al, "Redundant"),
-      inline else => |*nd| try nd.render(depth, al),
-    };
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
+    switch (self.*) {
+      .AstFailMarker => |*nd| try nd.render(depth, u8w, "Fail"),
+      .AstLiftMarker => |*nd| try nd.render(depth, u8w, "Lift"),
+      .AstRedundantMarker => |*nd| try nd.render(depth, u8w, "Redundant"),
+      inline else => |*nd| try nd.render(depth, u8w),
+    }
   }
 
   pub inline fn create(al: std.mem.Allocator) *AstNode {

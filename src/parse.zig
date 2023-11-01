@@ -1787,10 +1787,7 @@ pub const Parser = struct {
     if (guard != null) {
       const marker = @as(Node, .{.AstLiftMarker = ast.MarkerNode.init(token)}).box(self.allocator);
       if (!body.isBlock()) {
-        var tmp = ast.BlockNode.newEmptyBlock(self.allocator).box(self.allocator);
-        tmp.block().nodes.append(marker);
-        tmp.block().nodes.append(body);
-        body = tmp;
+        body = ast.BlockNode.newBlockWithNodes(self.allocator, &[_]*Node{marker, body});
       } else {
         body.block().nodes.prepend(marker);
       }
@@ -1834,9 +1831,7 @@ pub const Parser = struct {
       if (last.body.node.isBlock()) {
         last.body.node.block().nodes.append(red);
       } else {
-        var tmp = ast.BlockNode.newEmptyBlock(self.allocator).box(self.allocator);
-        tmp.block().nodes.appendSlice(&[_]*Node{red, last.body.node});
-        last.body.node = tmp;
+        last.body.node = ast.BlockNode.newBlockWithNodes(self.allocator, &[_]*Node{red, last.body.node});
       }
     }
     var node = self.newNode();

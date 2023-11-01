@@ -36,6 +36,8 @@ const Pattern = ptn.Pattern;
 const MatchCompiler = ptn.MatchCompiler;
 const Diagnostic = diagnostics.Diagnostic;
 const Analysis = analysis.Analysis;
+const U8Writer = util.U8Writer;
+pub const logger = std.log.scoped(.check);
 
 const TypeEnv = struct {
   global: Scope,
@@ -52,7 +54,7 @@ const TypeEnv = struct {
     return self;
   }
 
-  pub fn display(self: *@This(), prompt: []const u8) void {
+  pub fn display(self: *@This(), prompt: []const u8, u8w: *U8Writer) void {
     std.debug.print("{s}\n", .{prompt});
     var glob = self.global.decls;
     std.debug.print("------------Globals------------\n", .{});
@@ -60,7 +62,7 @@ const TypeEnv = struct {
     while (i > 0): (i -= 1) {
       var itr = glob.itemAt(i - 1).map.iterator();
       while (itr.next()) |entry| {
-        std.debug.print("name: '{s}', ty: '{s}'\n", .{entry.key_ptr.*, entry.value_ptr.*.typename(self.global.allocator())});
+        std.debug.print("name: '{s}', ty: '{s}'\n", .{entry.key_ptr.*, entry.value_ptr.*.typename(u8w)});
       }
       std.debug.print("-------------------------------\n", .{});
     }
@@ -68,7 +70,7 @@ const TypeEnv = struct {
     var itr_n = self.narrowed.iterator();
     while (itr_n.next()) |entry| {
       var ty = entry.value_ptr.*;
-      std.debug.print("name: '{s}', ty: '{s}'\n", .{entry.key_ptr.*, ty.typename(self.global.allocator())});
+      std.debug.print("name: '{s}', ty: '{s}'\n", .{entry.key_ptr.*, ty.typename(u8w)});
     }
     std.debug.print("-------------------------------\n", .{});
   }
@@ -181,7 +183,7 @@ const TypeEnv = struct {
       var t1 = self.global.lookup(name).?;
       var neg = blk: {
         break :blk t1.negate(t2, allocator) catch {
-          std.log.debug("negate with t1 exactly equal to t2 results in the 'never' type", .{});
+          logger.debug("negate with t1 exactly equal to t2 results in the 'never' type", .{});
           break :blk (
             if (t1.typeidEql(t2)) Type.newNever(allocator)
             else t1
@@ -205,6 +207,7 @@ pub const TypeChecker = struct {
   builder: CFGBuilder,
   analyzer: Analysis,
   pc: PatternChecker,
+  u8w: U8Writer,
   diag: *Diagnostic,
   /// type context
   ctx: TContext,
@@ -413,7 +416,7 @@ pub const TypeChecker = struct {
                 );
               }
               try self.tc.resolveType(ty, token);
-              const tyname = ty.typename(al);
+              const tyname = ty.typename(&self.tc.u8w);
               const info = if (cons.rested) " or more" else "";
               const len = cons.args.len();
               const cls = ty.klass();
@@ -664,10 +667,10 @@ pub const TypeChecker = struct {
         self.tc.ctx.enterScope();
         const expand = case.pattern.isConstructor() and case.pattern.variant.cons.tag != .Map;
         var ty = try self.inferPattern(case.pattern, &conses, expand, al);
-        std.log.debug("Type before resolution: {s}", .{self.tc.getTypename(ty)});
+        logger.debug("Type before resolution: {s}", .{self.tc.getTypename(ty)});
         if (case.pattern.isConstructor()) {
           ty = self.resolvePatternType(case.pattern.token, m_expr_ty, ty) catch ty;
-          std.log.debug("Type after resolution: {s}", .{self.tc.getTypename(ty)});
+          logger.debug("Type after resolution: {s}", .{self.tc.getTypename(ty)});
           if (expr_ty.canBeAssigned(ty, .RCAny, self.tc.ctx.allocator())) |_| {
             try self.resolveMissingTypes(case.pattern.token, &conses, ty);
             case.pattern.variant.cons.typ = ty;
@@ -688,7 +691,10 @@ pub const TypeChecker = struct {
       if (node.decl) |decl| {
         lnode.block().nodes.prepend(decl);
       }
-      std.log.debug("tree:\n{s}\n", .{lnode.render(0, al) catch ""});
+      if (util.getMode() == .Debug) {
+        lnode.render(0, &self.tc.u8w) catch {};
+        logger.debug("tree:\n{s}\n", .{self.tc.u8w.items()});
+      }
       const de = (
         if (self.tc.current_fn) |curr| .{
           curr.dead, curr.exit
@@ -806,13 +812,6 @@ pub const TypeChecker = struct {
       return self.tc.void_ty;
     }
 
-    fn checkMatch(self: *@This(), node: *ast.MatchNode, flo: FlowMeta, lowrd: *Node) !void {
-      _ = lowrd;
-      _ = flo;
-      _ = node;
-      _ = self;
-    }
-
     /// check if a particular test/condition is redundant, given the variable of interest.
     fn checkTestRedundancy(self: *@This(), match_node: *ast.MatchNode, env: *TypeEnv, err_token: Token) void {
       //* If this variable is type 'never' at the point of this check (usually after narrowing),
@@ -849,8 +848,9 @@ pub const TypeChecker = struct {
       .str_ty = undefined,
       .builtins = TypeList.init(allocator),
       .pc = undefined,
+      .u8w = U8Writer.init(allocator),
     };
-    self.linker = TypeLinker.init(&self.ctx, self.diag);
+    self.linker = TypeLinker.init(&self.ctx, self.diag, undefined);
     return self;
   }
 
@@ -1032,7 +1032,7 @@ pub const TypeChecker = struct {
   }
 
   fn getTypename(self: *Self, typ: *Type) []const u8 {
-    return typ.typename(self.ctx.allocator());
+    return typ.typename(&self.u8w);
   }
 
   fn newUnaryNode(self: *Self, expr: *Node, op: Token) *Node {
@@ -1425,7 +1425,7 @@ pub const TypeChecker = struct {
       .AstMap,
       .AstNType => try self.narrowAtomic(node, env),
       else => |*d| {
-        std.log.debug("attempt to narrow node: {}", .{d});
+        logger.debug("attempt to narrow node: {}", .{d});
       },
     };
   }
@@ -1650,7 +1650,6 @@ pub const TypeChecker = struct {
           try self.resolveType(ty, token); 
           tset.set(ty.typeid(), ty);
         }
-        std.debug.assert(tset.count() > 1);
         typ.* = Type.compressTypes(&tset, typ).*;
       },
       .Constant, .Concrete, .Variable, .Recursive, .Function, .Top => return,
@@ -3168,7 +3167,6 @@ pub const TypeChecker = struct {
     } else if (expr_ty.isMapTy()) {
       // k-v. index with k, get v.
       var cls = expr_ty.klass();
-      std.debug.assert(cls.tparamsLen() == 2);
       var key_typ = cls.tparams.?.itemAt(0);
       var val_typ = cls.tparams.?.itemAt(1);
       _ = self.checkAssign(key_typ, index_ty, node.index.getToken(), false) catch {
@@ -3249,7 +3247,7 @@ pub const TypeChecker = struct {
       ); 
       return self.error_(
         true, debug,
-        "Expected error union type in 'try' expression. Type '{s}' is not an error union{s}",
+        "Expected error union type in 'try/orelse' expression. Type '{s}' is not an error union{s}",
         .{self.getTypename(ok_ty), help}
       );
     }
@@ -3344,6 +3342,7 @@ pub const TypeChecker = struct {
     self.pc = PatternChecker.init(self);
     self.ctx.enterScope();
     self.linker.ctx = &self.ctx;
+    self.linker.u8w = &self.u8w;
     self.loadBuiltinsPrelude(va);
     try self.buildProgramFlow(node, display_diag);
     self.flowInferEntry(self.cfg.program.entry) catch {};

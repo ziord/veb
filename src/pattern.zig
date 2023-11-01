@@ -4,13 +4,16 @@ const ast = @import("ast.zig");
 const ks = @import("constants.zig");
 const ds = @import("ds.zig");
 const util = @import("util.zig");
+const check = @import("check.zig");
 const diagnostics = @import("diagnostics.zig");
 
 const Type = types.Type;
 const Token = @import("lex.zig").Token;
-const TypeChecker = @import("check.zig").TypeChecker;
+const TypeChecker = check.TypeChecker;
 const Diagnostic = diagnostics.Diagnostic;
+const U8Writer = util.U8Writer;
 const addDepth = util.addDepth;
+const logger = check.logger;
 
 /// C(p1...pn)
 pub const Constructor = struct {
@@ -82,8 +85,6 @@ pub const Constructor = struct {
       if (!typ.isClsGeneric()) {
         self.synth_name = self.name;
         return self.name;
-      } else if (self.synth_name) |name| {
-        return name;
       } else {
         const name = TypeChecker.makeSynthName(
           self.args.allocator(),
@@ -121,8 +122,8 @@ pub const Constructor = struct {
     return new;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    var writer = u8w.writer();
     try addDepth(&writer, depth + 1);
     if (self.tag == .Literal and !std.mem.startsWith(u8, self.name, "lit")) {
       _ = try writer.write("lit.");
@@ -133,25 +134,24 @@ pub const Constructor = struct {
       var len = targs.len() - 1;
       for (targs.items(), 0..) |node, i| {
         if (i < len) _ = try writer.write(", ");
-         _ = try writer.write(node.AstNType.typ.typename(al));
+        node.AstNType.typ.typenameInPlace(u8w);
       }
       _ = try writer.write("}");
     }
     if (self.args.isEmpty()) {
       _ = try writer.write("()");
-      return writer.context.items;
+      return;
     }
     _ = try writer.write("(\n");
     const len = self.args.len() -| 1;
     for (self.args.items(), 0..) |itm, i| {
       try addDepth(&writer, depth + 2);
-      _ = try writer.write(try itm.render(depth + 2, al));
+      try itm.render(depth + 2, u8w);
       if (i < len) _ = try writer.write(",\n");
     }
     _ = try writer.write("\n");
     try addDepth(&writer, depth + 4);
     _ = try writer.write(")");
-    return writer.context.items;
   }
 };
 
@@ -171,13 +171,12 @@ pub const Variable = struct {
     return @This(){.ident = self.ident.clone(al)};
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
+    var writer = u8w.writer();
     try addDepth(&writer, depth + 1);
     _ = try writer.write("Variable(");
     _ = try writer.write(self.ident.AstVar.token.value);
     _ = try writer.write(")");
-    return writer.context.items;
   }
 };
 
@@ -201,12 +200,11 @@ pub const Wildcard = struct {
     return self;
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = self;
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    var writer = u8w.writer();
     try addDepth(&writer, depth + 1);
     _ = try writer.write("Wildcard(_)");
-    return writer.context.items;
   }
 };
 
@@ -217,9 +215,7 @@ pub const Relation = struct {
 
   pub fn varRelationToVarDecl(self: *const @This(), al: std.mem.Allocator) *ast.AstNode {
     // a is y -> let y = a
-    std.debug.assert(self.pattern.isVariable());
     var node = ast.AstNode.create(al);
-    // TODO: clone var?
     const vr = self.pattern.variant.vari.ident.clone(al);
     node.* = .{.AstVarDecl = ast.VarDeclNode.init(&vr.AstVar, self.ident.clone(al), false)};
     return node;
@@ -233,8 +229,8 @@ pub const Relation = struct {
     return util.box(MatchVariant, .{.rel = self}, al);
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    _ = u8w;
     _ = self;
     _ = depth;
     unreachable;
@@ -259,8 +255,8 @@ pub const MultiRelation = struct {
     return @This(){.relations = RelationList.clone(&self.relations, al)};
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    _ = al;
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    _ = u8w;
     _ = self;
     _ = depth;
     unreachable;
@@ -366,9 +362,9 @@ pub const Pattern = struct {
     return pat.box(al);
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
-    _ = try writer.write(try self.variant.render(depth, al));
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
+    try self.variant.render(depth, u8w);
+    var writer = u8w.writer();
     if (self.alat.hasField()) {
       _ = try writer.write(" as-field ");
       _ = try writer.write(self.alat.field.?.AstVar.token.value);
@@ -377,7 +373,6 @@ pub const Pattern = struct {
       _ = try writer.write(" as ");
       _ = try writer.write(self.alat.alias.?.AstVar.token.value);
     }
-    return writer.context.items;
   }
 };
 
@@ -397,8 +392,7 @@ pub const Body = struct {
         reversed = true;
       }
     } else {
-      block = ast.BlockNode.newEmptyBlock(al);
-      block.block().nodes.append(node);
+      block = ast.BlockNode.newBlockWithNodes(al, &[_]*ast.AstNode{node});
       reversed = true;
     }
     return @This(){.node = block, .reversed = reversed};
@@ -412,9 +406,9 @@ pub const Body = struct {
     return @This(){.node = self.node.clone(al), .reversed = self.reversed};
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     const len = self.node.block().nodes.len();
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    var writer = u8w.writer();
     try addDepth(&writer, depth + 1);
     if (len > 0) {
       _ = try writer.write("body(\n");
@@ -424,7 +418,7 @@ pub const Body = struct {
         if (node.isVarDecl()) {
           const vd = node.AstVarDecl;
           const source = if (vd.value.isVariable()) vd.value.AstVar.token.value else "$expr";
-          const str = std.fmt.allocPrint(al, "let {s} = {s}\n", .{vd.ident.token.value, source}) catch unreachable;
+          const str = std.fmt.allocPrint(u8w.allocator(), "let {s} = {s}\n", .{vd.ident.token.value, source}) catch unreachable;
           _ = try writer.write(str);
         } else {
           _ = try writer.write("[node]\n");
@@ -435,7 +429,6 @@ pub const Body = struct {
     } else {
       _ = try writer.write("body()");
     }
-    return writer.context.items;
   }
 
   inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer, parent: ?*Constructor) !*ast.AstNode {
@@ -443,17 +436,17 @@ pub const Body = struct {
   }
 };
 
-/// from Maranget's decision tree
+/// from Maranget's decision tree (with gaurds added)
 const Result = union(enum) {
   leaf: Leaf,
   fail: Fail,
   swch: Switch,
   gard: Guard,
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    return switch (self.*) {
-      inline else => |*this| try this.render(depth, al),
-    };
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
+    switch (self.*) {
+      inline else => |*this| try this.render(depth, u8w),
+    }
   }
 
   pub fn clone(self: *@This(), al: std.mem.Allocator) *@This() {
@@ -470,12 +463,11 @@ const Leaf = Body;
 /// Failure
 const Fail = struct {
 
-  fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
+  fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = self;
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+    var writer = u8w.writer();
     try addDepth(&writer, depth + 1);
     _ = try writer.write("Fail");
-    return writer.context.items;
   }
 
   inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer, parent: ?*Constructor) !*ast.AstNode {
@@ -493,25 +485,24 @@ pub const Guard = struct {
   body: Leaf,
   fallback: *Result,
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    var writer = u8w.writer();
     try addDepth(&writer, depth + 1);
     _ = try writer.write("Guard(cond,\n");
     try addDepth(&writer, (depth + 1) * 2);
     _ = try writer.write("body = (\n");
     try addDepth(&writer, (depth + 1) * 2);
-    _ = try writer.write(try self.body.render(depth + 3, al));
+    try self.body.render(depth + 3, u8w);
     try addDepth(&writer, depth + 2);
     _ = try writer.write("),\n");
     try addDepth(&writer, (depth + 1) * 2);
     _ = try writer.write("fallback = (\n");
     try addDepth(&writer, (depth + 1) * 2);
-    _ = try writer.write(try self.fallback.render(depth + 3, al));
+    try self.fallback.render(depth + 3, u8w);
      try addDepth(&writer, depth + 2);
     _ = try writer.write(")\n");
     try addDepth(&writer, depth + 1);
     _ = try writer.write(")\n");
-    return writer.context.items;
   }
 
   fn clone(self: *@This(), al: std.mem.Allocator) *Result {
@@ -537,22 +528,21 @@ const Switch = struct {
     return @This(){.occ = expr, .branches = undefined, .token = token};
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
+    var writer = u8w.writer();
     try addDepth(&writer, depth + 1);
     _ = try writer.write("Switch (");
     _ = try writer.write(self.occ.AstVar.token.value);
     _ = try writer.write(",\n");
     for (self.branches[0..]) |*branch| {
       try addDepth(&writer, depth + 2);
-      _ = try writer.write(try branch.render(depth + 2, al));
+      try branch.render(depth + 2, u8w);
       _ = try writer.write("\n");
     }
     try addDepth(&writer, depth + 1);
     _ = try writer.write(")\n");
-    return writer.context.items;
   }
-    
+
   fn clone(self: *@This(), al: std.mem.Allocator) *Result {
     var swch = @This().init(self.occ.clone(al), self.token);
     swch.branches[0] = self.branches[0].clone(al);
@@ -584,11 +574,11 @@ const Test = union (enum) {
     };
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    return switch (self.*) {
-      .cons => |*cons| try cons.render(depth, al),
-      .wildc => |*wc| try wc.render(depth, al),
-    };
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
+    switch (self.*) {
+      .cons => |*cons| try cons.render(depth, u8w),
+      .wildc => |*wc| try wc.render(depth, u8w),
+    }
   }
 };
 
@@ -601,23 +591,24 @@ const Branch = struct {
   rhs: *Result,
 
   fn clone(self: *@This(), al: std.mem.Allocator) @This() {
-    const lhs: Test = if (self.lhs.isConstructor()) .{.cons = self.lhs.cons.clone(al)} else .{.wildc = self.lhs.wildc.clone(al)};
-    const rhs = self.rhs.clone(al);
-    return .{.lhs = lhs, .rhs = rhs};
+    const lhs: Test = (
+      if (self.lhs.isConstructor()) .{.cons = self.lhs.cons.clone(al)}
+      else .{.wildc = self.lhs.wildc.clone(al)}
+    );
+    return .{.lhs = lhs, .rhs = self.rhs.clone(al)};
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) anyerror![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    var writer = u8w.writer();
     try addDepth(&writer, depth + 1);
     _ = try writer.write("test(\n");
     try addDepth(&writer, depth + 1);
-    _ = try writer.write(try Test.render(&self.lhs, depth + 2, al));
+    try Test.render(&self.lhs, depth + 2, u8w);
     _ = try writer.write(",\n");
     try addDepth(&writer, depth + 2);
-    _ = try writer.write(try self.rhs.render(depth + 2, al));
+    try self.rhs.render(depth + 2, u8w);
     try addDepth(&writer, depth + 1);
     _ = try writer.write(")");
-    return writer.context.items;
   }
 };
 
@@ -642,10 +633,10 @@ pub const MatchVariant = union (enum) {
     return util.box(MatchVariant, variant, al);
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    return switch (self.*) {
-      inline else => |*this| try this.render(depth, al),
-    };
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
+    switch (self.*) {
+      inline else => |*this| try this.render(depth, u8w),
+    }
   }
 };
 
@@ -687,16 +678,15 @@ pub const Case = struct {
     return util.box(Case, case, al);
   }
 
-  pub fn render(self: *@This(), depth: usize, al: std.mem.Allocator) ![]const u8 {
-    var writer = @constCast(&std.ArrayList(u8).init(al)).writer();
-    _ = try writer.write(try self.pattern.render(depth, al));
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
+    var writer = u8w.writer();
+    try self.pattern.render(depth, u8w);
     if (self.guard) |_| {
       _ = try writer.write(" If [guard]");
     }
     _ = try writer.write(" => ");
-    _ = try writer.write(try self.body.render(depth, al));
+    try self.body.render(depth, u8w);
     _ = try writer.write("\n");
-    return writer.context.items;
   }
 };
 
@@ -704,6 +694,7 @@ pub const MatchCompiler = struct {
   allocator: std.mem.Allocator,
   diag: *Diagnostic,
   namegen: util.NameGen,
+  u8w: U8Writer,
   /// store (body) nodes that may/may not have been included in the decision tree
   failure: ds.ArrayHashMap(*Node, FailStatus),
   /// select a constructor to test based on some heuristic
@@ -784,7 +775,9 @@ pub const MatchCompiler = struct {
       }
     }
 
-    fn isATiedConstructor(self: *@This(), mrel: *MultiRelation, name: []const u8) bool {
+    /// check along a given row, if there are multiple constructors that share the same
+    /// name with the current best constructor - `best`
+    fn isATiedConstructor(self: *@This(), mrel: *MultiRelation, best: []const u8) bool {
       defer self.disamb.clearRetainingCapacity();
       for (mrel.relations.items()) |rel| {
         if (rel.pattern.isConstructor()) {
@@ -794,7 +787,7 @@ pub const MatchCompiler = struct {
           } else {
             self.disamb.put(cons_name, 1) catch {};
           }
-          if (self.disamb.get(name)) |val| {
+          if (self.disamb.get(best)) |val| {
             if (val > 1) {
               return true;
             }
@@ -896,6 +889,7 @@ pub const MatchCompiler = struct {
       .heuristic = SelectionHeuristic.init(al),
       .namegen = util.NameGen.init(al),
       .dtt = DecisionTreeTransformer.init(al, tc),
+      .u8w = U8Writer.init(al),
     };
   }
 
@@ -994,8 +988,7 @@ pub const MatchCompiler = struct {
   }
 
   /// convert the pattern in each case to relation patterns
-  fn convertPtnToRelationPtn(self: *Self, m_expr: *Node, cases: *CaseList, save_guard: bool) void {
-    _ = save_guard;
+  fn convertPtnToRelationPtn(self: *Self, m_expr: *Node, cases: *CaseList) void {
     for (cases.items()) |case| {
       if (!case.pattern.isRelation() and !case.pattern.isMultiRelation()) {
         self.capturePatternIfAliased(case, case.pattern, m_expr);
@@ -1019,8 +1012,8 @@ pub const MatchCompiler = struct {
     for (cons.args.items()) |pat| {
       cases.append(Case.from(case, pat, self.allocator));
     }
-    self.convertPtnToRelationPtn(m_expr, &cases, false);
-    return self.filterCases(m_expr, &cases);
+    self.convertPtnToRelationPtn(m_expr, &cases);
+    return self.filterCases(&cases);
   }
 
   /// flatten or patterns; converting its subpatterns to cases 
@@ -1053,7 +1046,7 @@ pub const MatchCompiler = struct {
       var pat = self.boxPattern(Pattern.init(new_mrel.toVariant(self.allocator), ptn.token, ptn.alat));
       cases.append(Case.from(case, pat, self.allocator));
     }
-    return self.filterCases(m_expr, &cases);
+    return self.filterCases(&cases);
   }
 
   /// convert a capture to a variable declaration
@@ -1117,8 +1110,6 @@ pub const MatchCompiler = struct {
         var id = self.genFreshVarNode(ident.token, ident.token.value);
         new.args.append(self.boxPattern(Pattern.init(Variable.init(id).toVariant(self.allocator), arg.token, arg.alat)));
       }
-    } else {
-      std.debug.assert(cons.args.len() == 0);
     }
     return new;
   }
@@ -1158,7 +1149,7 @@ pub const MatchCompiler = struct {
               // If tcons.args > cons.args, treat `cons` as a different constructor.
               // This leads to a bad effect of repeating test on constructor types, but is the best we can manage for now.
               if (tcons.args.len() != cons.args.len()) {
-                std.log.debug("unequal constructor sizes: tcons {} and cons {}", .{tcons.args.len(), cons.args.len()});
+                logger.debug("unequal constructor sizes: tcons {} and cons {}", .{tcons.args.len(), cons.args.len()});
                 if (tcons.args.len() > cons.args.len()) {
                   cases_a.append(case);
                   cases_b.append(case);
@@ -1223,8 +1214,7 @@ pub const MatchCompiler = struct {
     return .{.cases_a = cases_a, .cases_b = cases_b};
   }
 
-  fn filterCases(self: *Self, m_expr: *Node, cases: *CaseList) CaseList {
-    _ = m_expr;
+  fn filterCases(self: *Self, cases: *CaseList) CaseList {
     // 1. Push tests against bare variables a is y into the right hand sides using let y = a, so that all the remaining tests are against constructors.
     // `-> convert cases to relations, then promote variable relations to rhs of body
     var ncases = CaseList.init(self.allocator);
@@ -1294,9 +1284,7 @@ pub const MatchCompiler = struct {
             );
             case.pattern = pattern;
           }
-        } else {
-          // rels.clearAndFree();
-        }
+        } else {}
       }
       ncases.append(case);
     }
@@ -1304,10 +1292,9 @@ pub const MatchCompiler = struct {
   }
 
   fn compileCase(self: *Self, _m_expr: *Node, _cases: *CaseList) !*Result {
-    std.log.debug("compiling.. _m_expr is {s}", .{_m_expr.AstVar.token.value});
     // 1. Push tests against bare variables a is y into the right hand sides using let y = a,
     // .  so that all the remaining tests are against constructors.
-    var cases = self.filterCases(_m_expr, _cases);
+    var cases = self.filterCases(_cases);
     if (cases.isEmpty()) {
       return util.box(Result, .{.fail = .{}}, self.allocator);
     }
@@ -1348,11 +1335,17 @@ pub const MatchCompiler = struct {
   /// Some inspiration from Maranget is also utilized.
   pub fn compile(self: *Self, node: *ast.MatchNode) !*DecisionTree {
     // we match on m_expr
-    std.log.debug("match ast dump:\n{s}\n", .{node.render(0, self.allocator) catch ""});
+    if (util.getMode() == .Debug) {
+      node.render(0, &self.u8w) catch {};
+      logger.debug("match ast dump:\n{s}\n", .{self.u8w.items()});
+    }
     var m_expr = node.expr;
-    self.convertPtnToRelationPtn(m_expr, &node.cases, true);
+    self.convertPtnToRelationPtn(m_expr, &node.cases);
     const tree = try self.compileCase(m_expr, &node.cases);
-    std.log.debug("decision tree dump:\n{s}\n", .{tree.render(0, self.allocator) catch ""});
+    if (util.getMode() == .Debug) {
+      tree.render(0, &self.u8w) catch {};
+      logger.debug("decision tree dump:\n{s}\n", .{self.u8w.items()});
+    }
     self.reportRedundantCases(node);
     return tree;
   }
@@ -1360,9 +1353,7 @@ pub const MatchCompiler = struct {
   pub fn lowerDecisionTree(self: *Self, tree: *DecisionTree, fail_token: Token) !*Node {
     const node = try self.dtt.transform(tree, fail_token);
     if (!node.isBlock()) {
-      var tmp = ast.BlockNode.newEmptyBlock(self.allocator);
-      tmp.block().nodes.append(node);
-      return tmp;
+      return ast.BlockNode.newBlockWithNodes(self.allocator, &[_]*Node{node});
     }
     return node;
   }
@@ -1533,14 +1524,13 @@ pub const DecisionTreeTransformer = struct {
     var if_branch = swch.branches[0];
     var els_branch = swch.branches[1];
     // make occ is test(..)
-    std.debug.assert(if_branch.lhs.isConstructor());
     const ty = if_branch.lhs.cons.typ.?.classOrInstanceClass();
     if (ty.isUnion()) {
       return self.tc.error_(
         true, swch.token,
         "cannot match on constructor with ambiguous multiple types.\n\t" ++
         "Consider narrowing one of this type: '{s}'",
-        .{ty.typename(self.allocator)}
+        .{ty.typename(&self.tc.u8w)}
       );
     }
     var node = self.newBlock();
@@ -1621,7 +1611,7 @@ pub const DecisionTreeTransformer = struct {
           var cls = ty.klass();
           if (cons.args.isNotEmpty()) {
             // verify class fields.
-            const tyname = ty.typename(self.allocator);
+            const tyname = ty.typename(&self.tc.u8w);
             for (cons.args.items(), cls.fields.items()) |arg, field| {
               // don't capture wildcard patterns
               if (arg.isWildcard()) continue;

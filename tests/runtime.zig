@@ -2404,7 +2404,7 @@ test "generic-classes-2" {
 }
 
 // FIXME: This crashes during testing (`zig test tests/test.zig`)
-//        for some reason, but runs fine with ./test.sh and in main (`zig build run`)
+//        for some reason, but runs fine in main (`zig build run`)
 // test "generic-classes-3" {
 //   var src =
 //   \\ let j = []
@@ -3317,7 +3317,7 @@ test "patterns-34.<match on maps>" {
   try doRuntimeTest(src);
 }
 
-test "patterns-35.<guards with block>" {
+test "patterns-35.<guards with blocks>" {
   var src =
   \\ let foo = [5, 3]
   \\ let z = false
@@ -3326,6 +3326,21 @@ test "patterns-35.<guards with block>" {
   \\    z = !!x and !!y
   \\  end
   \\  case [..] => print('fifth')
+  \\ end
+  \\ assert(z, 'should be matched')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-35b.<guards with blocks>" {
+  var src =
+  \\ let z = false
+  \\ match {'a': false, 'b': true, 'c': false}.listItems()
+  \\  case [..] as t if !z => do
+  \\    assert(!z, '...')
+  \\    z = !z
+  \\  end
+  \\  case _ => !z
   \\ end
   \\ assert(z, 'should be matched')
   ;

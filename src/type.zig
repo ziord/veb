@@ -6,6 +6,7 @@ const VarNode = @import("ast.zig").VarNode;
 const Token = @import("lex.zig").Token;
 
 const ID_HASH = 0x12;
+const U8Writer = util.U8Writer;
 pub const MAX_STEPS = MAX_RECURSIVE_DEPTH / 2;
 pub const MAX_TPARAMS = 0xA;
 pub const MAX_RECURSIVE_DEPTH = 0x3e8;
@@ -1549,8 +1550,8 @@ pub const Type = struct {
     }
   }
 
-  fn writeName(allocator: std.mem.Allocator, tokens: *ds.ArrayList(Token)) ![]const u8 {
-    var writer = @constCast(&ds.ArrayList(u8).init(allocator)).writer();
+  fn writeName(tokens: *ds.ArrayList(Token), u8w: *U8Writer) !void {
+    var writer = u8w.writer();
     for (tokens.items(), 0..) |tok, i| {
       // variables starting with $ are generated and internal, so use this symbol instead
       _ = if (tok.value[0] != '$') try writer.write(tok.value) else try writer.write(ks.GeneratedTypeVar);
@@ -1559,90 +1560,87 @@ pub const Type = struct {
         _ = try writer.write(".");
       }
     }
-    return writer.context.items;
   }
 
-  fn _typename(self: *Self, allocator: std.mem.Allocator, depth: *usize) ![]const u8 {
+  fn _typename(self: *Self, depth: *usize, u8w: *U8Writer) !void {
     depth.* = depth.* + 1;
-    if (depth.* > MAX_STEPS) return "...";
-    return switch (self.kind) {
+    if (depth.* > MAX_STEPS) {
+      _ = try u8w.writer().write("...");
+      return;
+    }
+    switch (self.kind) {
       .Concrete => |conc| switch (conc.tkind) {
-        .TyBool     => "bool",
-        .TyNumber   => "num",
-        .TyString   => "str",
-        .TyNil      => "nil",
-        .TyVoid     => "void",
-        .TyNoReturn => "noreturn",
-        .TyAny      => "any",
+        .TyBool     => _ = try u8w.writer().write("bool"),
+        .TyNumber   => _ = try u8w.writer().write("num"),
+        .TyString   => _ = try u8w.writer().write("str"),
+        .TyNil      => _ = try u8w.writer().write("nil"),
+        .TyVoid     => _ = try u8w.writer().write("void"),
+        .TyNoReturn => _ = try u8w.writer().write("noreturn"),
+        .TyAny      => _ = try u8w.writer().write("any"),
       },
       .Constant => |*cons| {
-        return cons.val;
+        _ = try u8w.writer().write(cons.val);
       },
       .Generic => |*gen| {
-        const name = try gen.base._typename(allocator, depth);
-        if (gen.tparamsLen() == 0) {
-          return name;
-        } else {
-          var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
-          _ = try writer.write(name);
+        try gen.base._typename(depth, u8w);
+        if (gen.tparamsLen() != 0) {
+          var writer = u8w.writer();
           _ = try writer.write("{");
           for (gen.getSlice(), 0..) |param, i| {
-            _ = try writer.write(try param._typename(allocator, depth));
+            try param._typename(depth, u8w);
             if (i != gen.tparams.len() - 1) {
               _ = try writer.write(", ");
             }
           }
           _ = try writer.write("}");
-          return writer.context.items;
         }
       },
       .Class => |*cls| {
         const name = cls.name;
         if (cls.tparams == null) {
-          return name;
+          _ = try u8w.writer().write(name);
         } else {
-          var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
+          var writer = u8w.writer();
           _ = try writer.write(name);
           _ = try writer.write("{");
           var tparams = cls.tparams.?;
           for (tparams.items(), 0..) |param, i| {
-            _ = try writer.write(try param._typename(allocator, depth));
+            try param._typename(depth, u8w);
             if (i != tparams.len() - 1) {
               _ = try writer.write(", ");
             }
           }
           _ = try writer.write("}");
-          return writer.context.items;
         }
       },
       .Union => |*uni| {
         if (uni.isBoolUnionTy()) {
-          return "bool";
+          _ = try u8w.writer().write("bool");
+          return;
         }
-        var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
+        var writer = u8w.writer();
         var values = uni.variants.values();
         for (values, 0..) |typ, i| {
           if (!typ.isFunction()) {
-            _ = try writer.write(try typ._typename(allocator, depth));
+            try typ._typename(depth, u8w);
           } else {
             _ = try writer.write("(");
-            _ = try writer.write(try typ._typename(allocator, depth));
+            try typ._typename(depth, u8w);
             _ = try writer.write(")");
           }
           if (i != values.len - 1) {
             _ = try writer.write(" | ");
           }
         }
-        return writer.context.items;
       },
       .Function => |*fun| {
         // fn (params): ret
-        var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
+        var writer = u8w.writer();
         _ = try writer.write("fn ");
         if (fun.tparams) |tparams| {
           _ = try writer.write("{");
           for (tparams.items(), 0..) |ty, i| {
-            _ = try writer.write(try ty._typename(allocator, depth));
+            try ty._typename(depth, u8w);
             if (i < tparams.len() - 1) {
               _ = try writer.write(", ");
             }
@@ -1651,7 +1649,7 @@ pub const Type = struct {
         }
         _ = try writer.write("(");
         for (fun.params.items(), 0..) |ty, i| {
-          _ = try writer.write(try ty._typename(allocator, depth));
+          try ty._typename(depth, u8w);
           if (i < fun.params.len() - 1) {
             _ = try writer.write(", ");
           }
@@ -1659,36 +1657,33 @@ pub const Type = struct {
         _ = try writer.write(")");
         if (!fun.ret.isVariable() or fun.ret.variable().tokens.itemAt(0).ty != .TkEof) {
           _ = try writer.write(": ");
-          _ = try writer.write(try fun.ret._typename(allocator, depth));
+          try fun.ret._typename(depth, u8w);
         }
-        return writer.context.items;
       },
       .Method => |*mth| {
-        return try mth.func._typename(allocator, depth);
+        _ = try mth.func._typename(depth, u8w);
       },
       .Instance => |*inst| {
-        var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();
-        _ = try writer.write(try inst.cls._typename(allocator, depth));
+        var writer = u8w.writer();
+        _ = try inst.cls._typename(depth, u8w);
         _ = try writer.write(" instance");
-        return writer.context.items;
       },
       .Top => {
-        return "Type";
+        _ = try u8w.writer().write("Type");
       },
-      .Variable => |*vr| try writeName(allocator, &vr.tokens),
-      .Recursive => "{...}"
-    };
+      .Variable => |*vr| try writeName(&vr.tokens, u8w),
+      .Recursive => _ = try u8w.writer().write("{...}"),
+    }
   }
 
-  pub fn typename(self: *Self, allocator: std.mem.Allocator) []const u8 {
+  pub fn typenameInPlace(self: *Self, u8w: *U8Writer) void {
     var depth: usize = 0;
-    if (self.alias) |lhs| return lhs._typename(allocator, &depth) catch "";
-    return self._typename(allocator, &depth) catch "";
+    (if (self.alias) |lhs| lhs._typename(&depth, u8w) else self._typename(&depth, u8w)) catch {};
   }
 
-  pub fn typenameNoAlias(self: *Self, allocator: std.mem.Allocator) []const u8 {
-    var depth: usize = 0;
-    return self._typename(allocator, &depth) catch "";
+  pub fn typename(self: *Self, u8w: *U8Writer) []const u8 {
+    @call(.always_inline, Self.typenameInPlace, .{self, u8w});
+    return u8w.items();
   }
 
   /// combine types in typeset as much as possible

@@ -674,7 +674,7 @@ test "functions-6" {
   \\ fancy(false)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected error union type in 'try' expression. Type 'void' is not an error union",
+    "Expected error union type in 'try/orelse' expression. Type 'void' is not an error union",
   });
 }
 

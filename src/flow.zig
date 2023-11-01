@@ -526,7 +526,7 @@ pub const CFGBuilder = struct {
       .AstFun => self.linkFun(node, prev, edge),
       .AstClass => self.linkClass(node, prev, edge),
       else => |nd| {
-        std.log.debug("trying to link node: {}", .{nd});
+        util.logger.debug("trying to link node: {}", .{nd});
         return self.linkAtomic(NodeList.initWith(self.alloc, node), prev, edge, .CfgOther);
       },
     };

@@ -23,6 +23,7 @@ const GenInfo = check.TypeChecker.GenInfo;
 const GenInfoMap = ds.ArrayHashMap(*Node, *ds.ArrayList(GenInfo));
 const TypeList = check.TypeList;
 const InitVar = ks.InitVar;
+const logger = std.log.scoped(.compile);
 
 const VRegister = struct {
   regs: std.MultiArrayList(Reg),
@@ -412,7 +413,7 @@ pub const Compiler = struct {
       return .{.pos = info.pos, .isGSym = info.isGSym};
     }
     if (self.gsyms.len >= MAX_GSYMS or self.skip_gsyms) {
-      std.log.debug("Gsyms {s}..using globals list", .{if (self.skip_gsyms) "elided" else "exceeded"});
+      logger.debug("Gsyms {s}..using globals list", .{if (self.skip_gsyms) "elided" else "exceeded"});
       return .{.pos = self.addGlobalVar(node), .isGSym = false};
     }
     var idx: u32 = @intCast(self.gsyms.len);
@@ -1289,7 +1290,7 @@ pub const Compiler = struct {
       if (self.inGlobalScope() and node.name != null) {
         _ = try self.patchGlobal(node.name.?);
       }
-      std.log.debug("skipping compilation of unchecked function: {}", .{node});
+      logger.debug("skipping compilation of unchecked function: {}", .{node});
       return _reg;
     }
     var reg: u32 = undefined;
@@ -1499,7 +1500,7 @@ pub const Compiler = struct {
       self.fun.code.resetBy(1);
       fun_dst = try self.cDotAccess(&node.expr.AstDotAccess, false, reg);
       self.fun.code.write3ArgsInst(.Mov, _dst, fun_dst, 0, token.line, self.vm);
-      std.log.debug("fun_dst != _dst on method call", .{});
+      logger.debug("fun_dst != _dst on method call", .{});
     }
     self.fun.code.write2ArgsInst(.Call, _dst, n, token.line, self.vm);
     if (do_move) {

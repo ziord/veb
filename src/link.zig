@@ -16,6 +16,7 @@ pub const Variable = types.Variable;
 pub const Recursive = types.Recursive;
 pub const Node = ast.AstNode;
 const Diagnostic = diagnostics.Diagnostic;
+const U8Writer = util.U8Writer;
 
 fn CreateMap(comptime K: type, comptime V: type) type {
   return struct {
@@ -191,6 +192,7 @@ pub const TypeLinker = struct {
   /// resolving an infinite/recursive type?
   in_inf: bool = false,
   diag: *Diagnostic,
+  u8w: *U8Writer,
   /// types that shouldn't be used as aliases
   ban_alias: ?*TypeList = null,
 
@@ -202,11 +204,12 @@ pub const TypeLinker = struct {
 
   const Self = @This();
 
-  pub fn init(ctx: *TContext, diag: *Diagnostic) @This() {
+  pub fn init(ctx: *TContext, diag: *Diagnostic, u8w: *U8Writer) @This() {
     return Self {
       .ctx = ctx,
       .cyc_scope = PairScope.init(ctx.allocator()),
       .diag = diag,
+      .u8w = u8w,
     };
   }
 
@@ -499,7 +502,7 @@ pub const TypeLinker = struct {
             return self.error_(
               debug,
               "generic type '{s}' may not have been instantiated correctly",
-              .{typ.typename(self.ctx.allocator())}
+              .{typ.typename(self.u8w)}
             );
           }
         }

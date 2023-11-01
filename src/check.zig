@@ -637,7 +637,7 @@ pub const TypeChecker = struct {
       return (uni.union_().variants.count() == 2);
     }
 
-    fn inferMatch(self: *@This(), node: *ast.MatchNode) !*Type {
+    fn inferMatch(self: *@This(), node: *ast.MatchNode, ast_node: *Node) !*Type {
       // save current redundancy marker on the stack, restore on exit
       const redmarker = self.redmarker;
       defer self.redmarker = redmarker;
@@ -704,20 +704,23 @@ pub const TypeChecker = struct {
       node.lnode = lnode;
       // TODO: fix this for functions
       // unify all types at exit
-      var uni = Union.init(self.tc.ctx.allocator());
+      var tset = TypeHashSet.init(al);
       var prev_flo_nodes = self.tc.getPrevFlowNodes(flo.exit);
       for (prev_flo_nodes.items()) |flo_nd| {
         // skip dead node, since it's most likely at exit
         if (flo_nd.isDeadNode()) continue;
         if (flo_nd.bb.getNonScopeLast()) |nd| {
-          if (nd.getType()) |ty| {
-           uni.set(ty);
+          if (nd == ast_node or nd.isMarker()) {
+            continue;
+          } else if (nd.getType()) |ty| {
+           tset.set(ty.typeid(), ty);
           } else {
-            uni.set(self.tc.void_ty);
+            tset.set(self.tc.void_ty.typeid(), self.tc.void_ty);
           }
         }
       }
-      return uni.toType().box(al);
+      node.typ = if (tset.isNotEmpty()) Type.compressTypes(&tset, null) else self.tc.void_ty;
+      return node.typ.?;
     }
 
     fn flowInferMCondition(self: *@This(), flo_node: *FlowNode, ast_node: *Node) !void {
@@ -2141,7 +2144,7 @@ pub const TypeChecker = struct {
     // unionify all return types at exit
     var uni = Union.init(self.ctx.allocator());
     for (prev_nodes.items()) |flo_nd| {
-      if (flo_nd.bb.getLast()) |nd| {
+      if (flo_nd.bb.getNonScopeLast()) |nd| {
         if (nd.isRet()) {
           if (nd.getType()) |ty| {
             uni.set(ty);
@@ -2207,6 +2210,8 @@ pub const TypeChecker = struct {
         } else if (nd.getType()) |ty| {
           if (ty.isNoreturnTy()) {
             has_noreturn_ty = true;
+          } else if (nd.isMatch()) {
+            has_void_ty = ty.isLikeVoid();
           } else {
             has_void_ty = true;
           }
@@ -2277,7 +2282,9 @@ pub const TypeChecker = struct {
             }
             // TODO: else { what happens here? }
           } else if (!ret_ty.isLikeVoid() and !ret_ty.isLikeNoreturn()) {
-            if (!(ret_ty.isRecursive() and ret_ty.recursive().base.isNeverTy())) {
+            if (nd.isMatch() and !has_void_ty) {
+              // Okay. It means this node returns a non-void type.
+            } else if (!(ret_ty.isRecursive() and ret_ty.recursive().base.isNeverTy())) {
               // control reaches exit from this node (`nd`), although this node
               // doesn't return anything hence (void), but return type isn't void
               return self.error_(
@@ -2984,10 +2991,6 @@ pub const TypeChecker = struct {
     return base;
   }
 
-  fn inferMatch(self: *Self, node: *ast.MatchNode) !*Type {
-    return self.pc.inferMatch(node);
-  }
-
   fn inferOrElse(self: *Self, node: *Node) !*Type {
     // - build cfg of this node. 
     var exit = if (self.current_fn) |curr| curr.exit else self.cfg.program.exit;
@@ -3284,7 +3287,7 @@ pub const TypeChecker = struct {
       .AstClass => try self.inferClass(node, null),
       .AstDotAccess => |*nd| try self.inferDotAccess(nd),
       .AstScope => |*nd| try self.inferScope(nd),
-      .AstMatch => |*nd| self.inferMatch(nd) catch error.CheckError,
+      .AstMatch => |*nd| self.pc.inferMatch(nd, node) catch error.CheckError,
       .AstFailMarker => |*nd| try self.pc.inferFail(nd),
       .AstRedundantMarker => |*nd| try self.pc.inferRedundant(nd),
       .AstProgram => |*nd| try self.inferProgram(nd),

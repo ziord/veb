@@ -1069,6 +1069,7 @@ pub const MatchNode = struct {
   cases: CaseList,
   /// compiled lowered form
   lnode: *AstNode = undefined,
+  typ: ?*Type = null,
 
   pub const CaseList = ds.ArrayList(*ptn.Case);
 
@@ -1083,6 +1084,7 @@ pub const MatchNode = struct {
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
     var match = @This().init(self.token, self.expr.clone(al), ds.ArrayList(*ptn.Case).clone(&self.cases, al));
     match.decl = if (self.decl) |decl| decl.clone(al) else self.decl;
+    match.typ = if (self.typ) |ty| ty.clone(al) else self.typ;
     var new = util.alloc(AstNode, al);
     new.* = .{.AstMatch = match};
     return new;
@@ -1393,6 +1395,13 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn isMatch(self: *@This()) bool {
+    return switch (self.*) {
+      .AstMatch => true,
+      else => false,
+    };
+  }
+
   pub inline fn isFailMarker(self: *@This()) bool {
     return switch (self.*) {
       .AstFailMarker => true,
@@ -1410,6 +1419,13 @@ pub const AstNode = union(AstType) {
   pub inline fn isRedundantMarker(self: *@This()) bool {
     return switch (self.*) {
       .AstRedundantMarker => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isMarker(self: *@This()) bool {
+     return switch (self.*) {
+      .AstRedundantMarker, .AstLiftMarker, .AstFailMarker  => true,
       else => false,
     };
   }
@@ -1493,7 +1509,7 @@ pub const AstNode = union(AstType) {
       .AstFun => |*fun| if (fun.ret) |ret| ret.AstNType.typ else null,
       .AstBlock, .AstIf, .AstElif,
       .AstWhile, .AstControl, .AstScope,
-      .AstLblArg, .AstMatch, .AstFailMarker,
+      .AstLblArg, .AstFailMarker,
       .AstLiftMarker, .AstRedundantMarker,
       .AstEmpty, .AstSimpleIf, .AstProgram => null,
       inline else => |*nd| nd.typ,

@@ -423,7 +423,8 @@ pub const Body = struct {
         try addDepth(&writer, (depth + 2) * 2 + 1);
         if (node.isVarDecl()) {
           const vd = node.AstVarDecl;
-          const str = std.fmt.allocPrint(al, "let {s} = {s}\n", .{vd.ident.token.value, vd.value.AstVar.token.value}) catch unreachable;
+          const source = if (vd.value.isVariable()) vd.value.AstVar.token.value else "$expr";
+          const str = std.fmt.allocPrint(al, "let {s} = {s}\n", .{vd.ident.token.value, source}) catch unreachable;
           _ = try writer.write(str);
         } else {
           _ = try writer.write("[node]\n");

@@ -1561,3 +1561,95 @@ test "patterns-30.<match on maps (redundancy)>" {
     "case {\"sound\": _, \"format\": _} => print(1)",
   });
 }
+
+test "patterns-31.<match in functions>" {
+  var src =
+  \\ def fib(n: num)
+  \\  match n
+  \\    case 0..1 => do
+  \\      return n
+  \\    end
+  \\    case _ as t if t > 5 => do
+  \\      return fib(n - 1) + fib(n - 2)
+  \\    end
+  \\  end
+  \\ end
+  \\ let j = fib(12)
+  \\ j += 4
+  \\ assert(j == 148, 'should be 148')
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'num'",
+    "Expected type 'num' + 'num', but got 'void | num' + 'num'",
+  });
+}
+
+test "patterns-32.<match in functions>" {
+  var src =
+  \\ def check(n: num)
+  \\  match n
+  \\   case 1..4 => return 1
+  \\   case 5..9 => return 2
+  \\    case 11..50 as q => print('yep')
+  \\   case _ => return 3
+  \\  end
+  \\ end
+  \\ let j = check(12)
+  \\ j += 4
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Expected type 'num' + 'num', but got 'void | num' + 'num'",
+  });
+}
+
+test "patterns-33.<match in functions>" {
+  var src =
+  \\ def check(n: num)
+  \\  match n
+  \\   case 1..4 => return 'a'
+  \\   case 5..9 => return true
+  \\    case 11..50 as q => print('yep')
+  \\   case _ => return 3
+  \\  end
+  \\ end
+  \\ let j = check(12)
+  \\ j += 4
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Expected type 'num' + 'num', but got 'void | str | bool | num' + 'num'",
+  });
+}
+
+test "patterns-34.<match in functions>" {
+  var src =
+  \\ def check(n: num): num
+  \\  match n
+  \\   case 1..4 => return 5
+  \\   case 5..9 => print('jjj')
+  \\    case 11..50 as q => return 5
+  \\   case _ => return 3
+  \\  end
+  \\ end
+  \\ check(13)
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Control flow reaches exit from this point without returning type 'num'",
+  });
+}
+
+test "patterns-35.<match in functions>" {
+  var src =
+  \\ def check(n: num): num
+  \\  match n
+  \\   case 1..4 => return 5
+  \\   case 5..9 => return 'oops'
+  \\    case 11..50 as q => return 5
+  \\   case _ => return 3
+  \\  end
+  \\ end
+  \\ check(13)
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Expected return type 'num', but got 'str'",
+  });
+}

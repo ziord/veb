@@ -3331,3 +3331,175 @@ test "patterns-35.<guards with block>" {
   ;
   try doRuntimeTest(src);
 }
+
+test "patterns-36.<match on maps>" {
+  var src =
+  \\ let z = false
+  \\ match {'a': false, 'b': true, 'c': false}
+  \\  case {'x': _, 'c': _, ..} => print('has keys "x" and "c"')
+  \\  case {'a': _, 'b': _ as p, ..} => do
+  \\    # FIXME: We shouldn't need this condition, but since maps are converted using listItems(), we have to
+  \\    if p is bool
+  \\      z = p
+  \\    end
+  \\  end
+  \\  case {..} => print('has something or none')
+  \\ end
+  \\ assert(z, 'should be matched')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-37.<match in functions>" {
+  var src =
+  \\ def check(n: num)
+  \\  match n
+  \\   case 1..4 => return 1
+  \\   case 5..9 => return 2
+  \\   case _ => return 3
+  \\  end
+  \\ end
+  \\ let t = check(7)
+  \\ t += 3
+  \\ assert(t == 5, 'should be 5')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-38.<match in functions>" {
+  var src =
+  \\ def fib(n: num)
+  \\  match n
+  \\    case 0..1 => return n
+  \\    case _ => return fib(n - 1) + fib(n - 2)
+  \\  end
+  \\ end
+  \\ let j = fib(12)
+  \\ j += 4
+  \\ assert(j == 148, 'should be 148')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-39.<match in functions>" {
+  var src =
+  \\ def fib(n: num)
+  \\  match n
+  \\    case 0..1 => do
+  \\      return n
+  \\    end
+  \\    case _ => do
+  \\      return fib(n - 1) + fib(n - 2)
+  \\    end
+  \\  end
+  \\ end
+  \\ let j = fib(12)
+  \\ j += 4
+  \\ assert(j == 148, 'should be 148')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-40.<match in functions>" {
+  var src =
+  \\ def check(n: num)
+  \\  match n
+  \\   case 1..4 => return 1
+  \\   case 5..9 => return 2
+  \\    case 18..50 as q => return q + n 
+  \\   case _ => return 3
+  \\  end
+  \\ end
+  \\ let t = check(26)
+  \\ t += 3
+  \\ assert(t == 55, 'should be 55')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-41.<match in functions>" {
+  var src =
+  \\ def check(n: num)
+  \\  match n
+  \\   case 1..4 => return 1
+  \\   case 5..9 => return 2
+  \\    case 18..50 as q => return (q + n) / 2 # same as
+  \\   case _ => return 3
+  \\  end
+  \\ end
+  \\ def fib(n: num)
+  \\  match n
+  \\    case 0..1 => do
+  \\      return n
+  \\    end
+  \\    case _ => do
+  \\      return fib(n - 1) + fib(n - 2)
+  \\    end
+  \\  end
+  \\ end
+  \\ let j = fib(check(26))
+  \\ j += 4
+  \\ assert(j == 121397, 'should be 121397')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-42.<match in functions>" {
+  var src =
+  \\ def check(n: num)
+  \\  match n
+  \\   case 1..4 => return 1
+  \\   case 5..9 => return 2
+  \\    case 11..50 as q => return q + n 
+  \\   case _ => return 3
+  \\  end
+  \\ end
+  \\ def fib(n: num)
+  \\  let t = check(n)
+  \\  match t
+  \\    case 0..1 => do
+  \\      return n
+  \\    end
+  \\    case _ => do
+  \\      return fib(n - 1) + fib(n - 2)
+  \\    end
+  \\  end
+  \\ end
+  \\ let j = fib(12)
+  \\ j += 4
+  \\ assert(j == 203, 'should be 203')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-43.<match in functions (mutually recursive)>" {
+  var src =
+  \\ def check(n: num)
+  \\  match n
+  \\   case 1..4 => return 1
+  \\   case 5..9 => return 2
+  \\    case 11..50 as q => return fib(q / 2)
+  \\   case _ => return 3
+  \\  end
+  \\ end
+  \\ def fib(n: num)
+  \\  let t = check(n)
+  \\  match t
+  \\    case 0..1 => do
+  \\      return n
+  \\    end
+  \\    case _ => do
+  \\      let j = 5
+  \\      let p = 10
+  \\      p += 12 * j
+  \\      return fib(n - 1) + fib(n - 2)
+  \\    end
+  \\  end
+  \\ end
+  \\ let j = fib(12)
+  \\ j += 4
+  \\ assert(fib(12) + 4 == 203, 'should be 203')
+  \\ assert(fib(13) + 4 == 326, 'should be 326')
+  ;
+  try doRuntimeTest(src);
+}

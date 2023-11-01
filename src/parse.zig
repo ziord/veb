@@ -43,6 +43,11 @@ pub const Parser = struct {
   meta: ParseMeta,
   namegen: util.NameGen,
 
+  pub const ParseMode = enum {
+    Builtin,
+    User,
+  };
+
   const ParseMeta = struct {
     casts: u32 = 0,
     loops: u32 = 0,
@@ -50,11 +55,12 @@ pub const Parser = struct {
     func: ?*Node = null,
     class: ?*Node = null,
     m_literals: ds.ArrayList(NameTuple),
+    mode: ParseMode,
 
     const NameTuple = struct{*Node, *Node, bool};
 
-    fn init(al: std.mem.Allocator) @This() {
-      return @This(){.m_literals = ds.ArrayList(NameTuple).init(al)};
+    fn init(al: std.mem.Allocator, mode: ParseMode) @This() {
+      return @This(){.m_literals = ds.ArrayList(NameTuple).init(al), .mode = mode};
     }
   };
 
@@ -178,10 +184,18 @@ pub const Parser = struct {
       .lexer = lex.Lexer.init(src.*, allocator),
       .diag = Diagnostic.init(al, filename, src),
       .namegen = util.NameGen.init(al),
-      .meta = ParseMeta.init(al),
+      .meta = ParseMeta.init(al, .User),
       // use the arena allocator for allocating general nodes.
       .allocator = al,
     };
+  }
+
+  pub inline fn setParseMode(self: *Self, mode: ParseMode) void {
+    self.meta.mode = mode;
+  }
+
+  inline fn inBuiltinMode(self: *Self) bool {
+    return self.meta.mode == .Builtin;
   }
 
   inline fn _errWithArgs(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
@@ -1353,7 +1367,7 @@ pub const Parser = struct {
     var cls = self.newNode();
     self.meta.class = cls;
     switch (self.current_tok.ty) {
-      .TkList, .TkErr, .TkTuple, .TkMap, .TkStr => try self.advance(),
+      .TkList, .TkErr, .TkTuple, .TkMap, .TkStr => if (self.inBuiltinMode()) try self.advance() else try self.consume(.TkIdent),
       else => try self.consume(.TkIdent)
     }
     var ident = ast.VarNode.init(self.previous_tok).box(self.allocator);

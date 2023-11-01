@@ -1681,3 +1681,25 @@ test "patterns-37.<inexhaustive rested patterns>" {
     "inexhaustive pattern match.\n\tRemaining case type(s): 'list{str}'",
   });
 }
+
+test "parse-modes .1" {
+  var src =
+  \\ class str
+  \\   x: num
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "expected token '<identifier>', but found 'str'",
+  });
+}
+
+test "parse-modes .2" {
+  var src =
+  \\ class list{X}
+  \\   x: X
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "expected token '<identifier>', but found 'list'",
+  });
+}

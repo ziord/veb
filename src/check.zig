@@ -704,10 +704,8 @@ pub const TypeChecker = struct {
       );
       var builder = CFGBuilder.initWithDeadAndExit(self.tc.ctx.allocator(), de.@"0", de.@"1");
       var flo = builder.buildBlock(&self.tc.cfg, lnode);
-      // TODO: type check the transformation
       _ = try self.tc.flowInferEntry(flo.entry);
       node.lnode = lnode;
-      // TODO: fix this for functions
       // unify all types at exit
       var tset = TypeHashSet.init(al);
       var prev_flo_nodes = self.tc.getPrevFlowNodes(flo.exit);
@@ -857,6 +855,7 @@ pub const TypeChecker = struct {
   fn loadBuiltinsPrelude(self: *Self, al: *VebAllocator) void {
     const filename = @as([]const u8, "$builtins$");
     var parser = parse.Parser.init(@constCast(&@as([]const u8, BuiltinsSrc)), &filename, al);
+    parser.setParseMode(.Builtin);
     const node = parser.parse(true) catch unreachable;
     self.buildProgramFlow(node, true) catch unreachable;
     self.flowInferEntry(self.cfg.program.entry) catch unreachable;

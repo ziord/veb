@@ -1534,8 +1534,8 @@ test "patterns-29.<match on maps (exhaustiveness)>" {
   \\ end
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "inexhaustive pattern match.\n\tRemaining case type(s): 'str | Fox'",
-    "inexhaustive pattern match.\n\tRemaining case type(s): 'list{str | Fox}'",
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'str'",
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'list{str}'",
   });
 }
 
@@ -1651,5 +1651,33 @@ test "patterns-35.<match in functions>" {
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "Expected return type 'num', but got 'str'",
+  });
+}
+
+test "patterns-36.<inexhaustive rested patterns>" {
+  var src =
+  \\ let z = false
+  \\ match ['a', false, 'b', true, 'c', false]
+  \\  case ['x', _, 'c', _, ..] => print('has keys "x" and "c"')
+  \\  case ['a', _, 'b', _ as p, ..] if z => print(z)
+  \\  case [..] if !z => print('has something or none')
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'list{str | bool}'",
+  });
+}
+
+test "patterns-37.<inexhaustive rested patterns>" {
+  var src =
+  \\ let z = false
+  \\ match {'a': false, 'b': true, 'c': false}
+  \\  case {'x': _, 'c': _, ..} => print('has keys "x" and "c"')
+  \\  case {'a': _, 'b': _ as p, ..} if p => z = p
+  \\  case {..} if !z => print('has something or none')
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'list{str}'",
   });
 }

@@ -102,7 +102,7 @@ pub const BinaryNode = struct {
   /// allow const narrowing in `is` op expressions
   allow_consts: bool = false,
   /// allow 'rested' tests in `is` op expressions
-  allow_rested: bool = false, 
+  allow_rested: bool = false,
   typ: ?*Type = null,
 
   pub fn init(left: *AstNode, right: *AstNode, op: Token) @This() {

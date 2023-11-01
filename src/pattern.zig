@@ -438,8 +438,8 @@ pub const Body = struct {
     return writer.context.items;
   }
 
-  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer) !*ast.AstNode {
-    return t.tLeaf(self);
+  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer, parent: ?*Constructor) !*ast.AstNode {
+    return t.tLeaf(self, parent);
   }
 };
 
@@ -478,8 +478,8 @@ const Fail = struct {
     return writer.context.items;
   }
 
-  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer) !*ast.AstNode {
-    return t.tFail(self);
+  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer, parent: ?*Constructor) !*ast.AstNode {
+    return t.tFail(self, parent);
   }
 
   fn clone(self: *@This(), al: std.mem.Allocator) *Result {
@@ -519,8 +519,8 @@ pub const Guard = struct {
     return util.box(Result, .{.gard = cln}, al);
   }
 
-  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer) !*ast.AstNode {
-    return t.tGuard(self);
+  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer, parent: ?*Constructor) !*ast.AstNode {
+    return t.tGuard(self, parent);
   }
 };
 
@@ -560,8 +560,8 @@ const Switch = struct {
     return util.box(Result, .{.swch = swch}, al);
   }
 
-  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer) !*ast.AstNode {
-    return t.tSwitch(self);
+  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer, parent: ?*Constructor) !*ast.AstNode {
+    return t.tSwitch(self, parent);
   }
 };
 
@@ -1372,14 +1372,16 @@ pub const MatchCompiler = struct {
 pub const DecisionTreeTransformer = struct {
   allocator: std.mem.Allocator,
   fail_token: Token = undefined,
+  cached_pairs: ds.ArrayList(MapPair),
   tc: *TypeChecker,
 
   const Self = @This();
   const Node = ast.AstNode;
   const NodeList = ds.ArrayList(*Node);
+  const MapPair = struct {key: *Node, val: *Node, parent: ?*Constructor};
 
   pub fn init(allocator: std.mem.Allocator, tc: *TypeChecker) Self {
-    return Self {.allocator = allocator, .tc = tc};
+    return Self {.allocator = allocator, .tc = tc, .cached_pairs = ds.ArrayList(MapPair).init(allocator)};
   }
 
   inline fn andToken(self: *Self, token: Token) Token {
@@ -1480,6 +1482,24 @@ pub const DecisionTreeTransformer = struct {
     return decl;
   }
 
+  /// transform a map constructor `C(var)` into `var = keys() ; var = values()`
+  fn mapConstructorMethodToVarDecl(self: *Self, cons: *Constructor, ident: *Node, parent: ?*Constructor) struct{*Node, *Node} {
+    std.debug.assert(cons.args.len() == 1);
+    const call_1 = self.newMethodCall(ident, "keys");
+    const call_2 = self.newMethodCall(ident, "values");
+    var keys_id = cons.args.itemAt(0).variant.vari.ident.clone(self.allocator);
+    keys_id.AstVar.token.value = std.fmt.allocPrint(self.allocator, "{s}_keys", .{keys_id.AstVar.token.value}) catch unreachable;
+    keys_id.AstVar.typ = null;
+    var vals_id = cons.args.itemAt(0).variant.vari.ident.clone(self.allocator);
+    vals_id.AstVar.token.value = std.fmt.allocPrint(self.allocator, "{s}_vals", .{vals_id.AstVar.token.value}) catch unreachable;
+    var decl_1 = Node.create(self.allocator);
+    decl_1.* = .{.AstVarDecl = ast.VarDeclNode.init(&keys_id.AstVar, call_1, false)};
+    var decl_2 = Node.create(self.allocator);
+    decl_2.* = .{.AstVarDecl = ast.VarDeclNode.init(&vals_id.AstVar, call_2, false)};
+    self.cached_pairs.append(.{.key = keys_id, .val = vals_id, .parent = parent});
+    return .{decl_1, decl_2};
+  }
+
   /// transform constructor `C(var)` into `var = id[expr]`
   fn constructorSubscriptToVarDecl(self: *Self, arg: *Pattern, ident: *Node, index: usize) *Node {
     var decl = Node.create(self.allocator);
@@ -1508,7 +1528,7 @@ pub const DecisionTreeTransformer = struct {
 
   /// Switch (occ) test (..., body(..)) test (Wildcard(_) body(..)) ->
   /// if (occ op test(..)) body(..) else ...
-  fn tSwitch(self: *Self, swch: *Switch) !*Node {
+  fn tSwitch(self: *Self, swch: *Switch, parent: ?*Constructor) !*Node {
     // transpile if condition
     var if_branch = swch.branches[0];
     var els_branch = swch.branches[1];
@@ -1528,13 +1548,49 @@ pub const DecisionTreeTransformer = struct {
     var if_body = self.newBlock();
     var id = swch.occ.clone(self.allocator);
     var cons = &if_branch.lhs.cons;
+    var _parent: ?*Constructor = null;
+    const from_map = blk: {
+      const from_map = parent != null and parent.?.tag == .Map;
+      if (from_map) {
+        // check if id is same as the map test - that way we properly disambiguate
+        // between list tests from maps and regular list tests
+        const pair = self.cached_pairs.getLast();
+        const key = pair.key.AstVar.token.value;
+        // -5 for '_keys'.len. See mapConstructorMethodToVarDecl()
+        break :blk (std.mem.eql(u8, id.AstVar.token.value, key[0..key.len - 5]));
+      }
+      break :blk from_map;
+    };
     switch (cons.tag) {
       .List, .Tuple, .Map, .Err, .Other => {
-        var lhs = Node.create(self.allocator);
-        const tyn = self.newTypeNode(ty, swch.token);
-        lhs.* = .{.AstBinary = ast.BinaryNode.init(id, tyn, self.isToken(swch.token))};
+        var lhs: *Node = undefined;
+        if (!(cons.tag == .List and from_map)) {
+          lhs = Node.create(self.allocator);
+          const tyn = self.newTypeNode(ty, swch.token);
+          lhs.* = .{.AstBinary = ast.BinaryNode.init(id, tyn, self.isToken(swch.token))};
+        }
         // list/tuple
-        if (cons.tag == .List or cons.tag == .Tuple) {
+        if (cons.tag == .List and from_map) {
+          const pair = self.cached_pairs.getLast();
+          // len becomes cons.args.len / 2 because we're using the .keys() (or .values()) list here instead of the .listItems()
+          const len = self.newNumberNode(swch.token, @floatFromInt(cons.args.len() / 2));
+          const op = if (cons.rested) self.geqToken(swch.token) else self.eqeqToken(swch.token);
+          if_cond = Node.create(self.allocator);
+          if_cond.* = .{.AstBinary = ast.BinaryNode.init(self.newMethodCall(pair.key, "len"), len, op)};
+          if_cond.AstBinary.allow_rested = cons.rested;
+          for (cons.args.items(), 0..) |arg, i| {
+            // don't capture wildcard patterns
+            if (arg.isWildcard()) continue;
+            // transform vars to var decl
+             if ((i + 1) & 1 == 1) {
+              // key. Position/slot is at i / 2 in .keys()
+              if_body.block().nodes.append(self.constructorSubscriptToVarDecl(arg, pair.key, (i / 2)));
+            } else {
+              // value. Position/slot is at i / 2 in .values()
+              if_body.block().nodes.append(self.constructorSubscriptToVarDecl(arg, pair.val, (i / 2)));
+            }
+          }
+        } else if (cons.tag == .List or cons.tag == .Tuple) {
           // length check & rested: id.len() (>= || ==) cons.args.len
           var rhs = Node.create(self.allocator);
           const len = self.newNumberNode(swch.token, @floatFromInt(cons.args.len()));
@@ -1551,7 +1607,9 @@ pub const DecisionTreeTransformer = struct {
           }
         } else if (cons.tag == .Map) {
           // transform constructor `map(var)` into `var = id.listItems()`
-          if_body.block().nodes.append(self.constructorMethodToVarDecl(cons, id, "listItems"));
+          _parent = cons;
+          const pair = self.mapConstructorMethodToVarDecl(cons, id, _parent);
+          if_body.block().nodes.appendSlice(&[_]*Node{pair.@"0", pair.@"1"});
           if_cond = lhs;
         } else if (cons.tag == .Err) {
           // transform constructor `err(var)` into `var = id.value()`
@@ -1595,7 +1653,7 @@ pub const DecisionTreeTransformer = struct {
       else => unreachable,
     }
     // make if body
-    var body = try self.tDecision(if_branch.rhs);
+    var body = try self.tDecision(if_branch.rhs, _parent orelse parent);
     if (body.isBlock()) {
       if_body.block().nodes.extend(&body.block().nodes);
     } else {
@@ -1607,17 +1665,21 @@ pub const DecisionTreeTransformer = struct {
     const ife = self.newIfElseNode(
       if_cond.toMatchCondition(self.allocator),
       if_body,
-      self.elsOrToBlock(try self.tDecision(els_branch.rhs))
+      self.elsOrToBlock(try self.tDecision(els_branch.rhs, _parent orelse parent))
     );
-    node.block().nodes.append(ife);
-    if (node.block().nodes.len() == 1) {
-      return node.block().nodes.getLast();
-    } else {
-      return node;
+    if (self.cached_pairs.isNotEmpty()) {
+      const last = self.cached_pairs.getLast();
+      // only pop when we're back at the call (here) which set `parent` on the cached pair
+      if (last.parent == _parent) {
+        _ = self.cached_pairs.pop();
+      }
     }
+    node.block().nodes.append(ife);
+    return if (node.block().nodes.len() == 1) node.block().nodes.getLast() else node;
   }
 
-  fn tLeaf(self: *Self, leaf: *Leaf) !*Node {
+  fn tLeaf(self: *Self, leaf: *Leaf, parent: ?*Constructor) !*Node {
+    _ = parent;
     _ = self;
     if (leaf.reversed) {
       leaf.node.block().nodes.reverse();
@@ -1626,18 +1688,19 @@ pub const DecisionTreeTransformer = struct {
     return leaf.node;
   }
 
-  fn tFail(self: *Self, fail: *Fail) !*Node {
+  fn tFail(self: *Self, fail: *Fail, parent: ?*Constructor) !*Node {
+    _ = parent;
     _ = fail;
     var node = Node.create(self.allocator);
     node.* = .{.AstFailMarker = ast.MarkerNode.init(self.fail_token)};
     return node;
   }
 
-  fn tGuard(self: *Self, gard: *Guard) !*Node {
+  fn tGuard(self: *Self, gard: *Guard, parent: ?*Constructor) !*Node {
     // create a block node to house the entire guard clause
     var block = ast.BlockNode.newEmptyBlock(self.allocator);
     // lift all declarations prior to liftmarker node into the new block
-    var nodes = &(try self.tLeaf(&gard.body)).block().nodes;
+    var nodes = &(try self.tLeaf(&gard.body, parent)).block().nodes;
     if (nodes.isNotEmpty()) {
       var delto: usize = 0;
       for (nodes.items(), 0..) |node, i| {
@@ -1655,20 +1718,20 @@ pub const DecisionTreeTransformer = struct {
       self.newIfElseNode(
         gard.cond.toMatchCondition(self.allocator),
         gard.body.node,
-        self.elsOrToBlock(try self.tDecision(gard.fallback))
+        self.elsOrToBlock(try self.tDecision(gard.fallback, parent))
       )
     );
     return block;
   }
 
-  fn tDecision(self: *Self, dt: *DecisionTree) anyerror!*Node {
+  fn tDecision(self: *Self, dt: *DecisionTree, parent: ?*Constructor) anyerror!*Node {
     return switch (dt.*) {
-      inline else => |*node| @call(.always_inline, @TypeOf(node.*).transform, .{node, @This(), self}),
+      inline else => |*node| @call(.always_inline, @TypeOf(node.*).transform, .{node, @This(), self, parent}),
     };
   }
 
   pub fn transform(self: *Self, tree: *DecisionTree, fail_token: Token) !*Node {
     self.fail_token = fail_token;
-    return @call(.always_inline, Self.tDecision, .{self, tree});
+    return @call(.always_inline, Self.tDecision, .{self, tree, null});
   }
 };

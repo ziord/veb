@@ -3337,12 +3337,7 @@ test "patterns-36.<match on maps>" {
   \\ let z = false
   \\ match {'a': false, 'b': true, 'c': false}
   \\  case {'x': _, 'c': _, ..} => print('has keys "x" and "c"')
-  \\  case {'a': _, 'b': _ as p, ..} => do
-  \\    # FIXME: We shouldn't need this condition, but since maps are converted using listItems(), we have to
-  \\    if p is bool
-  \\      z = p
-  \\    end
-  \\  end
+  \\  case {'a': _, 'b': _ as p, ..} => z = p
   \\  case {..} => print('has something or none')
   \\ end
   \\ assert(z, 'should be matched')
@@ -3500,6 +3495,111 @@ test "patterns-43.<match in functions (mutually recursive)>" {
   \\ j += 4
   \\ assert(fib(12) + 4 == 203, 'should be 203')
   \\ assert(fib(13) + 4 == 326, 'should be 326')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-44.<match on maps>" {
+  var src =
+  \\ let z = false
+  \\ match {'a': false, 'b': true, 'c': false}
+  \\  case {'x': _, 'c': _, ..} => print('has keys "x" and "c"')
+  \\  case {'a': _, 'b': _ as p, ..} if p => z = p
+  \\  case {..} => print('has something or none')
+  \\ end
+  \\ assert(z, 'should be matched')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-45.<match on maps>" {
+  var src =
+  \\ let z = false
+  \\ match {'ab': false, 'b': true, 'c': false}
+  \\  case {'x': _, 'c': _, ..} => print('has keys "x" and "c"')
+  \\  case {'a': _, 'b': _ as p, ..} if p => z = p
+  \\  case {..} as t if !z => z = !!t.len()
+  \\  case {..} => print('got something!')
+  \\ end
+  \\ assert(z, 'should be matched')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-46.<match on maps>" {
+  var src =
+  \\ let z = false
+  \\ match {'ab': false, 'b': true, 'c': false}
+  \\  case {'x': _, 'c': _, ..} => print('has keys "x" and "c"')
+  \\  case {'a': _, 'b': _ as p, ..} if p => z = p
+  \\  case {..} as t if z => z = false
+  \\  case {..} => z = true
+  \\ end
+  \\ assert(z, 'should be matched')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-47.<match on maps>" {
+  var src =
+  \\ let z = false
+  \\ match {'ab': false, 'b': true, 'c': false}
+  \\  case {..} as t if !z => z = !!t.len()
+  \\  case {..} => print('got something!')
+  \\ end
+  \\ assert(z, 'should be matched')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-48.<match on maps (guarded rested)>" {
+  var src =
+  \\ let z = false
+  \\ match {'a': false, 'b': true, 'c': false}
+  \\  case {..} as t if z => assert(z, 'should be false')
+  \\  case _ => z = true
+  \\ end
+  \\ assert(z, 'should be matched')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-49.<match on maps>" {
+  var src =
+  \\ let z = false
+  \\ match {'ab': false, 'b': true, 'c': false}
+  \\  case {'x': _, 'c': _, ..} => print('has keys "x" and "c"')
+  \\  case {'a': _, 'b': _ as p, ..} if p => z = p
+  \\  case {..} as t if z => z = false
+  \\  case _ => z = true
+  \\ end
+  \\ assert(z, 'should be matched')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-50.<match on lists (guarded rested)" {
+  var src =
+  \\ let z = false
+  \\ match ['a', false, 'b', true, 'c', false]
+  \\  case ['x', _, 'c', _, ..] => print('has keys "x" and "c"')
+  \\  case ['a', _, 'b', _ as p, ..] if z => print(z)
+  \\  case [..] if !z => z = true
+  \\  case [..] => print('otherwise')
+  \\ end
+  \\ assert(z, 'should be matched')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-51.<match on lists (guarded rested)>" {
+  var src =
+  \\ let z = false
+  \\ match {'a': false, 'b': true, 'c': false}.listItems()
+  \\  case [..] as t if z => assert(z, 'should be false')
+  \\  case _ => z = true
+  \\ end
+  \\ assert(z, 'should be matched')
   ;
   try doRuntimeTest(src);
 }

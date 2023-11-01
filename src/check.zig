@@ -596,13 +596,11 @@ pub const TypeChecker = struct {
     fn getTestFromCondition(self: *@This(), tst: *Node) *Node {
       if (tst.isVariable()) {
         return tst;
-      }
-      if (tst.isCondition()) {
+      } else if (tst.isCondition()) {
         return self.getTestFromCondition(tst.AstCondition.cond);
-      }
-      if (tst.isBinary()) {
+      } else if (tst.isBinary()) {
         const bin = &tst.AstBinary;
-        if (bin.op.optype == .OpIs) {
+        if (bin.op.optype == .OpIs or bin.left.isCall()) {
           return tst;
         }
         var node = self.getTestFromCondition(bin.left);
@@ -610,8 +608,9 @@ pub const TypeChecker = struct {
           return tst;
         }
         return node;
+      } else {
+        return tst;
       }
-      unreachable;
     }
 
     /// check if a boolean pattern match is exhaustive by walking up the tests 'stack'
@@ -730,31 +729,57 @@ pub const TypeChecker = struct {
       try self.tc.flowInferCondition(flo_node, tst);
     }
 
+    fn getIdent(self: *@This(), node: *ast.BinaryNode) *ast.VarNode {
+      _ = self;
+      if (!node.left.isCall()) {
+        return &node.left.AstVar;
+      } else {
+        const call = &node.left.AstCall;
+        std.debug.assert(call.expr.isDotAccess());
+        std.debug.assert(call.expr.AstDotAccess.lhs.isVariable());
+        return &call.expr.AstDotAccess.lhs.AstVar;
+      }
+    }
+
     fn inferFail(self: *@This(), node: *ast.MarkerNode) !*Type {
       const nd = self.tests.getLast();
       var allow_rested = false;
       var ident: *ast.VarNode = undefined;
-      if (nd.isBinary()) {
-        allow_rested = nd.AstBinary.allow_rested;
-        ident = &nd.AstBinary.left.AstVar;
-      } else {
+      if (nd.isVariable()) {
         ident = &nd.AstVar;
-      }
-      var ty = try self.tc.lookupName(ident, false);
-      if (!ty.isNeverTy() and !allow_rested) {
-        // it is possible that this Fail node is from an enclosing `rested` constructor, because the
-        // match compiler tries to produce an optimal decision tree without repeated constructor tests.
-        // Hence, we look up the test 'stack', if we find any test with an allow_rested property,
-        // then the test is exhaustive, but the match arms were (originally) ordered poorly
-        // Iterate from behind, because we're most likely to encounter a match quicker
-        var i = self.tests.len();
+      } else if (nd.isBinary()) {
+        allow_rested = nd.AstBinary.allow_rested;
+        ident = self.getIdent(&nd.AstBinary);
+      } else {
+        // get the nearest (enclosing) binary/var test
+        var i = self.tests.len() - 1;
+        var id: ?*ast.VarNode = null;
         while (i > 0): (i -= 1) {
           const tst = self.tests.itemAt(i - 1);
-          if (tst.isBinary() and tst.AstBinary.allow_rested) {
-            allow_rested = true;
+          if (tst.isBinary()) {
+            // don't set allow_rested, because this isn't the direct condition being tested.
+            id = self.getIdent(&tst.AstBinary);
+            break;
+          } else if (tst.isVariable()) {
+            id = &tst.AstVar;
             break;
           }
         }
+        if (id) |_id| {
+          ident = _id;
+        } else {
+          return self.tc.error_(true, node.token, "inexhaustive pattern match.", .{});
+        }
+      }
+      var ty = try self.tc.lookupName(ident, false);
+      if (!ty.isNeverTy() and !allow_rested) {
+        // It is possible that this Fail node is from an enclosing `rested` constructor, because the
+        // match compiler tries to produce an optimal decision tree without repeated constructor tests.
+        // Hence, we look up the test 'stack', if we find any test with an allow_rested property,
+        // then the test is exhaustive, but the match arms were (originally) ordered poorly
+        // Get the nearest enclosing condition
+        const tst = self.tests.itemAt(self.tests.len() - 1);
+        allow_rested = tst.isBinary() and tst.AstBinary.allow_rested;
         if (!allow_rested) {
           // TODO: better reporting
           return self.tc.error_(

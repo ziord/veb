@@ -149,6 +149,14 @@ pub const Union = struct {
     return Type.compressTypes(@constCast(&self.variants), null).*;
   }
 
+  pub inline fn isBoolUnionTy(self: *Union) bool {
+    return (
+      self.variants.count() == 2 and
+      self.variants.get(Type.getConstantTrueHash()) != null and
+      self.variants.get(Type.getConstantFalseHash()) != null
+    );
+  }
+
   pub fn set(self: *@This(), typ: *Type) void {
     if (!typ.isUnion()) {
       self.variants.set(typ.typeid(), typ);
@@ -207,6 +215,7 @@ pub const Union = struct {
         return true;
       },
       .Constant, .Concrete, .Generic, .Variable, .Recursive, .Function, .Method, .Class, .Top, .Instance => {
+        if (this.isBoolUnionTy() and other.isBoolTy()) return true;
         if (ctx == .RCTypeParams) return false;
         // related if there exists a variant of T1 that is related to T2
         for (this.variants.values()) |variant| {
@@ -1031,15 +1040,7 @@ pub const Type = struct {
   }
 
   inline fn isBoolUnionTy(self: *Self) bool {
-    if (self.isUnion()) {
-      const uni = self.union_();
-      return (
-        uni.variants.count() == 2 and
-        uni.variants.get(getConstantTrueHash()) != null and
-        uni.variants.get(getConstantFalseHash()) != null
-      );
-    }
-    return false;
+    return self.union_().isBoolUnionTy();
   }
 
   /// more qol helper methods
@@ -1475,6 +1476,7 @@ pub const Type = struct {
     switch (target.kind) {
       .Union => |*uni| {
         if (target.isRelatedTo(source, ctx, A)) {
+          if (uni.isBoolUnionTy()) return target;
           var active = if (source.isUnion()) source.union_().active else source;
           // if this is a Constant type assignment, we want to use the constant
           // type as the active type (if the active type is not itself a constant type)
@@ -1614,7 +1616,7 @@ pub const Type = struct {
         }
       },
       .Union => |*uni| {
-        if (self.isBoolUnionTy()) {
+        if (uni.isBoolUnionTy()) {
           return "bool";
         }
         var writer = @constCast(&std.ArrayList(u8).init(allocator)).writer();

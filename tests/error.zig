@@ -1682,6 +1682,46 @@ test "patterns-37.<inexhaustive rested patterns>" {
   });
 }
 
+test "patterns-38.<inexhaustive patterns>" {
+  var src =
+  \\ def goodOrBad(n: num)
+  \\   if n > 25
+  \\    return ('oops')!
+  \\   end
+  \\   return n * 2
+  \\ end
+  \\
+  \\ match goodOrBad(30)
+  \\  case (error)! => print(error)
+  \\  case 1..10 as x => print(x)
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'num'",
+  });
+}
+
+
+test "patterns-39.<inexhaustive patterns>" {
+  var src =
+  \\ def goodOrBad(n: num)
+  \\   if n > 25
+  \\    return ('oops')!
+  \\   end
+  \\   return n * 2
+  \\ end
+  \\
+  \\ match goodOrBad(30)
+  \\  case ('ack' as j)! => print(j)
+  \\  case 1..10 as x => print(x)
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'str'",
+    "inexhaustive pattern match.\n\tRemaining case type(s): 'num'",
+  });
+}
+
 test "parse-modes .1" {
   var src =
   \\ class str

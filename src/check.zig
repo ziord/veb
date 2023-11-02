@@ -704,6 +704,12 @@ pub const TypeChecker = struct {
       );
       var builder = CFGBuilder.initWithDeadAndExit(self.tc.ctx.allocator(), de.@"0", de.@"1");
       var flo = builder.buildBlock(&self.tc.cfg, lnode);
+      // save and restore diag level on exit
+      const level = self.tc.diag.getLevel();
+      defer self.tc.diag.setLevel(level);
+      // set diag level to `internal error`, as we do not want to display internal errors
+      // on the lowered transformation due to faulty match nodes
+      self.tc.diag.setLevel(.DiagIError);
       _ = try self.tc.flowInferEntry(flo.entry);
       node.lnode = lnode;
       // unify all types at exit
@@ -746,6 +752,10 @@ pub const TypeChecker = struct {
     }
 
     fn inferFail(self: *@This(), node: *ast.MarkerNode) !*Type {
+      // save and restore diag level on exit
+      const level = self.tc.diag.getLevel();
+      defer self.tc.diag.setLevel(level);
+      self.tc.diag.setLevel(.DiagError);
       const nd = self.tests.getLast();
       var allow_rested = false;
       var ident: *ast.VarNode = undefined;
@@ -826,6 +836,11 @@ pub const TypeChecker = struct {
       const typ = env.getNarrowed(token.value) orelse env.getGlobal(token.value);
       if (typ) |nty| {
         if (nty.isNeverTy() and self.redmarker == null) {
+          // save and restore diag level on exit
+          const level = self.tc.diag.getLevel();
+          defer self.tc.diag.setLevel(level);
+          self.tc.diag.setLevel(.DiagError);
+          // store error
           return self.tc.softError(err_token, "redundant case", .{});
         }
       }
@@ -882,16 +897,16 @@ pub const TypeChecker = struct {
   }
 
   pub fn error_(self: *Self, emit: bool, token: Token, comptime fmt: []const u8, args: anytype) TypeCheckError {
-    if (emit) self.diag.addDiagnostics(.DiagError, token, "TypeError: " ++ fmt, args);
+    if (emit) self.diag.addDiagnostics(token, "TypeError: " ++ fmt, args);
     return error.CheckError;
   }
 
   pub fn softError(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
-    self.diag.addDiagnostics(.DiagError, token, "TypeError: " ++ fmt, args);
+    self.diag.addDiagnostics(token, "TypeError: " ++ fmt, args);
   }
 
   inline fn warn(self: *Self, emit: bool, token: Token, comptime fmt: []const u8, args: anytype) void {
-    if (emit) self.diag.addDiagnostics(.DiagWarn, token, "TypeWarning: " ++ fmt, args);
+    if (emit) self.diag.addDiagnosticsWithLevel(.DiagWarn, token, "TypeWarning: " ++ fmt, args);
   }
 
   inline fn genName(al: std.mem.Allocator, l1: usize, l2: usize) []const u8 {

@@ -199,7 +199,7 @@ pub const Parser = struct {
   }
 
   inline fn _errWithArgs(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
-    self.diag.addDiagnostics(.DiagError, token, "Error: " ++ fmt, args);
+    self.diag.addDiagnosticsWithLevel(.DiagError, token, "Error: " ++ fmt, args);
   }
 
   fn softErrArgs(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {

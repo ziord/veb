@@ -268,11 +268,11 @@ pub const Compiler = struct {
   }
 
   fn softError(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
-    self.diag.addDiagnostics(.DiagError, token, "CompileError: " ++ fmt ++ "\n", args);
+    self.diag.addDiagnosticsWithLevel(.DiagError, token, "CompileError: " ++ fmt ++ "\n", args);
   }
 
   fn compileError(self: *Self, token: Token, comptime fmt: []const u8, msg: anytype) CompileError {
-    self.diag.addDiagnostics(.DiagError, token, "CompileError: " ++ fmt ++ "\n", msg);
+    self.diag.addDiagnosticsWithLevel(.DiagError, token, "CompileError: " ++ fmt ++ "\n", msg);
     return error.CompileError;
   }
 

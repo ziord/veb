@@ -214,7 +214,7 @@ pub const TypeLinker = struct {
   }
 
   fn error_(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) TypeLinkError {
-    self.diag.addDiagnostics(.DiagError, token, "Error: " ++ fmt, args);
+    self.diag.addDiagnosticsWithLevel(.DiagError, token, "Error: " ++ fmt, args);
     return error.TypeLinkError;
   }
 

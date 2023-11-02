@@ -29,7 +29,7 @@ pub const Analysis = struct {
             if (lst.isExitScope()) continue;
           }
         }
-        self.diag.addDiagnostics(
+        self.diag.addDiagnosticsWithLevel(
           .DiagError,
           itm.flo.bb.nodes.itemAt(0).getToken(),
           "Dead code: control flow never reaches this code", .{}
@@ -66,7 +66,7 @@ pub const Analysis = struct {
           if (typ.isNoreturnTy() and !node.isFun()) { // skip func decls
             if (node != flo_node.bb.getLast().?) {
               var next = flo_node.bb.nodes.itemAt(i + 1);
-              self.diag.addDiagnostics(
+              self.diag.addDiagnosticsWithLevel(
                 .DiagError,
                 next.getToken(),
                 "Dead code: control flow never reaches this code", .{}
@@ -75,7 +75,7 @@ pub const Analysis = struct {
               for (flo_node.prev_next.items()) |fln| {
                 // hasAtLeastOneIncomingEdgeWithTypeNotNoreturn() <- ensure the code is not reachable from other parts
                 if (fln.next and !fln.flo.isExitNode() and !self.hasAtLeastOneIncomingEdgeWithTypeNotNoreturn(fln.flo)) {
-                  self.diag.addDiagnostics(
+                  self.diag.addDiagnosticsWithLevel(
                     .DiagError,
                     fln.flo.bb.nodes.itemAt(0).getToken(),
                     "Dead code: control flow never reaches this code", .{}

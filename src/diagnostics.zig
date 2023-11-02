@@ -5,6 +5,7 @@ const Token = @import("lex.zig").Token;
 pub const DiagLevel = enum (u8) {
   DiagInfo,
   DiagWarn,
+  DiagIError, // Internal Error
   DiagError,
 };
 
@@ -18,6 +19,7 @@ pub const Diagnostic = struct {
   data: std.ArrayList(DiagData),
   filename: *const[]const u8,
   src: *[]const u8,
+  level: DiagLevel = .DiagError,
 
   const Self = @This();
 
@@ -84,7 +86,7 @@ pub const Diagnostic = struct {
   }
 
   pub fn hasErrors(self: *Self) bool {
-    return self.has(.DiagError);
+    return self.has(.DiagError) or self.has(.DiagIError);
   }
 
   pub fn hasAny(self: *Self) bool {
@@ -101,17 +103,34 @@ pub const Diagnostic = struct {
     }
   }
 
-  pub fn addDiagnostics(self: *Self, level: DiagLevel, token: Token, comptime fmt: []const u8, args: anytype)
-  void {
+  pub fn setLevel(self: *Self, level: DiagLevel) void {
+    self.level = level;
+  }
+
+  pub fn getLevel(self: *Self) DiagLevel {
+    return self.level;
+  }
+
+  pub fn addDiagnostics(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
+    self.pushData(self.level, token, fmt, args) catch |e| {
+      std.debug.print("Could not add diagnostic: {}", .{e});
+    };
+  }
+
+  pub fn addDiagnosticsWithLevel(self: *Self, level: DiagLevel, token: Token, comptime fmt: []const u8, args: anytype) void {
     self.pushData(level, token, fmt, args) catch |e| {
       std.debug.print("Could not add diagnostic: {}", .{e});
     };
   }
 
   pub fn display(self: *Self) void {
-    // TODO: level-based display
+    // If there's nothing to display on the current set level, go one level lower.
+    var level: DiagLevel = if (self.has(self.level)) self.level else @enumFromInt(@as(u8, @intFromEnum(self.level) - 1));
     for (self.data.items) |data| {
-      std.debug.print("{s}", .{data.msg});
+      // we default to display warnings and user specified levels.
+      if (data.level == level or data.level == .DiagWarn) {
+        std.debug.print("{s}", .{data.msg});
+      }
     }
     self.data.clearRetainingCapacity();
   }

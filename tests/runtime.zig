@@ -3618,3 +3618,31 @@ test "patterns-51.<match on lists (guarded rested)>" {
   ;
   try doRuntimeTest(src);
 }
+
+test "patterns-52.<error patterns>" {
+  var src =
+  \\ let z = false
+  \\ def goodOrBad(n: num)
+  \\   if n > 25
+  \\    return ('oops')!
+  \\   end
+  \\   return n * 2
+  \\ end
+  \\
+  \\ match goodOrBad(30)
+  \\  case (error)! => z = !!error.len()
+  \\  case 1..10 as x => print(x)
+  \\  case _ as t => print('def is', t)
+  \\ end
+  \\ assert(z, 'should be matched')
+  \\
+  \\ z = false
+  \\ match goodOrBad(15)
+  \\  case (error)! => print(error)
+  \\  case 1..30 as x => z = true
+  \\  case _ as t => print('def is', t)
+  \\ end
+  \\ assert(z, 'should be matched')
+  ;
+  try doRuntimeTest(src);
+}

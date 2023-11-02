@@ -898,11 +898,11 @@ pub const MatchCompiler = struct {
   }
 
   fn softError(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
-   self.diag.addDiagnostics(.DiagError, token, "Error: " ++ fmt, args);
+   self.diag.addDiagnosticsWithLevel(.DiagError, token, "Error: " ++ fmt, args);
   }
 
   fn hardError(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) MatchError {
-   self.diag.addDiagnostics(.DiagError, token, "Error: " ++ fmt, args);
+   self.diag.addDiagnosticsWithLevel(.DiagError, token, "Error: " ++ fmt, args);
    return error.MatchError;
   }
 

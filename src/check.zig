@@ -811,7 +811,9 @@ pub const TypeChecker = struct {
         return self.tc.void_ty;
       }
       if (self.tc.match_node) |nd| {
-        self.checkTestRedundancy(nd, self.tc.tenv.?, node.token);
+        if (self.tc.tenv) |env| {
+          self.checkTestRedundancy(nd, env, node.token);
+        }
       }
       // set redundancy marker after going through this node - helps
       // to disambiguate the fact that the body containing this marker 

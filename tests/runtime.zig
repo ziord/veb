@@ -3646,3 +3646,13 @@ test "patterns-52.<error patterns>" {
   ;
   try doRuntimeTest(src);
 }
+
+test "patterns-53.<block transform pattern>" {
+  var src =
+  \\ let j: num | str = 1
+  \\ match j
+  \\  case t => print(t)
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}

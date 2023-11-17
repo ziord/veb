@@ -30,33 +30,38 @@ pub const NameGen = struct {
   }
 };
 
-pub const U8Writer = struct {
-  backing: std.ArrayList(u8),
+pub fn TWriter(comptime T: type) type {
+  return struct {
+    backing: std.ArrayList(T),
 
-  pub const Writer = std.ArrayList(u8).Writer;
+    pub const Writer = std.ArrayList(T).Writer;
 
-  pub fn init(al: std.mem.Allocator) @This() {
-    return @This(){.backing = std.ArrayList(u8).init(al)};
-  }
+    pub fn init(al: std.mem.Allocator) @This() {
+      return @This(){.backing = std.ArrayList(T).init(al)};
+    }
 
-  pub fn writer(self: *@This()) Writer {
-    return self.backing.writer();
-  }
+    pub fn writer(self: *@This()) Writer {
+      return self.backing.writer();
+    }
 
-  pub inline fn allocator(self: *@This()) std.mem.Allocator {
-    return self.backing.allocator;
-  }
+    pub inline fn allocator(self: *@This()) std.mem.Allocator {
+      return self.backing.allocator;
+    }
 
-  pub inline fn clear(self: *@This()) void {
-    self.backing.clearRetainingCapacity();
-  }
+    pub inline fn clear(self: *@This()) void {
+      self.backing.clearRetainingCapacity();
+    }
 
-  pub fn items(self: *@This()) []u8 {
-    const chars = self.backing.items;
-    self.backing = std.ArrayList(u8).init(self.allocator());
-    return chars;
-  }
-};
+    pub fn items(self: *@This()) []T {
+      const chars = self.backing.items;
+      self.backing = std.ArrayList(T).init(self.allocator());
+      return chars;
+    }
+  };
+}
+
+pub const U8Writer = TWriter(u8);
+pub const StringWriter = TWriter([]const u8);
 
 pub inline fn append(comptime T: type, list: *std.ArrayList(T), val: T) void {
   list.append(val) catch |e| {

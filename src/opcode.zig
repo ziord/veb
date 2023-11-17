@@ -42,6 +42,10 @@ pub const OpCode = enum (u8) {
   // [6]  [8]  [9]    [9]
   Iscls, // type check
 
+  // istag rx, rk(x), rk(y)
+  // [6]  [8]  [9]    [9]
+  Istag, // type check
+
   // shr rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
   Shr, // bitwise right-shift
@@ -210,9 +214,17 @@ pub const OpCode = enum (u8) {
   // [6]   [8]    [9]         [9]
   Sfd, // set field
 
+  // ssfd rx(inst), prop.idx, rk(value)
+  // [6]   [8]    [9]         [9]
+  Ssfd, // set struct field
+
   // gfd rx, rk(inst), prop.idx
   // [6]   [8]    [9]         [9]
   Gfd, // get field
+
+  // gsfd rx, rk(inst), prop.idx
+  // [6]   [8]    [9]         [9]
+  Gsfd, // get struct field
 
   // ret rx  (1-arg using 2-arg fmt)
   // [6] [8]

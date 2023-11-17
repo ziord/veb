@@ -5,6 +5,8 @@ const Vec = @import("vec.zig").Vec;
 const Map = @import("map.zig").Map;
 const NativeFns = @import("native.zig").NativeFns;
 const OpCode = @import("opcode.zig").OpCode;
+pub const U8Writer = util.U8Writer;
+pub const ks = @import("constants.zig");
 pub const OpType = @import("lex.zig").OpType;
 
 /// a register-encoded instruction
@@ -160,7 +162,7 @@ pub const Code = extern struct {
 
 pub const MAX_REGISTERS = 250;
 pub const LOAD_FACTOR = 80;
-pub const MAX_STR_HASHING_LEN = 0xff;
+pub const MAX_STR_HASHING_LEN = 0x7ff;
 
 const QNAN = @as(u64, 0x7ffc000000000000);
 const SIGN_BIT = @as(u64, 0x8000000000000000);
@@ -195,6 +197,8 @@ pub const ObjId = enum(u8) {
   objclass,
   objinstance,
   objmethod,
+  objstruct,
+  objtag,
 };
 
 pub const Obj = extern struct {
@@ -239,7 +243,7 @@ pub const ObjTuple = extern struct {
 
 pub const ObjMap = extern struct {
   obj: Obj,
-  meta: ValueHashMap
+  meta: ValueHashMap,
 };
 
 pub const ObjSMap = extern struct {
@@ -252,13 +256,10 @@ pub const ObjFn = extern struct {
   arity: u8,
   envlen: usize,
   code: Code,
-  name: ?*ObjString,
+  name: *const ObjString,
 
-  pub fn getName(self: *ObjFn) []const u8 {
-    if (self.name) |name| {
-      return name.string();
-    }
-    return "<lambda>";
+  pub inline fn getName(self: *const ObjFn) []const u8 {
+    return self.name.string();
   }
 };
 
@@ -300,7 +301,7 @@ pub const ObjNativeFn = extern struct {
   fun: NativeFn,
   name: usize,
 
-  pub fn getName(self: *ObjNativeFn) []const u8 {
+  pub fn getName(self: *const ObjNativeFn) []const u8 {
     return NativeFns[self.name];
   }
 };
@@ -325,8 +326,8 @@ pub const ObjError = extern struct {
 
 pub const ObjClass = extern struct {
   obj: Obj,
-  name: *ObjString,
   mlen: usize,
+  name: *const ObjString,
   methods: [*]Value,
 
   pub inline fn getInitMethod(self: *@This()) ?Value {
@@ -337,7 +338,27 @@ pub const ObjClass = extern struct {
     }
     return null;
   }
+
+  pub inline fn nameStr(self: *const @This()) []const u8 {
+    return self.name.string();
+  }
 };
+
+pub const ObjTag = extern struct {
+  obj: Obj,
+  name: *const ObjString,
+
+  pub inline fn nameStr(self: *@This()) []const u8 {
+    return self.name.string();
+  }
+
+  pub inline fn eql(self: *@This(), other: *@This()) bool {
+    return self.name == other.name;
+  }
+};
+
+/// structs are just classes with fields for methods
+pub const ObjStruct = ObjClass;
 
 pub const ObjInstance = extern struct {
   obj: Obj,
@@ -345,15 +366,13 @@ pub const ObjInstance = extern struct {
   fields: [*]Value,
 };
 
-
 pub const ObjFiber = extern struct {
   obj: Obj,
-  errval: Value = NOTHING_VAL, // TODO: remove?
+  errval: Value = NOTHING_VAL,
   origin: FiberOrigin,
   stack_cap: usize,
   frame_cap: usize,
   frame_len: usize,
-  // sp: *Value,
   fp: *CallFrame,
   stack: [*]Value,
   frames: [*]CallFrame,
@@ -523,6 +542,14 @@ pub inline fn isClass(val: Value) bool {
   return isObjType(val, .objclass);
 }
 
+pub inline fn isStruct(val: Value) bool {
+  return isObjType(val, .objstruct);
+}
+
+pub inline fn isTag(val: Value) bool {
+  return isObjType(val, .objtag);
+}
+
 pub inline fn isMethod(val: Value) bool {
   return isObjType(val, .objmethod);
 }
@@ -615,6 +642,14 @@ pub inline fn asClass(val: Value) *ObjClass {
   return @ptrCast(asObj(val));
 }
 
+pub inline fn asStruct(val: Value) *ObjStruct {
+  return @ptrCast(asObj(val));
+}
+
+pub inline fn asTag(val: Value) *ObjTag {
+  return @ptrCast(asObj(val));
+}
+
 pub inline fn asInstance(val: Value) *ObjInstance {
   return @ptrCast(asObj(val));
 }
@@ -624,18 +659,24 @@ pub inline fn asMethod(val: Value) *ObjMethod {
 }
 
 pub inline fn valueEqual(a: Value, b: Value) bool {
-  if (isNumber(a) and isNumber(b)) return asNumber(a) == asNumber(b);
-  return a == b;
+  if (a == b) {
+    return true;
+  } else if (isString(a) and isString(b)) {
+    return std.mem.eql(u8, asString(a).string(), asString(b).string());
+  } else {
+    return false;
+  }
 }
 
 pub inline fn valueFalsy(val: Value) bool {
   return (
-    (isBool(val) and !asBool(val)) or isNil(val) or 
-    (isNumber(val) and asNumber(val) == 0) or 
-    (isString(val) and asString(val).len == 0) or
-    (isList(val) and asList(val).len == 0) or
-    (isMap(val) and asMap(val).meta.len == 0) or
-    (isTuple(val) and asTuple(val).len == 0)
+    (isBool(val) and !asBool(val))
+    or isNil(val)
+    or (isNumber(val) and asNumber(val) == 0)
+    or (isString(val) and asString(val).len == 0)
+    or (isList(val) and asList(val).len == 0)
+    or (isMap(val) and asMap(val).meta.len == 0)
+    or (isTuple(val) and asTuple(val).len == 0)
   );
 }
 
@@ -654,7 +695,7 @@ pub fn printValue(val: Value) void {
   } else if (isBool(val)) {
     util.print("{}", .{asBool(val)});
   } else if (isNil(val)) {
-    util.print("nil", .{});
+    util.print(ks.NoneVar, .{});
   } else if (isObj(val)) {
     printObject(val);
   }
@@ -698,18 +739,36 @@ pub fn printObject(val: Value) void {
     },
     .objerror => {
       var err = asError(val);
-      util.print("(", .{});
+      util.print(ks.ErrorVar ++ "(", .{});
       @call(.always_inline, display, .{err.val});
-      util.print(")!", .{});
+      util.print(")", .{});
     },
     .objvalmap => {
       asMap(val).meta.display();
     },
     .objclass => {
-      util.print("{s}", .{asClass(val).name.string()});
+      util.print("{s}", .{asClass(val).nameStr()});
+    },
+    .objstruct => {
+      const st = asStruct(val);
+      util.print("{s}", .{st.nameStr()});
+      if (st.mlen > 0) {
+        util.print("(", .{});
+        const stop = st.mlen -| 1;
+        for (st.methods[0..st.mlen], 0..) |vl, i| {
+          @call(.always_inline, display, .{vl});
+          if (i < stop) {
+            util.print(", ", .{});
+          }
+        }
+        util.print(")", .{});
+      }
+    },
+    .objtag => {
+      util.print("{s}", .{asTag(val).nameStr()});
     },
     .objinstance => {
-      util.print("{{{s} instance}}", .{asObj(val).cls.?.name.string()});
+      util.print("{{{s} instance}}", .{asObj(val).cls.?.nameStr()});
     },
     .objmethod => {
       var mtd = asMethod(val);
@@ -737,64 +796,106 @@ pub fn printObject(val: Value) void {
   }
 }
 
-pub fn objectToString(val: Value, vm: *VM) Value {
-  // TODO: handle size overflow
+inline fn writeValues(items: []Value, last: usize, vm: *VM, uw: *U8Writer.Writer) anyerror!void {
+  for (items, 0..) |itm, i| {
+    try objToString(itm, vm, uw);
+    if (i < last) {
+      _ = try uw.write(", ");
+    }
+  }
+}
+
+fn objToString(val: Value, vm: *VM, uw: *U8Writer.Writer) anyerror!void {
   switch (asObj(val).id) {
-    .objstring => return val,
+    .objstring => {
+      _ = try uw.write(asString(val).string());
+    },
     .objvalmap => {
-      var buff: [20]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "@map[{}]", .{asMap(val).meta.len}) catch unreachable;
-      return createStringV(vm, &vm.strings, fmt, false);
+      _ = try uw.write("{");
+      var map = asMap(val);
+      const last = map.meta.len -| 1;
+      for (map.meta.items[0..map.meta.len], 0..) |itm, i| {
+        try objToString(itm.key, vm, uw);
+        _ = try uw.write(": ");
+        try objToString(itm.value, vm, uw);
+        if (i < last) {
+          _ = try uw.write(", ");
+        }
+      }
+      _ = try uw.write("}");
     },
     .objlist => {
-      var buff: [20]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "@list[{}]", .{asList(val).len}) catch unreachable;
-      return createStringV(vm, &vm.strings, fmt, false);
+      _ = try uw.write("[");
+      var list = asList(val);
+      try @call(.always_inline, writeValues, .{list.items[0..list.len], list.len -| 1, vm, uw});
+      _ = try uw.write("]");
     },
     .objtuple => {
-      var buff: [20]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "@tuple[{}]", .{asTuple(val).len}) catch unreachable;
-      return createStringV(vm, &vm.strings, fmt, false);
+      _ = try uw.write("(");
+      var tuple = asTuple(val);
+      try @call(.always_inline, writeValues, .{tuple.items[0..tuple.len], tuple.len -| 1, vm, uw});
+      _ = try uw.write(")");
     },
     .objerror => {
       // TODO: val
-      return createStringV(vm, &vm.strings, "@error[]", false);
+      _ = try uw.write("Error(");
+      try objToString(asError(val).val, vm, uw);
+      _ = try uw.write(")");
     },
     .objclosure => {
-      var buff: [30]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "@fn[{s}]", .{asFn(val).getName()}) catch unreachable;
-      return createStringV(vm, &vm.strings, fmt, false);
+      _ = try uw.write("{fn ");
+      _ = try uw.write(asFn(val).getName());
+      _ = try uw.write("}");
     },
     .objnativefn => {
-      var buff: [30]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "@builtin_fn[{s}]", .{asNativeFn(val).getName()}) catch unreachable;
-      return createStringV(vm, &vm.strings, fmt, false);
+      _ = try uw.write("{builtin_fn ");
+      _ = try uw.write(asNativeFn(val).getName());
+      _ = try uw.write("}");
     },
     .objfiber => {
-      return createStringV(vm, &vm.strings, "<fiber>", false);
+      _ = try uw.write("<fiber>");
     },
     .objinstance => {
-      var buff: [100]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "{{{s} instance}}", .{asObj(val).cls.?.name.string()}) catch unreachable;
-      return createStringV(vm, &vm.strings, fmt, false);
+      _ = try uw.write("{");
+      _ = try uw.write(asObj(val).cls.?.name.string());
+      _ = try uw.write(" instance}");
     },
     .objmethod => {
-      var buff: [100]u8 = undefined;
+      _ = try uw.write("{bound-method ");
       var mtd = asMethod(val);
-      var fmt: []const u8 = undefined;
       if (mtd.isBoundUserMethod()) {
-        fmt = std.fmt.bufPrint(&buff, "{{bound-method {s}}}", .{mtd.as.user.closure.fun.getName()}) catch unreachable;
+        _ = try uw.write(mtd.as.user.closure.fun.getName());
       } else {
-        fmt = std.fmt.bufPrint(&buff, "{{bound-method {s}}}", .{mtd.as.native.fun.getName()}) catch unreachable;
+        _ = try uw.write(mtd.as.native.fun.getName());
       }
-      return createStringV(vm, &vm.strings, fmt, false);
+      _ = try uw.write("}");
     },
     .objclass => {
-      return objVal(asClass(val).name);
+      _ = try uw.write("{class ");
+      _ = try uw.write(asClass(val).nameStr());
+      _ = try uw.write("}");
+    },
+    .objstruct => {
+      var stk = asStruct(val);
+      _ = try uw.write(stk.nameStr());
+      _ = try uw.write("(");
+      try @call(.always_inline, writeValues, .{stk.methods[0..stk.mlen], stk.mlen -| 1, vm, uw});
+      _ = try uw.write(")");
+    },
+    .objtag => {
+      _ = try uw.write(asTag(val).name.string());
     },
     .objupvalue, .objfn => unreachable,
   }
-  unreachable;
+}
+
+pub fn objectToString(val: Value, vm: *VM) Value {
+  var writer = vm.u8w.writer();
+  objToString(val, vm, &writer) catch {
+    vm.panicUnwindError("cannot stringify value", .{});
+    return NOTHING_VAL;
+  };
+  return objVal(createString(vm, &vm.strings, vm.u8w.items(), true));
 }
 
 pub fn valueToString(val: Value, vm: *VM) Value {
@@ -806,15 +907,14 @@ pub fn valueToString(val: Value, vm: *VM) Value {
     } else if (std.math.isInf(num)) {
       return createStringV(vm, &vm.strings, if (num > 0) "inf" else "-inf", false);
     } else {
-      // TODO
       var buff: [25]u8 = undefined;
       var fmt = std.fmt.bufPrint(&buff, "{d}", .{num}) catch unreachable;
       return createStringV(vm, &vm.strings, fmt, false);
     }
   } else if (isBool(val)) {
-    return createStringV(vm, &vm.strings, if (asBool(val)) "true" else "false", false);
+    return createStringV(vm, &vm.strings, if (asBool(val)) ks.TrueVar else ks.FalseVar, false);
   } else if (isNil(val)) {
-    return createStringV(vm, &vm.strings, "nil", false);
+    return createStringV(vm, &vm.strings, ks.NoneVar, false);
   }
   unreachable;
 }
@@ -849,6 +949,33 @@ pub fn hashBits(val: Value) u64 {
 pub fn hashObject(val: Value, vm: *VM) u64 {
   return switch (asObj(val).id) {
     .objstring => asString(val).hash,
+    .objclass, .objstruct => {
+      const it = asClass(val);
+      return it.name.hash ^ hashBits(@intCast(it.mlen));
+    },
+    .objinstance => {
+      const inst = asInstance(val);
+      return inst.obj.cls.?.name.hash ^ hashBits(@intCast(inst.flen));
+    },
+    .objtag => asTag(val).name.hash,
+    .objtuple => hashBits(val) ^ hashBits(asTuple(val).len),
+    .objclosure => {
+      const clo = asClosure(val);
+      return clo.fun.name.hash ^ hashBits(clo.fun.arity) ^ hashBits(clo.fun.code.words.len);
+    },
+    .objnativefn => {
+      const fun = asNativeFn(val);
+      return hashString(fun.getName()) ^ hashBits(fun.arity);
+    },
+    .objmethod => {
+      const fun = asMethod(val);
+      return (
+        if (fun.isBoundNativeMethod())
+          hashObject(objVal(fun.as.native.fun), vm) ^ hashObject(fun.as.native.instance, vm)
+        else 
+          hashObject(objVal(fun.as.user.closure), vm) ^ hashObject(fun.as.user.instance, vm)
+      );
+    },
     else => {
       vm.panicUnwindError("unhashable type: '{s}'", .{asString(objectToString(val, vm)).string()});
       return 0;
@@ -888,7 +1015,7 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
     _ = map.set(tmp, FALSE_VAL, vm);
     return tmp;
   }
-  return string.?;
+  return string.?.key;
 }
 
 pub fn createList(vm: *VM, len: usize) *ObjList {
@@ -921,9 +1048,15 @@ pub inline fn createStringV(vm: *VM, map: *StringHashMap, str: []const u8, is_al
 pub fn createFn(vm: *VM, arity: u8) *ObjFn {
   var fun = @call(.always_inline, createObject, .{vm, .objfn, null, ObjFn});
   fun.code = Code.init();
-  fun.name = null;
+  fun.name = undefined;
   fun.arity = arity;
   fun.envlen = 0;
+  return fun;
+}
+
+pub fn createScriptFn(vm: *VM, arity: u8) *ObjFn {
+  const fun = createFn(vm, arity);
+  fun.name = createString(vm, &vm.strings, ks.ScriptVar, false);
   return fun;
 }
 
@@ -963,6 +1096,23 @@ pub fn createClass(vm: *VM, mlen: usize) *ObjClass {
   cls.methods = methods.ptr;
   cls.name = undefined;
   return cls;
+}
+
+pub fn createStruct(vm: *VM, flen: usize) *ObjStruct {
+  var strukt = createClass(vm, flen);
+  strukt.obj.id = .objstruct;
+  return strukt;
+}
+
+pub fn createTag(vm: *VM, name: []const u8) Value {
+  const str = createString(vm, &vm.strings, name, false);
+  if (vm.tags.findInterned(str.string(), str.hash)) |itm| {
+    return itm.value;
+  }
+  const tag = @call(.always_inline, createObject, .{vm, .objtag, null, ObjTag});
+  tag.name = str;
+  _ = vm.tags.set(str, objVal(tag), vm);
+  return objVal(tag);
 }
 
 pub fn createInstance(vm: *VM, cls: *ObjClass, flen: usize) *ObjInstance {
@@ -1008,4 +1158,19 @@ pub fn createFiber(vm: *VM, clo: ?*ObjClosure, origin: FiberOrigin, caller: ?*Ob
     fiber.appendFrame(closure, stack.ptr);
   }
   return fiber;
+}
+
+pub fn structVal(vm: *VM, val: Value, name: []const u8) Value {
+  var just = createStruct(vm, 1);
+  just.name = createString(vm, &vm.strings, name, false);
+  just.methods[0] = val;
+  return objVal(just);
+}
+
+pub fn justVal(vm: *VM, val: Value) Value {
+  return @call(.always_inline, structVal, .{vm, val, ks.JustVar});
+}
+
+pub inline fn noneVal() Value {
+  return NIL_VAL;
 }

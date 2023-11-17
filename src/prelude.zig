@@ -1,7 +1,11 @@
 pub const BuiltinsSrc =
-\\ type never = never
+\\ type Maybe{T} = Just(T) | None
 \\
-\\ def assert(arg: bool, msg: str): void | noreturn
+\\ type Result{T, E} = Ok(T) | Error(E)
+\\
+\\ alias never = never
+\\
+\\ def assert(arg: bool, msg: str): void
 \\    #[[internal]]
 \\ end
 \\
@@ -17,11 +21,11 @@ pub const BuiltinsSrc =
 \\   #[[internal]]
 \\ end
 \\
-\\ class list{T}
-\\  def init(args*: T): void
-\\     #[[internal]]
-\\  end
+\\ def println(args*: any): void
+\\   #[[internal]]
+\\ end
 \\
+\\ class List{T}
 \\  def append(item: T): void
 \\    #[[internal]]
 \\  end
@@ -30,35 +34,30 @@ pub const BuiltinsSrc =
 \\    #[[internal]]
 \\  end
 \\
-\\  def pop(): T | err{str}
+\\  def pop(): Maybe{T}
 \\    #[[internal]]
 \\  end
 \\
-\\  def get(index: num): T?
+\\  def get(index: num): Maybe{T}
 \\    #[[internal]]
 \\  end
 \\ end
 \\
-\\ class tuple{T}
-\\  def init(args*: T): void
-\\     #[[internal]]
-\\  end
-\\
+\\ class Tuple{T}
 \\  def len(): num
 \\    #[[internal]]
 \\  end
-\\
-\\  def get(index: num): T?
-\\    #[[internal]]
-\\  end
 \\ end
 \\
-\\ class map{K, V}
+\\
+\\ type MapEntry{K, V} = Key(K) | Value(V)
+\\
+\\ class Map{K, V}
 \\  def set(key: K, value: V): bool
 \\    #[[internal]]
 \\  end
 \\
-\\  def get(key: K): V?
+\\  def get(key: K): Maybe{V}
 \\    #[[internal]]
 \\  end
 \\
@@ -70,34 +69,24 @@ pub const BuiltinsSrc =
 \\    #[[internal]]
 \\  end
 \\
-\\  def keys(): list{K}
+\\  def keys(): List{K}
 \\    #[[internal]]
 \\  end
 \\
-\\  def values(): list{V}
+\\  def values(): List{V}
 \\    #[[internal]]
 \\  end
 \\  
-\\  def items(): list{tuple{K | V}}
+\\  def items(): List{Tuple{K, V}}
 \\    #[[internal]]
 \\  end
 \\
-\\  def listItems(): list{K | V}
+\\  def listItems(): List{MapEntry{K, V}}
 \\    #[[internal]]
 \\  end
 \\
 \\  def len(): num
 \\    #[[internal]]
-\\  end
-\\ end
-\\
-\\ class err{T}
-\\  def init(val: T): void
-\\     #[[internal]]
-\\  end
-\\
-\\  def value(): T
-\\     #[[internal]]
 \\  end
 \\ end
 \\

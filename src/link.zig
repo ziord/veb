@@ -218,18 +218,32 @@ pub const TypeLinker = struct {
     return error.TypeLinkError;
   }
 
-  fn insertTVar(self: *Self, typ: *Type, data: MultiPair) void {
+  fn softError(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
+    self.diag.addDiagnosticsWithLevel(.DiagError, token, "Error: " ++ fmt, args);
+  }
+
+  fn getConcatName(self: *Self, tvar: *types.Variable) []const u8 {
+    const end = tvar.tokens.len() - 1;
+    for (tvar.tokens.items(), 0..) |tk, i| {
+      _ = self.u8w.writer().write(tk.value) catch 0;
+      if (i < end) {
+        _ = self.u8w.writer().write(".") catch 0;
+      }
+    }
+    return self.u8w.items();
+  }
+
+  inline fn getVarName(self: *Self, typ: *Type) []const u8 {
     var tvar = typ.variable();
-    if (tvar.tokens.len() > 1) util.todo("multiple var tokens!");
-    var name = tvar.tokens.itemAt(0).value;
-    self.cyc_scope.insert(name, data);
+    return if (tvar.tokens.len() == 1) tvar.tokens.itemAt(0).value else self.getConcatName(tvar);
+  }
+
+  fn insertTVar(self: *Self, typ: *Type, data: MultiPair) void {
+    self.cyc_scope.insert(self.getVarName(typ), data);
   }
 
   fn checkTVar(self: *Self, typ: *Type, found: *Type) ?*Type {
-    var tvar = typ.variable();
-    if (tvar.tokens.len() > 1) return null;
-    var name = tvar.tokens.itemAt(0).value;
-    if (self.cyc_scope.lookup(name)) |pair| {
+    if (self.cyc_scope.lookup(self.getVarName(typ))) |pair| {
       // extra p.o.c;
       if (pair.key == found) {
         return pair.value;
@@ -239,9 +253,7 @@ pub const TypeLinker = struct {
   }
 
   fn delTVar(self: *Self, typ: *Type) void {
-    var tvar = typ.variable();
-    if (tvar.tokens.len() > 1) return;
-    var name = tvar.tokens.itemAt(0).value;
+    const name = self.getVarName(typ);
     if (self.cyc_scope.lookup(name)) |pair| {
       // only delete this pair if `typ` is its exact setter
       if (pair.setter == typ) {
@@ -250,15 +262,37 @@ pub const TypeLinker = struct {
     }
   }
 
+  inline fn insert(self: *Self, name: []const u8, typ: *Type) void {
+    self.ctx.typScope.insert(name, typ);
+  }
+
+  inline fn lookup(self: *Self, name: []const u8) ?*Type {
+    return self.ctx.typScope.lookup(name);
+  }
+
   inline fn lookupVarType(self: *Self, typ: *Type) ?*Type {
     var tokens = typ.variable().tokens.items();
-    return if (tokens.len > 1) {
+    if (tokens.len > 1) {
       // TODO: context type
-      util.todo("multiple names impl with context type");
-    } else blk: {
-      var name = tokens[0];
-      break :blk self.ctx.typScope.lookup(name.value);
-    };
+      self.ctx.enterScope();
+      defer self.ctx.leaveScope();
+      const end = tokens.len - 1;
+      for (tokens, 0..) |tk, i| {
+        if (self.lookup(tk.value)) |ty| {
+          if (ty.isTaggedUnion()) {
+            // bring the variants into scope
+            for (ty.taggedUnion().variants.items()) |_ty| {
+              self.insert(_ty.tag().name, _ty);
+            }
+          } else if (i == end) {
+            return ty;
+          }
+        }
+      }
+      return null;
+    } else {
+      return self.lookup(tokens[0].value);
+    }
   }
 
   fn findType(self: *Self, typ: *Type, from_gen: bool) ?*Type {
@@ -312,8 +346,8 @@ pub const TypeLinker = struct {
     }
   }
 
+  /// check that a generic instantiation of a type alias matches the defined alias type
   inline fn assertGenericAliasSubMatches(self: *Self, alias: *Type, typ: *Type, debug: Token) !void {
-    // check that a generic instantiation of a type alias matches the defined alias type
     if (!alias.isGeneric()) {
       return self.error_(
         debug,
@@ -338,8 +372,9 @@ pub const TypeLinker = struct {
     }
   }
 
+  /// resolve a type alias abstractly by walking the alias chain without substituting
   fn resolveTypeAbs(self: *Self, typ: *Type, debug: Token) TypeLinkError!bool {
-    // resolve a type alias abstractly by walking the alias chain without substituting
+    if (typ.isRecursive()) return true;
     if (typ.isGeneric()) {
       var gen = typ.generic();
       util.assert(gen.base.isVariable(), "gen.base should be a Variable()");
@@ -370,6 +405,24 @@ pub const TypeLinker = struct {
       for (typ.union_().variants.values()) |variant| {
         if (try self.resolveTypeAbs(variant, debug)) {
           return true;
+        }
+      }
+      return false;
+    }
+    if (typ.isTaggedUnion()) {
+      for (typ.taggedUnion().variants.items()) |variant| {
+        if (try self.resolveTypeAbs(variant, debug)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    if (typ.isTag()) {
+      if (typ.tag().params) |params| {
+        for (params.items()) |param| {
+          if (try self.resolveTypeAbs(param.typ, debug)) {
+            return true;
+          }
         }
       }
       return false;
@@ -407,22 +460,21 @@ pub const TypeLinker = struct {
       // specially handle recursive generic types
       if (eqn.isRecursive()) {
         var rec = eqn.recursive();
-        if (rec.base.alias) |lhs| {
-          if (!lhs.isGeneric()) {
-            return self.error_(debug, "non-generic type instantiated as generic", .{});
-          }
-          // check that the tparams of this generic type matches it's type alias tparams exactly.
-          try self.assertGenericAliasSubMatches(lhs, typ, debug);
-          // A generic recursive type's tparams will never be resolved and substituted for, so
-          // just ensure that the tparam is actually valid.
-          for (gen.tparams.items()) |tparam| {
-            _ = try self.resolveType(tparam, debug);
-          }
-          return eqn;
+        var lhs = rec.base.alias.?;
+        if (!lhs.isGeneric()) {
+          return self.error_(debug, "non-generic type instantiated as generic", .{});
         }
-        unreachable;
-      }
-      else if (eqn.isClass()) {
+        // check that the tparams of this generic type matches it's type alias tparams exactly.
+        try self.assertGenericAliasSubMatches(lhs, typ, debug);
+        // A generic recursive type's tparams will never be resolved and substituted for, so
+        // just ensure that the tparam is actually valid.
+        for (gen.tparams.items()) |tparam| {
+          _ = try self.resolveType(tparam, debug);
+        }
+        // complete the ouroboros
+        typ.* = eqn.*;
+        return eqn;
+      } else if (eqn.isClass()) {
         // create a temp generic type and validate if this generic substitution matches
         var tmp = Type.init(.{.Generic = .{.tparams = eqn.klass().tparams.?.*, .base = eqn}});
         try self.assertGenericAliasSubMatches(&tmp, typ, debug);
@@ -431,9 +483,8 @@ pub const TypeLinker = struct {
           eqn.klass().tparams.?.items()[i] = try self.resolveType(gen.tparams.itemAt(i), debug);
         }
         return eqn;
-      }
-      // only instantiate generic type variables when the alias type is guaranteed to be generic
-      else if (eqn.alias == null or !eqn.alias.?.isGeneric()) {
+      } else if (eqn.alias == null or !eqn.alias.?.isGeneric()) {
+        // only instantiate generic type variables when the alias type is guaranteed to be generic
         return self.error_(debug, "Non-generic type instantiated as generic", .{});
       }
       var alias = eqn.alias.?;
@@ -441,11 +492,15 @@ pub const TypeLinker = struct {
       self.ctx.typScope.pushScope();
       self.using_tvar += 1;
       var alias_gen = alias.generic();
+      var resolved_params = TypeList.init(self.ctx.allocator());
       for (alias_gen.getSlice(), 0..) |tvar, i| {
-        var tsub = gen.tparams.itemAt(i);
-        // var r_tsub = try self.resolveType(tsub);
         std.debug.assert(tvar.variable().tokens.len() == 1);
-        self.ctx.typScope.insert(tvar.variable().tokens.itemAt(0).value, tsub); // r_tsub
+        var tsub = gen.tparams.itemAt(i);
+        const r_tsub = try self.resolveType(tsub, debug);
+        resolved_params.append(r_tsub);
+      }
+      for (alias_gen.getSlice(), resolved_params.items()) |tvar, tsub| {
+        self.insert(tvar.variable().tokens.itemAt(0).value, tsub);
       }
       // `eqn` is the type alias' aliasee, and may not be generic, so we add an extra guard.
       // for ex: type Foo{T} = T  # <-- aliasee/eqn 'T' is not generic here.
@@ -489,6 +544,22 @@ pub const TypeLinker = struct {
       }
       return Type.compressTypes(&uni.variants, typ);
     }
+    if (typ.isTaggedUnion()) {
+      var variants = &typ.taggedUnion().variants;
+      for (variants.items(), 0..) |variant, i| {
+        variants.items()[i] = try self.resolveType(variant, debug);
+      }
+      return typ;
+    }
+    if (typ.isTag()) {
+      if (typ.tag().params) |params| {
+        for (params.items(), 0..) |prm, i| {
+          params.items()[i].typ = try self.resolveType(prm.typ, debug);
+        }
+      }
+      self.insert(typ.tag().name, typ);
+      return typ;
+    }
     if (typ.isVariable()) {
       // if this variable occurs in the pair stack before we push it, then it's cyclic/recursive
       // when we begin resolving a variable - we push it on the pair stack
@@ -498,7 +569,7 @@ pub const TypeLinker = struct {
         if (alias.isGeneric()) {
           // check if this is a regular generic type called without instantiation, 
           // or a recursive generic type called without instantiation
-          if (self.using_tvar == 0 or (eqn.isRecursive())) {
+          if ((self.using_tvar == 0 or eqn.isRecursive()) and !eqn.isTaggedUnion()) {
             return self.error_(
               debug,
               "generic type '{s}' may not have been instantiated correctly",
@@ -525,14 +596,23 @@ pub const TypeLinker = struct {
     }
     self.cyc_scope.pushScope();
     var sol = try self.resolveType(typ, debug);
-    if (sol.isUnion()) {
-      sol = Type.compressTypes(&sol.union_().variants, sol);
+    if (sol.isTaggedUnion()) {
+      sol = Type.compressTaggedTypes(&sol.taggedUnion().variants, sol);
+    }
+    if (sol.isTaggedUnion()) {
+      for (sol.taggedUnion().variants.items()) |ty| {
+        self.insert(ty.tag().name, ty);
+      }
+    } else if (sol.isTag()) {
+      self.insert(sol.tag().name, sol);
     }
     self.cyc_scope.popScope();
     return sol;
   }
 
   pub fn resolve(self: *Self, typ: *Type, debug: Token) !*Type {
+    self.ctx.enterScope();
+    defer self.ctx.leaveScope();
     const ty = try self.tryResolveType(typ, debug);
     // set alias info for debugging
     if (typ.alias == null) {
@@ -541,6 +621,20 @@ pub const TypeLinker = struct {
           ty.alias = typ;
         }
       } else ty.alias = typ;
+    }
+    // see if we can substitute any 
+    if (typ.alias) |alias| {
+      if (alias.isGeneric() and alias.hasVariable()) {
+        var new_alias = self.ctx.copyType(alias);
+        for (alias.generic().getSlice(), 0..) |_ty, i| {
+          if (_ty.isVariable()) {
+            if (self.lookup(_ty.variable().tokens.getLast().value)) |_typ| {
+              new_alias.generic().getSlice()[i] = _typ;
+            }
+          }
+        }
+        ty.alias = new_alias;
+      }
     }
     return ty;
   }
@@ -638,6 +732,15 @@ pub const TypeLinker = struct {
     var typ = node.alias.typ;
     var tokens = if (typ.isGeneric()) typ.generic().base.variable().tokens else typ.variable().tokens;
     self.ctx.typScope.insert(tokens.itemAt(0).value, node.aliasee.typ);
+    // set tags
+    typ = node.aliasee.typ;
+    if (typ.isTaggedUnion()) {
+      for (typ.taggedUnion().variants.items()) |ty| {
+        self.insert(ty.tag().name, ty);
+      }
+    } else if (typ.isTag()) {
+      self.insert(typ.tag().name, typ);
+    }
   }
 
   fn linkSubscript(self: *Self, node: *ast.SubscriptNode) !void {
@@ -702,7 +805,7 @@ pub const TypeLinker = struct {
       var typ = Type.newClass(node.name.token.value, self.ctx.allocator()).box(self.ctx.allocator());
       // use tparams. fields and methods are resolved by the type checker
       typ.klass().tparams = node.tparams;
-      self.ctx.typScope.insert(node.name.token.value, typ);
+      self.insert(node.name.token.value, typ);
     }
     if (node.isGeneric()) {
       if (!allow_generic) return;

@@ -4,6 +4,8 @@ const util = @import("util.zig");
 const Allocator = std.mem.Allocator;
 
 pub fn ArrayList(comptime T: type) type {
+  const CmpFn = fn (a: T, b: T) callconv(.Inline) bool;
+  const FilterFn = fn (a: T) callconv(.Inline) bool;
   return struct {
     list: std.ArrayList(T),
 
@@ -69,7 +71,14 @@ pub fn ArrayList(comptime T: type) type {
       return i;
     }
 
-    pub inline fn len(self: *@This()) usize {
+    pub fn indexOf(self: *@This(), item: T, comptime cmp_fn: CmpFn) i32 {
+      for (self.list.items, 0..) |itm, i| {
+        if (cmp_fn(itm, item)) return @intCast(i);
+      }
+      return -1;
+    }
+  
+    pub inline fn len(self: *const @This()) usize {
       return self.list.items.len;
     }
 
@@ -95,12 +104,21 @@ pub fn ArrayList(comptime T: type) type {
       return self.list.pop();
     }
 
-    const CmpFn = fn (a: T, b: T) callconv(.Inline) bool;
     pub fn contains(self: *@This(), item: T, comptime cmp_fn: CmpFn) bool {
       for (self.list.items) |itm| {
         if (cmp_fn(itm, item)) return true;
       }
       return false;
+    }
+
+    pub fn filter(self: *const @This(), comptime predicate: FilterFn) @This() {
+      var new = @This().init(self.allocator());
+      for (self.list.items) |itm| {
+        if (predicate(itm)) {
+          new.append(itm);
+        }
+      }
+      return new;
     }
 
     pub inline fn clearAndFree(self: *@This()) void {
@@ -111,7 +129,7 @@ pub fn ArrayList(comptime T: type) type {
       self.list.ensureTotalCapacity(new_cap) catch {};
     }
 
-    pub inline fn allocator(self: *@This()) Allocator {
+    pub inline fn allocator(self: *const @This()) Allocator {
       return self.list.allocator;
     }
 
@@ -132,6 +150,13 @@ pub fn ArrayList(comptime T: type) type {
       return new;
     }
 
+    pub fn copy(ori: *ArrayList(T)) ArrayList(T) {
+      var new = ArrayList(T).init(ori.allocator());
+      new.ensureTotalCapacity(ori.capacity());
+      new.appendSlice(ori.items());
+      return new;
+    }
+  
     pub inline fn box(self: ArrayList(T)) *ArrayList(T) {
       return util.box(ArrayList(T), self, self.list.allocator);
     }
@@ -197,7 +222,7 @@ pub fn ArrayHashMap(comptime K: type, comptime V: type) type {
       return self.map.count() > 0;
     }
 
-    pub fn clone(self: *@This()) @This() {
+    pub fn copy(self: *@This()) @This() {
       var map = self.map.clone() catch {
         var new = @This() {.map = std.AutoArrayHashMap(K, V).init(self.map.allocator)};
         var itr = self.map.iterator();

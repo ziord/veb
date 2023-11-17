@@ -1,5 +1,31 @@
 const doStaticTest = @import("lib.zig").doStaticTest;
 
+test "recursive types" {
+  const src =
+  \\ # simple recursive
+  \\ type K = A(str) | B(bool) | C(num)
+  \\ alias V = Map{K, V}
+  \\ alias V2 = Map{V, V2}
+  \\ let p = (1, (2,), 3, (1, 2, [3]))
+  \\ let x = {
+  \\   {
+  \\      A('abc') as K: {
+  \\          A('abc') as K: C(123) as K,
+  \\          B(true): C(0xff), A('obs'): A('fin')
+  \\      } as V
+  \\    }:
+  \\   ({
+  \\      C(0.123) as K: {
+  \\          A('abc') as K: C(123) as K,
+  \\          B(true): C(0xff), A('obs'): A('fin')
+  \\      } as V
+  \\    })
+  \\  } as V2
+  \\ print(x)
+  ;
+  try doStaticTest(src);
+}
+
 test "functions.<recursive>" {
   var src =
   \\ # mutually recursive
@@ -37,12 +63,12 @@ test "functions.<recursive>" {
   \\ end
   \\ mutMe('fox')
   \\
-  \\ type J =  list{num | str}
+  \\ alias J =  Tuple{num, str}
   \\ def fox{A, B}(x: A, y: B)
-  \\  let p: J = [13 as num | str, 4]
+  \\  let p: J = (13, '4')
   \\  return fox(x, y)
   \\ end
-  \\ fox('a', nil)
+  \\ fox('a', None)
   ;
   try doStaticTest(src);
 }
@@ -79,7 +105,7 @@ test "functions.<void>" {
 
 test "functions-12-user-defined-never" {
   var src =
-  \\ type never = never
+  \\ alias never = never
   \\ def rec(): never
   \\  return rec()
   \\ end
@@ -88,18 +114,18 @@ test "functions-12-user-defined-never" {
   \\
   \\ def fun(x: num)
   \\  if x > 5
-  \\    return 'ok'
+  \\    return S('ok')
   \\  else
-  \\    return x - 3
+  \\    return N(x - 3)
   \\  end
   \\ end
-  \\
+  \\ type NS = N(num) | S(str)
   \\ let j = fun(5)
   \\ let p: never = rec()
-  \\ if j is str
+  \\ if j is S
   \\  [j]
-  \\ elif j is num
-  \\  j *= 9
+  \\ elif j is N
+  \\  j = N(9)
   \\ else
   \\  p = j
   \\ end
@@ -135,7 +161,7 @@ test "simple-classes-1" {
 test "generic-classes-1" {
   var src =
   \\ let j = [1, 2, 3]
-  \\ let p = (j.pop() orelse 0) + 4
+  \\ let p = (j.pop().??) + 4
   \\ j.append(4)
   \\ let k = (j, p)
   \\ p += k.len()
@@ -143,9 +169,9 @@ test "generic-classes-1" {
   \\ let x = {'a': 5, 'b': 6}
   \\ x.keys().len()
   \\ x.values().len()
-  \\ x.get('a').? + 12
+  \\ x.get('a').?? + 12
   \\ let j = [1, 2, 3]
-  \\ let p = (j.pop() orelse 0) + 4
+  \\ let p = (j.pop().??) + 4
   ;
   try doStaticTest(src);
 }
@@ -153,7 +179,7 @@ test "generic-classes-1" {
 test "generic-classes-2" {
   var src =
   \\ class Fox{T}
-  \\    x: tuple{T}
+  \\    x: List{T}
   \\    def init(x*: T): void
   \\      self.x = x
   \\    end
@@ -162,7 +188,7 @@ test "generic-classes-2" {
   \\    end
   \\
   \\    def getGen()
-  \\      type T = tuple{str}
+  \\      alias T = Tuple{str}
   \\      def fun(p: T)
   \\        return p[0]
   \\      end
@@ -183,7 +209,7 @@ test "generic-classes-2" {
   \\ let j = Fox{'mia'}('mia')
   \\ j = w
   \\
-  \\ type Poo{T} = Fox{T}
+  \\ alias Poo{T} = Fox{T}
   \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
   \\ let j:Poo{'mia'} = Fox{'mia'}('mia')
   ;

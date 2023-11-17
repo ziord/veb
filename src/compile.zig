@@ -22,6 +22,8 @@ const Diagnostic = diagnostics.Diagnostic;
 const GenInfo = check.TypeChecker.GenInfo;
 const GenInfoMap = ds.ArrayHashMap(*Node, *ds.ArrayList(GenInfo));
 const TypeList = check.TypeList;
+const Type = check.Type;
+const U8Writer = util.U8Writer;
 const InitVar = ks.InitVar;
 const logger = std.log.scoped(.compile);
 
@@ -208,6 +210,7 @@ pub const Compiler = struct {
   _prelude: *Node,
   _prelude_len: usize = 0,
   skip_gsyms: bool = false,
+  u8w: U8Writer,
   
   const Self = @This();
 
@@ -252,6 +255,7 @@ pub const Compiler = struct {
       .diag = diag,
       .generics = info,
       ._prelude = prel,
+      .u8w = U8Writer.init(al),
     };
     if (prev) |p| {
       self.adoptBuiltinsPrelude(p);
@@ -291,7 +295,7 @@ pub const Compiler = struct {
 
   inline fn isSelfVar(self: *Self, node: *ast.VarNode) bool {
     _ = self;
-    return std.mem.eql(u8, node.token.value, ks.SelfVar);
+    return node.token.valueEql(ks.SelfVar);
   }
 
   inline fn incScope(self: *Self) void {
@@ -449,7 +453,7 @@ pub const Compiler = struct {
     while (i > 0): (i -= 1) {
       var idx = i - 1;
       if (self.scope < scopes[idx]) break;
-      if (std.mem.eql(u8, names[idx].*, node.token.value)) {
+      if (node.token.valueEql(names[idx].*)) {
         return self.locals.get(idx);
       }
     }
@@ -476,7 +480,7 @@ pub const Compiler = struct {
     var i: usize = self.gsyms.len;
     var names = self.gsyms.items(.name);
     while (i > 0): (i -= 1) {
-      if (std.mem.eql(u8, names[i - 1].*, node.token.value)) {
+      if (node.token.valueEql(names[i - 1].*)) {
         return @intCast(i - 1);
       }
     }
@@ -488,7 +492,7 @@ pub const Compiler = struct {
     var i: usize = self.globals.len;
     var names = self.globals.items(.name);
     while (i > 0): (i -= 1) {
-      if (std.mem.eql(u8, names[i - 1].*, node.token.value)) {
+      if (node.token.valueEql(names[i - 1].*)) {
         return self.globals.get(i - 1);
       }
     }
@@ -579,7 +583,6 @@ pub const Compiler = struct {
         },
         .AstFun => |*fun| {
           if (fun.isGeneric()) {
-            // if (fun.name) |ident| self.addPatchInitGlobalVar(ident);
             if (self.generics.get(decl)) |list| {
               for (list.items()) |itm| {
                 itm.instance.AstFun.name = itm.synth_name;
@@ -763,25 +766,15 @@ pub const Compiler = struct {
   fn cIs(self: *Self, node: *ast.BinaryNode, dst: u32) !u32 {
     self.optimizeConstRK();
     var rk1 = try self.c(node.left, dst);
-    const dst2 = try self.getReg(node.left.getToken());
     var op = OpCode.Is;
     var rk2 = tb: {
       var typ = node.right.getType().?;
       typ = if (typ.isTop()) typ.top().child else typ;
       if (typ.isClass()) {
-        if (typ.isClsGeneric()) {
-          std.debug.assert(typ.klass().isInstantiatedGeneric());
-          var cls = typ.klass();
-          if (!cls.builtin) {
-            var nd = &cls.node.?.AstClass;
-            nd.name.token.value = check.TypeChecker.makeSynthName(self.alloc(), nd.name.token.value, false, cls.tparams.?, null);
-          }
-        }
         break :tb (
           if (typ.isListTy()) TypeKind.TyClass
           else if (typ.isMapTy()) TypeKind.TyClass + 1
           else if (typ.isTupleTy()) TypeKind.TyClass + 2
-          else if (typ.isErrorTy()) TypeKind.TyClass + 3
           else if (typ.klass().isStringClass()) @intFromEnum(TypeKind.TyString)
           else blk: {
             op = OpCode.Iscls;
@@ -792,11 +785,23 @@ pub const Compiler = struct {
             break :blk rk2;
           }
         );
+      } else if (typ.isNoneTy()) {
+        break :tb @intFromEnum(check.types.TypeKind.TyNil);
+      } else if (typ.isErrorTy()) {
+        break :tb TypeKind.TyClass + 3;
+      } else if (typ.isTag()) {
+        // get name
+        op = OpCode.Istag;
+        const token = node.right.getToken();
+        const name = value.createString(self.vm, &self.vm.strings, typ.tag().name, false);
+        const dst2 =  try self.getReg(node.left.getToken());
+        const rk2 = self.cConst(dst2, value.objVal(name), token.line);
+        self.vreg.releaseReg(dst2);
+        break :tb rk2;
       } else {
         break :tb @intFromEnum(typ.concrete().tkind);
       }
     };
-    self.vreg.releaseReg(dst2);
     self.fun.code.write3ArgsInst(op, dst, rk1, rk2, @intCast(node.line()), self.vm);
     self.deoptimizeConstRK();
     return dst;
@@ -910,18 +915,35 @@ pub const Compiler = struct {
         }
       }
     }
+    if (node.typ) |ty| {
+      if (ty.isTag()) {
+        return self.cTagVar(node, ty, dst);
+      }
+    }
     return self.compileError(node.token, "use of undefined variable '{s}'", .{node.token.value});
   }
 
   fn cDotAccess(self: *Self, node: *ast.DotAccessNode, is_call: bool, dst: u32) !u32 {
     // is_call is an optimization hint that helps generate an inst that combines Gmtd + Call
     self.optimizeConstRK();
-    var rk_inst = try self.c(node.lhs, dst);
     var tmp = node.lhs.getType().?;
-    var ty = tmp.classOrInstanceClass().klass();
+    // qualified tag access
+    if (tmp.isTaggedUnion() or (tmp.isTag() and node.rhs.isVariable())) {
+      return self.cTagVar(&node.rhs.AstVar, node.typ.?, dst);
+    }
+    var rk_inst = try self.c(node.lhs, dst);
+    // tag field access
+    if (tmp.isTag()) {
+      const prop_idx: u32 = @intFromFloat(node.rhs.AstNumber.value);
+      const line = node.lhs.getToken().line;
+      self.fun.code.write3ArgsInst(.Gsfd, dst, rk_inst, prop_idx, line, self.vm);
+      self.deoptimizeConstRK();
+      return dst;
+    }
     var prop = node.rhs.getToken(); // should be a VarNode's token
     var prop_idx: u32 = 0;
     var op: OpCode = undefined;
+    var ty = tmp.classOrInstanceClass().klass();
     if (ty.getFieldIndex(prop.value)) |idx| {
       prop_idx = @intCast(idx);
       op = .Gfd;
@@ -987,16 +1009,24 @@ pub const Compiler = struct {
     // rhs-expr
     var val_reg = try self.getReg(node.rhs.getToken());
     var rk_val = try self.c(rhs, val_reg);
-    var tmp = node.lhs.getType().?;
-    var ty = (if (tmp.isInstance()) tmp.instance().cls.klass() else tmp.klass());
-    var prop = node.rhs.getToken();
-    var prop_idx: u32 = 0;
-    if (ty.getFieldIndex(prop.value)) |idx| {
-      prop_idx = @intCast(idx);
+    var typ = node.lhs.getType().?;
+    const token = node.lhs.getToken();
+    if (typ.isInstance() or typ.isClass()) {
+      var ty = typ.classOrInstanceClass().klass();
+      var prop = node.rhs.getToken();
+      var prop_idx: u32 = 0;
+      if (ty.getFieldIndex(prop.value)) |idx| {
+        prop_idx = @intCast(idx);
+      } else {
+        return self.compileError(prop, "No such field '{s}'", .{prop.value});
+      }
+      self.fun.code.write3ArgsInst(.Sfd, rx, prop_idx, rk_val, prop.line, self.vm);
+    } else if (typ.isJustTy()) {
+      // TODO: is mutation of tag's content safe?
+      self.fun.code.write3ArgsInst(.Ssfd, rx, 0, rk_val, token.line, self.vm);
     } else {
-      return self.compileError(prop, "No such field '{s}'", .{prop.value});
+      return self.compileError(token, "unexpected type: '{s}'", .{typ.typename(&self.u8w)});
     }
-    self.fun.code.write3ArgsInst(.Sfd, rx, prop_idx, rk_val, prop.line, self.vm);
     self.vreg.releaseReg(val_reg);
     self.deoptimizeConstRK();
     return dst;
@@ -1096,9 +1126,9 @@ pub const Compiler = struct {
   }
 
   fn cDeref(self: *Self, node: *ast.DerefNode, reg: u32) !u32 {
-    var rx = try self.c(node.expr, reg);
+    const rx = try self.c(node.expr, reg);
     self.fun.code.write3ArgsInst(.Asrt, rx, 0, 0, node.token.line, self.vm);
-    return reg;
+    return rx;
   }
 
   fn cBlockNoPops(self: *Self, node: *ast.BlockNode, reg: u32) !u32 {
@@ -1150,7 +1180,7 @@ pub const Compiler = struct {
       // as a simple optimization, if we only have an if-end statement, i.e. no elif & else,
       // we don't need to jump after the last statement in the if-then block, control
       // would naturally fallthrough to outside of the if-end statement.
-      if (node.elifs.len() == 0 and node.els.block().nodes.len() == 0) {
+      if (node.elifs.len() == 0 and node.els.block().canAssumeEmpty(Node.isMarker)) {
         should_patch_if_then_to_end = false;
         break :blk @as(usize, 0);
       }
@@ -1208,7 +1238,7 @@ pub const Compiler = struct {
       // as a simple optimization, if we only have an if-end statement, i.e. no elif & else,
       // we don't need to jump after the last statement in the if-then block, control
       // would naturally fallthrough to outside of the if-end statement.
-      if (node.els.block().nodes.len() == 0) {
+      if (node.els.block().canAssumeEmpty(Node.isMarker)) {
         should_patch_if_then_to_end = false;
         break :blk @as(usize, 0);
       }
@@ -1298,6 +1328,7 @@ pub const Compiler = struct {
     var new_fn = value.createFn(self.vm, @intCast(node.params.len()));
     var is_global = self.inGlobalScope();
     var is_lambda = node.name == null;
+    if (is_lambda) new_fn.name = value.createString(self.vm, &self.vm.strings, ks.LambdaVar, false);
     if (is_global) {
       // global
       if (!is_lambda) {
@@ -1308,13 +1339,13 @@ pub const Compiler = struct {
         if (!info.isGSym) {
           new_fn.name = value.asString(self.fun.code.values.items[info.pos]);
         } else {
-          new_fn.name = @constCast(value.createString(self.vm, &self.vm.strings, ident.token.value, false));
+          new_fn.name = value.createString(self.vm, &self.vm.strings, classname(ident.token), false);
         }
       } else reg = _reg;
     } else if (node.name) |ident| {
       // local (named)
       reg = try self.initLocal(ident);
-      new_fn.name = @constCast(value.createString(self.vm, &self.vm.strings, ident.token.value, false));
+      new_fn.name = value.createString(self.vm, &self.vm.strings, classname(ident.token), false);
     } else {
       // local (lambda)
       std.debug.assert(_reg != VRegister.DummyReg);
@@ -1335,7 +1366,7 @@ pub const Compiler = struct {
     // - return does this automatically
     _ = try compiler.cBlockNoPops(node.body.block(), _reg);
     // append return inst as last
-    if (is_method and std.mem.eql(u8, node.name.?.token.value, InitVar)) {
+    if (is_method and  node.name.?.token.valueEql(InitVar)) {
       // return `self`
       compiler.fun.code.write2ArgsInst(.Ret, 0, 0, token.line, self.vm);
     } else if (node.body.block().nodes.len() == 0 or !node.body.block().nodes.getLast().isRet()) {
@@ -1403,6 +1434,9 @@ pub const Compiler = struct {
     var token = node.expr.getToken();
     var ty = node.expr.getType().?;
     ty = if (ty.isTop()) ty.top().child else ty;
+    if (ty.isTag()) {
+      return self.cTagCall(node, node.typ.?, reg);
+    }
     if (node.expr.isDotAccess() and (!ty.isClass() or node.expr.isFun())) {
       return try self.cMethodCall(node, reg);
     }
@@ -1466,11 +1500,71 @@ pub const Compiler = struct {
     return reg;
   }
 
+  fn cTagVar(self: *Self, node: *ast.VarNode, ty: *Type, reg: u32) !u32 {
+    const tag = ty.tag();
+    const token = node.token;
+    std.debug.assert(tag.paramsLen() == 0);
+    if (ty.isNoneTy()) {
+      self.enterNoOpt();
+      const dst = self.cConst(reg, value.noneVal(), token.line);
+      self.leaveNoOpt();
+      return dst;
+    }
+    self.enterNoOpt();
+    const dst = self.cConst(reg, value.createTag(self.vm, tag.name), token.line);
+    self.leaveNoOpt();
+    return dst;
+  }
+
+  fn cTagCall(self: *Self, node: *ast.CallNode, ty: *Type, reg: u32) !u32 {
+    if (ty.isErrorTy()) {
+      var nd = ast.ErrorNode.init(node.args.itemAt(0));
+      return self.cError(&nd, reg);
+    }
+    const tag = ty.tag();
+    const token = node.expr.getToken();
+    const strc = value.createStruct(self.vm, tag.paramsLen());
+    strc.name = value.createString(self.vm, &self.vm.strings, tag.name, false);
+    self.enterNoOpt();
+    const dst = self.cConst(reg, value.objVal(strc), token.line);
+    self.leaveNoOpt();
+    const _dst = try self.getReg(token);
+    for (node.args.items(), 0..) |arg, idx| {
+      const tmp = try self.c(arg, _dst);
+      self.fun.code.write3ArgsInst(.Ssfd, dst, @intCast(idx), tmp, token.line, self.vm);
+    }
+    self.vreg.releaseReg(_dst);
+    return dst;
+  }
+
+  fn isTupleLenMethodCall(self: *Self, node: *ast.CallNode) bool {
+    _ = self;
+    if (node.expr.isDotAccess()) {
+      var da = &node.expr.AstDotAccess;
+      if (da.lhs.getType()) |ty| {
+        return (
+          ty.isTupleTy()
+          and da.rhs.isVariable()
+          and da.rhs.AstVar.token.valueEql("len")
+        );
+      }
+    }
+    return false;
+  }
+
   fn cMethodCall(self: *Self, node: *ast.CallNode, reg: u32) !u32 {
     // For calls, we need to:
     // - get a register window
     // - compile the call expr
     // - generate the instruction: call r(func), b(argc)
+    // optimize tuple len call since we know the result at compile time, i.e. tuple.len()
+    if (self.isTupleLenMethodCall(node)) {
+      const len = node.expr.AstDotAccess.lhs.getType().?.klass().tparamsLen();
+      self.enterNoOpt();
+      const dst = self.cConst(reg, value.numberVal(@floatFromInt(len)), node.expr.getToken().line);
+      self.leaveNoOpt();
+      return dst;
+    }
     if (node.variadic) node.transformVariadicArgs();
     var token = node.expr.getToken();
     var _dst = reg;
@@ -1595,6 +1689,11 @@ pub const Compiler = struct {
     return reg;
   }
 
+  /// extract the actual class name
+  inline fn classname(name: Token) []const u8 {
+    return if (std.mem.indexOf(u8, name.value, ".")) |idx| name.value[0..idx] else name.value;
+  }
+
   fn cClass(self: *Self, ast_node: *Node, node: *ast.ClassNode, _reg: u32) !u32 {
     if (node.isGeneric()) return self.cClassGeneric(ast_node, _reg);
     var reg: u32 = undefined;
@@ -1610,12 +1709,12 @@ pub const Compiler = struct {
       if (!info.isGSym) {
         cls.name = value.asString(self.fun.code.values.items[info.pos]);
       } else {
-        cls.name = @constCast(value.createString(self.vm, &self.vm.strings, ident.token.value, false));
+        cls.name = value.createString(self.vm, &self.vm.strings, classname(ident.token), false);
       }
     } else {
       // local
       reg = try self.initLocal(ident);
-      cls.name = @constCast(value.createString(self.vm, &self.vm.strings, ident.token.value, false));
+      cls.name = value.createString(self.vm, &self.vm.strings, classname(ident.token), false);
     }
     // emit class
     self.enterNoOpt();
@@ -1685,7 +1784,7 @@ pub const Compiler = struct {
 
   pub fn compile(self: *Self, node: *Node) !void {
     self.preallocateGlobals(&node.AstProgram.decls);
-    var token = node.getToken();
+    const token = node.getToken();
     util.assert(
       (self.cProgram(&node.AstProgram, VRegister.DummyReg) catch VRegister.DummyReg) == VRegister.DummyReg,
       "should be a dummy register"

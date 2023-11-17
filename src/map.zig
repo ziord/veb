@@ -98,11 +98,11 @@ pub fn Map(comptime K: type, comptime V: type) type {
     }
 
     inline fn usize_(val: i32) usize {
-      return @intCast(@as(u32, @bitCast(val)));
+      return @intCast(val);
     }
 
     inline fn i32_(val: usize) i32 {
-      return @intCast(@as(i64, @bitCast(val)));
+      return @intCast(val);
     }
 
     fn resizeMap(self: *Self, vm: *VM, ensure: usize) void {
@@ -235,16 +235,14 @@ pub fn Map(comptime K: type, comptime V: type) type {
 
     pub fn display(self: *Self) void {
       util.print("{s}", .{"{"});
-      var i: u32 = 0;
-      var last = @as(i64, @intCast(self.len)) - 1;
-      for (self.items[0..self.len]) |itm| {
+      var last = self.len -| 1;
+      for (self.items[0..self.len], 0..) |itm, i| {
         @call(.always_inline, vl.display, .{itm.key});
         util.print(": ", .{});
         @call(.always_inline, vl.display, .{itm.value});
         if (i < last) {
           util.print(", ", .{});
         }
-        i += 1;
       }
       util.print("{s}", .{"}"});
     }
@@ -270,7 +268,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
     }
 
     /// Map has to be a StringMap to use this method!
-    pub fn findInterned(self: *Self, str: []const u8, hash: u64) ?K {
+    pub fn findInterned(self: *Self, str: []const u8, hash: u64) ?MapItem {
       comptime {
         if (K != StringType) {
           @compileError("findInterned() called with non-stringmap\n");
@@ -290,7 +288,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
         } else if (self.isTombEntry(entry)) {
           // noop
         } else if (ctx.cmpInterned(self.items[usize_(entry)].key, str, hash)) {
-          return self.items[usize_(entry)].key;
+          return self.items[usize_(entry)];
         }
         i = (i + 1) & mask;
       }

@@ -3,15 +3,18 @@ const ds = @import("ds.zig");
 const util = @import("util.zig");
 const ks = @import("constants.zig");
 const VarNode = @import("ast.zig").VarNode;
-const Token = @import("lex.zig").Token;
+const lex = @import("lex.zig");
 
 const ID_HASH = 0x12;
 const U8Writer = util.U8Writer;
+const Token = lex.Token;
+const TokenType = lex.TokenType;
 pub const MAX_STEPS = MAX_RECURSIVE_DEPTH / 2;
 pub const MAX_TPARAMS = 0xA;
 pub const MAX_RECURSIVE_DEPTH = 0x3e8;
 pub const TypeHashSet = ds.ArrayHashMap(u32, *Type);
 pub const TypeList = ds.ArrayList(*Type);
+const TypeHashMap = ds.ArrayHashMap(*Type, *Type);
 
 pub const TypeKind = enum (u8) {
   /// boolean type:
@@ -86,7 +89,8 @@ pub const Concrete = struct {
         }
         return false;
       },
-      .Generic, .Variable, .Recursive, .Function, .Method, .Top, .Instance => return false,
+      .Generic, .Variable, .Recursive, .Function,
+      .Method, .Top, .Instance, .Tag, .TaggedUnion => return false,
     }
     return false;
   }
@@ -130,7 +134,8 @@ pub const Constant = struct {
         }
         return false;
       },
-      .Union, .Generic, .Variable, .Recursive, .Function, .Method, .Top, .Instance => return false,
+      .Union, .Generic, .Variable, .Recursive, .Function,
+      .Method, .Top, .Instance, .Tag, .TaggedUnion => return false,
     }
     return false;
   }
@@ -176,15 +181,6 @@ pub const Union = struct {
     return false;
   }
 
-  pub inline fn isErrorUnion(self: *@This()) bool {
-    // TODO: figure out if this is a good idea.
-    if (self.isNullable()) return false;
-    for (self.variants.values()) |ty| {
-      if (ty.isErrorTy()) return true;
-    }
-    return false;
-  }
-
   pub fn addAll(self: *@This(), types: *TypeList) void {
     for (types.items()) |ty| {
       self.set(ty);
@@ -224,9 +220,120 @@ pub const Union = struct {
             return true;
           }
         }
+      },
+      .Tag, .TaggedUnion => return false,
+    }
+    return false;
+  }
+};
+
+pub const TaggedUnion = struct {
+  variants: TypeList,
+  active: i32 = -1,
+
+  pub fn init(allocator: std.mem.Allocator) @This() {
+    return TaggedUnion{.variants = TypeList.init(allocator)};
+  }
+
+  pub fn toType(self: TaggedUnion) Type {
+    return Type.compressTaggedTypes(@constCast(&self.variants), null).*;
+  }
+
+  pub fn set(self: *@This(), typ: *Type) void {
+    std.debug.assert(typ.isTag());
+    self.variants.append(typ);
+  }
+
+  pub fn append(self: *@This(), typ: *Type) void {
+    self.variants.append(typ);
+  }
+
+  pub fn addAll(self: *@This(), types: *TypeList) void {
+    self.variants.extend(types);
+  }
+
+  pub fn addSlice(self: *@This(), types: []const *Type) void {
+    for (types) |ty| {
+      self.set(ty);
+    }
+  }
+
+  pub fn activeTy(self: *@This()) ?*Type {
+    if (self.active >= 0) {
+      return self.variants.itemAt(@intCast(self.active));
+    } else {
+      return null;
+    }
+  }
+
+  pub inline fn isNullable(self: *@This()) bool {
+    for (self.variants.items()) |ty| {
+      if (ty.tag().nameEql(ks.NoneVar)) {
+        return true;
       }
     }
     return false;
+  }
+
+  pub inline fn isErrorUnion(self: *@This()) bool {
+    if (self.isNullable()) return false;
+    for (self.variants.items()) |ty| {
+      if (ty.isErrorTy()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  pub inline fn hasTag(self: *@This(), name: []const u8) ?*Type {
+    for (self.variants.items()) |tg| {
+      if (tg.tag().nameEql(name)) {
+        return tg;
+      }
+    }
+    return null;
+  }
+
+  pub fn _isRelatedTo(this: *TaggedUnion, other: *Type, ctx: RelationContext, A: std.mem.Allocator) ?usize {
+    // this -> T1, other -> T2
+    switch (other.kind) {
+      .TaggedUnion => {
+        if (ctx == .RCTypeParams) {
+          // .RCTypeParams constrains to 'exactness'
+          if (this.variants.len() != other.taggedUnion().variants.len()) {
+            return null;
+          }
+        }
+        // related if each & every variants of T2 are related to any of the variants of T1 with given context
+        for (other.taggedUnion().variants.items()) |variant| {
+          if (!this.isRelatedTo(variant, .RCAny, A)) {
+            return null;
+          }
+        }
+        return 0;
+      },
+      .Recursive => {
+        if (this._isRelatedTo(other.recursive().base, ctx, A)) |i| {
+          return i;
+        }
+      },
+      .Constant, .Concrete, .Generic, .Variable, .Function, .Method, .Class, .Top, .Instance, .Tag => {
+        if (ctx == .RCTypeParams) return null;
+        // related if there exists a variant of T1 that is related to T2
+        for (this.variants.items(), 0..) |variant, i| {
+          if (variant.isRelatedTo(other, ctx, A)) {
+            return i;
+          }
+        }
+      },
+      .Union => return null,
+    }
+    return null;
+  }
+
+  pub inline fn isRelatedTo(this: *TaggedUnion, other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
+    // this -> T1, other -> T2
+    return (this._isRelatedTo(other, ctx, A) != null);
   }
 };
 
@@ -236,19 +343,19 @@ pub const Generic = struct {
   /// whether this container-like generic has no items
   empty: bool = false,
 
-  pub fn init(allocator: std.mem.Allocator, base: *Type) @This() {
+  pub inline fn init(allocator: std.mem.Allocator, base: *Type) @This() {
     return Generic {.tparams = TypeList.init(allocator), .base = base};
   }
 
-  pub fn toType(self: Generic) Type {
+  pub inline fn toType(self: Generic) Type {
     return Type.init(.{.Generic = self});
   }
 
-  pub fn getSlice(self: *@This()) []*Type {
-    return self.tparams.items()[0..self.tparams.len()];
+  pub inline fn getSlice(self: *@This()) []*Type {
+    return self.tparams.items();
   }
 
-  pub fn append(self: *@This(), typ: *Type) void {
+  pub inline fn append(self: *@This(), typ: *Type) void {
     self.tparams.append(typ);
   }
 
@@ -274,7 +381,8 @@ pub const Generic = struct {
         }
         return true;
       },
-      .Concrete, .Constant, .Union, .Variable, .Recursive, .Function, .Method, .Class, .Top, .Instance => return false,
+      .Concrete, .Constant, .Union, .Variable, .Recursive,
+      .Function, .Method, .Class, .Top, .Instance, .Tag, .TaggedUnion => return false,
     }
     return false;
   }
@@ -306,7 +414,8 @@ pub const Variable = struct {
     _ = ctx;
     return switch (other.kind) {
       .Variable => |*vr| this.eql(vr),
-      .Constant, .Concrete, .Union, .Recursive, .Function, .Method, .Generic, .Class, .Top, .Instance => false,
+      .Constant, .Concrete, .Union, .Recursive, .Function,
+      .Method, .Generic, .Class, .Top, .Instance, .Tag, .TaggedUnion => false,
     };
   }
 };
@@ -356,7 +465,8 @@ pub const Function = struct {
     _ = ctx;
     return switch (other.kind) {
       .Function => |*fun| this.eql(fun),
-      .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic, .Method, .Class, .Top, .Instance => false,
+      .Variable, .Constant, .Concrete, .Union, .Recursive,
+      .Generic, .Method, .Class, .Top, .Instance, .Tag, .TaggedUnion => false,
     };
   }
 };
@@ -376,7 +486,8 @@ pub const Method = struct {
   pub fn isRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
     return switch (other.kind) {
       .Method => |*oth| this.func.isRelatedTo(oth.func, ctx, A) and this.cls.isRelatedTo(oth.cls, ctx, A),
-      .Function, .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic, .Class, .Top, .Instance => false,
+      .Function, .Variable, .Constant, .Concrete, .Union,
+      .Recursive, .Generic, .Class, .Top, .Instance, .Tag, .TaggedUnion => false,
     };
   }
 };
@@ -409,6 +520,7 @@ pub const Class = struct {
   node: ?*Node,
   empty: bool,
   builtin: bool,
+  immutable: bool,
   resolved: bool = false,
 
   pub fn init(
@@ -419,6 +531,7 @@ pub const Class = struct {
       .name = name, .fields = fields, .methods = methods,
       .tparams = tparams, .node = node, .empty = empty,
       .builtin = builtin,
+      .immutable = false,
     };
   }
 
@@ -450,7 +563,7 @@ pub const Class = struct {
   }
 
   pub inline fn getSlice(self: *@This()) []*Type {
-    return if (self.tparams) |tp| tp.items()[0..tp.len()] else (&[_]*Type{})[0..];
+    return if (self.tparams) |tp| tp.items() else (&[_]*Type{});
   }
 
   pub fn appendTParam(self: *@This(), typ: *Type) void {
@@ -472,7 +585,7 @@ pub const Class = struct {
   }
 
   pub fn isStringClass(self: *@This()) bool {
-    return self.builtin and std.mem.eql(u8, self.name, "str");
+    return self.builtin and std.mem.eql(u8, self.name, ks.StrVar);
   }
 
   pub fn setAsResolved(self: *@This()) void {
@@ -481,7 +594,7 @@ pub const Class = struct {
 
   pub fn getField(self: *@This(), name: []const u8) ?*Node {
     for (self.fields.items()) |field| {
-      if (std.mem.eql(u8, field.AstVarDecl.ident.token.value, name)) {
+      if (field.AstVarDecl.ident.token.valueEql(name)) {
         return field;
       }
     }
@@ -490,7 +603,7 @@ pub const Class = struct {
 
   pub fn getFieldIndex(self: *@This(), name: []const u8) ?usize {
     for (self.fields.items(), 0..) |field, i| {
-      if (std.mem.eql(u8, field.AstVarDecl.ident.token.value, name)) {
+      if (field.AstVarDecl.ident.token.valueEql(name)) {
         return i;
       }
     }
@@ -500,7 +613,7 @@ pub const Class = struct {
   pub fn getMethod(self: *@This(), name: []const u8) ?*Node {
     if (self.node) |node| {
       for (node.AstClass.methods.items()) |mth| {
-        if (std.mem.eql(u8, mth.AstFun.name.?.token.value, name)) {
+        if (mth.AstFun.name.?.token.valueEql(name)) {
           return mth;
         }
       }
@@ -511,7 +624,7 @@ pub const Class = struct {
   pub fn getMethodIndex(self: *@This(), name: []const u8) ?usize {
     if (self.node) |node| {
       for (node.AstClass.methods.items(), 0..) |mth, i| {
-        if (std.mem.eql(u8, mth.AstFun.name.?.token.value, name)) {
+        if (mth.AstFun.name.?.token.valueEql(name)) {
           return i;
         }
       }
@@ -521,7 +634,7 @@ pub const Class = struct {
 
   pub fn getMethodTy(self: *@This(), name: []const u8) ?*Type {
     for (self.methods.items()) |mth| {
-      if (std.mem.eql(u8, mth.function().node.?.AstFun.name.?.token.value, name)) {
+      if (mth.function().node.?.AstFun.name.?.token.valueEql(name)) {
         return mth;
       }
     }
@@ -538,9 +651,9 @@ pub const Class = struct {
         if (oth.empty and ctx == .RCConst) return true;
         if (this.tparams) |tparams1| {
           if (oth.tparams) |tparams2| {
-            if (tparams1.len() != tparams2.len()) return false;
+            const _ctx = if (ctx != .RCIs) .RCTypeParams else ctx;
             for (tparams1.items(), tparams2.items()) |tp1, tp2| {
-              if (!tp1.isRelatedTo(tp2, if (ctx != .RCIs) .RCTypeParams else ctx, A)) {
+              if (!tp1.isRelatedTo(tp2, _ctx, A)) {
                 return false;
               }
             }
@@ -562,7 +675,8 @@ pub const Class = struct {
       .Concrete => |*conc| {
         return this.isStringClass() and conc.tkind == .TyString;
       },
-      .Variable, .Union, .Recursive, .Function, .Method, .Generic, .Top => false,
+      .Variable, .Union, .Recursive, .Function,
+      .Method, .Generic, .Top, .Tag, .TaggedUnion, => false,
     };
   }
 };
@@ -606,8 +720,115 @@ pub const Instance = struct {
     return switch (other.kind) {
       .Instance => |*oth| this.cls.isRelatedTo(oth.cls, ctx, A),
       .Class => if (ctx == .RCIs) this.cls.isRelatedTo(other, ctx, A) else false,
-      .Function, .Variable, .Constant, .Concrete, .Union, .Recursive, .Generic, .Method, .Top => false,
+      .Function, .Variable, .Constant, .Concrete, .Union,
+      .Recursive, .Generic, .Method, .Top, .Tag, .TaggedUnion => false,
     };
+  }
+};
+
+pub const Tag = struct {
+  name: []const u8,
+  params: ?*TagParamList,
+  ty: TokenType,
+
+  pub const TagParamList = ds.ArrayList(TagParam);
+
+  pub const TagParam = struct {
+    name: ?Token,
+    typ: *Type,
+
+    pub fn clone(self: @This(), al: std.mem.Allocator, map: *TypeHashMap) @This() {
+      return @This(){.name = self.name, .typ = self.typ._clone(al, map)};
+    }
+  };
+
+  pub fn init(name: []const u8, ty: TokenType) @This() {
+    return @This(){.name = name, .params = null, .ty = ty};
+  }
+
+  pub fn initParams(self: *@This(), al: std.mem.Allocator) void {
+    self.params = TagParamList.init(al).box();
+  }
+
+  pub fn addParamTypes(self: *@This(), types: []const *Type) void {
+    for (types) |ty| {
+      self.appendParam(.{.name = null, .typ = ty});
+    }
+  }
+
+  pub fn addParams(self: *@This(), params: []const TagParam) void {
+    for (params) |prm| {
+      self.appendParam(prm);
+    }
+  }
+
+  pub inline fn nameEql(self: *@This(), name: []const u8) bool {
+    return std.mem.eql(u8, self.name, name);
+  }
+
+  pub fn appendParam(self: *@This(), param: TagParam) void {
+    self.params.?.append(param);
+  }
+
+  pub fn getParam(self: *@This(), idx: usize) ?TagParam {
+    if (self.params) |params| {
+      if (idx < params.len()) {
+        return params.itemAt(idx);
+      }
+    }
+    return null;
+  }
+
+  pub fn getParamWithId(self: *@This(), id: []const u8) ?usize {
+    if (self.params) |params| {
+      for (params.items(), 0..) |prm, i| {
+        if (prm.name) |name| {
+          if (name.valueEql(id)) {
+            return i;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  pub inline fn paramsLen(self: *@This()) usize {
+    return if (self.params) |tp| tp.len() else 0;
+  }
+
+  pub inline fn paramSlice(self: *@This()) []TagParam {
+    return if (self.params) |tp| tp.items() else &[_]TagParam{};
+  }
+
+  pub fn paramList(self: *@This(), al: std.mem.Allocator) TypeList {
+    var list = TypeList.init(al);
+    if (self.params) |params| {
+      for (params.items()) |itm| {
+        list.append(itm.typ);
+      }
+    }
+    return list;
+  }
+
+  pub fn isRelatedTo(this: *Tag, other: *Type, ctx: RelationContext, A: std.mem.Allocator) bool {
+    switch (other.kind) {
+      .Tag => |*tg| {
+        if (!this.nameEql(tg.name)) return false;
+        var slice1 = this.paramSlice();
+        var slice2 = tg.paramSlice();
+        if (slice1.len != slice2.len) return false;
+        // nested & if patterns do not require the tag's params to be fully typed
+        // (i.e. no need for full expansion if they belong to other tagged unions)
+        const _ctx = if (ctx != .RCIs) .RCTypeParams else ctx;
+        for (slice1, slice2) |t1, t2| {
+          if (!t1.typ.isRelatedTo(t2.typ, _ctx, A)) {
+            return false;
+          }
+        }
+        return true;
+      },
+      else => return false,
+    }
   }
 };
 
@@ -625,6 +846,8 @@ pub const TypeInfo = union(enum) {
   Constant: Constant,
   Variable: Variable,
   Union: Union,
+  Tag: Tag,
+  TaggedUnion: TaggedUnion,
   Generic: Generic,
   Function: Function,
   Method: Method,
@@ -674,8 +897,6 @@ pub const Type = struct {
     ty1.inferred = ty2.inferred;
   }
 
-  const TypeHashMap = ds.ArrayHashMap(*Type, *Type);
-
   fn _clone(self: *Self, al: std.mem.Allocator, map: *TypeHashMap) *Self {
     switch (self.kind) {
       .Constant, .Concrete, .Variable, .Recursive => return self,
@@ -719,6 +940,7 @@ pub const Type = struct {
           tparams = new_tparams;
         }
         ret.klass().tparams = tparams;
+        ret.klass().immutable = cls.immutable;
         ret.setRestFields(self);
         return ret;
       },
@@ -741,6 +963,33 @@ pub const Type = struct {
           new.set(ty._clone(al, map));
         }
         var ret = Type.init(.{.Union = new}).box(al);
+        ret.setRestFields(self);
+        return ret;
+      },
+      .Tag => |*tg| {
+        if (map.get(self)) |ty| return ty;
+        var ret = Type.init(.{.Tag = Tag.init(tg.name, tg.ty)}).box(al);
+        map.set(self, ret);
+        var params: ?*Tag.TagParamList = null;
+        if (tg.params) |prms| {
+          var new_params = Tag.TagParamList.init(al).boxEnsureCapacity(prms.capacity());
+          for (prms.items()) |prm| {
+            new_params.append(prm.clone(al, map));
+          }
+          params = new_params;
+        }
+        ret.tag().params = params;
+        ret.setRestFields(self);
+        return ret;
+      },
+      .TaggedUnion => |*uni| {
+        var new = TaggedUnion.init(al);
+        new.active = uni.active;
+        new.variants.ensureTotalCapacity(uni.variants.capacity());
+        for (uni.variants.items()) |ty| {
+          new.set(ty._clone(al, map));
+        }
+        var ret = Type.init(.{.TaggedUnion = new}).box(al);
         ret.setRestFields(self);
         return ret;
       },
@@ -771,8 +1020,8 @@ pub const Type = struct {
 
   pub fn newBoolUnion(al: std.mem.Allocator) *Self {
     var uni = Union.init(al);
-    const t1 = Type.newConstant(.TyBool, "true").box(al);
-    const t2 = Type.newConstant(.TyBool, "false").box(al);
+    const t1 = Type.newConstant(.TyBool, ks.TrueVar).box(al);
+    const t2 = Type.newConstant(.TyBool, ks.FalseVar).box(al);
     uni.addSlice(&[_]*Type{t1, t2});
     return Self.init(.{.Union = uni}).box(al);
   }
@@ -797,12 +1046,24 @@ pub const Type = struct {
     }
   }
 
+  pub fn newTaggedNullable(ty: *Self, al: std.mem.Allocator, none_ty: ?*Type) *Self {
+    const none = if (none_ty) |none| none else newNoneTag(al);
+    const just = newJustTag(al, ty);
+    var nl = newTaggedUnion(al).box(al);
+    nl.taggedUnion().addSlice(&[_]*Type{just, none});
+    return nl;
+  }
+
   pub fn newVariable(allocator: std.mem.Allocator) Self {
     return Self.init(.{.Variable = Variable.init(allocator)});
   }
 
   pub fn newUnion(allocator: std.mem.Allocator) Self {
     return Self.init(.{.Union = Union.init(allocator)});
+  }
+
+  pub fn newTaggedUnion(allocator: std.mem.Allocator) Self {
+    return Self.init(.{.TaggedUnion = TaggedUnion.init(allocator)});
   }
 
   pub fn newGeneric(allocator: std.mem.Allocator, base: *Self) Self {
@@ -829,6 +1090,10 @@ pub const Type = struct {
     return Self.init(.{.Class = Class.initWithDefault(name, allocator)});
   }
 
+  pub fn newTag(name: []const u8, ty: TokenType) Self {
+    return Self.init(.{.Tag = Tag.init(name, ty)});
+  }
+
   pub fn newRecursive(base: *Self) Self {
     return Self.init(.{.Recursive = Recursive.init(base)});
   }
@@ -852,15 +1117,44 @@ pub const Type = struct {
     return base;
   }
 
+  pub fn newJustTag(al: std.mem.Allocator, _ty: ?*Type) *Self {
+    var tg = Self.init(.{.Tag = Tag.init(ks.JustVar, .TkJust)}).box(al);
+    tg.tag().initParams(al);
+    if (_ty) |ty| tg.tag().appendParam(.{.name = null, .typ = ty});
+    return tg;
+  }
+
+  pub fn newNoneTag(al: std.mem.Allocator) *Self {
+    return Self.init(.{.Tag = Tag.init(ks.NoneVar, .TkNone)}).box(al);
+  }
+
+  pub fn newUnboxedNoneTag() Self {
+    return Self.init(.{.Tag = Tag.init(ks.NoneVar, .TkNone)});
+  }
+
+  pub fn newTagWithParams(name: []const u8, ty: TokenType, params: []const Tag.TagParam, al: std.mem.Allocator) *Self {
+    var typ =  Self.init(.{.Tag = Tag.init(name, ty)}).box(al);
+    typ.tag().initParams(al);
+    typ.tag().addParams(params);
+    return typ;
+  }
+
+  pub fn newTagWithParamTypes(name: []const u8, ty: TokenType, params: []const *Type, al: std.mem.Allocator) *Self {
+    var typ =  Self.init(.{.Tag = Tag.init(name, ty)}).box(al);
+    typ.tag().initParams(al);
+    typ.tag().addParamTypes(params);
+    return typ;
+  }
+
   pub fn subtype(self: *Self, al: std.mem.Allocator) *Type {
-    std.debug.assert(self.isNullable());
-    var sub = TypeHashSet.init(al);
-    for (self.nullable().variants.values()) |ty| {
-      if (!ty.isNilTy()) {
-        sub.set(ty.typeid(), ty);
+    std.debug.assert(self.isTaggedNullable());
+    var sub = TypeList.init(al);
+    for (self.taggedUnion().variants.items()) |ty| {
+      if (!ty.isNoneTy()) {
+        sub.append(ty);
       }
     }
-    return compressTypes(&sub, null);
+    return compressTaggedTypes(&sub, null);
   }
  
   /// simple/concrete 'unit' type
@@ -913,10 +1207,18 @@ pub const Type = struct {
     };
   }
 
-  /// an error union type
-  pub inline fn isErrorUnion(self: *Self) bool {
+  /// a tagged nullable type
+  pub inline fn isTaggedNullable(self: *Self) bool {
     return switch (self.kind) {
-      .Union => |*uni| uni.isErrorUnion(),
+      .TaggedUnion => |*uni| uni.isNullable(),
+      else => false,
+    };
+  }
+
+  /// an error union type
+  pub inline fn isErrorTaggedUnion(self: *Self) bool {
+    return switch (self.kind) {
+      .TaggedUnion => |*uni| uni.isErrorUnion(),
       else => false,
     };
   }
@@ -925,6 +1227,14 @@ pub const Type = struct {
   pub inline fn isUnion(self: *Self) bool {
     return switch (self.kind) {
       .Union => true,
+      else => false,
+    };
+  }
+
+  /// a tagged union type
+  pub inline fn isTaggedUnion(self: *Self) bool {
+    return switch (self.kind) {
+      .TaggedUnion => true,
       else => false,
     };
   }
@@ -973,6 +1283,14 @@ pub const Type = struct {
   pub inline fn isRecursive(self: *Self) bool {
     return switch (self.kind) {
       .Recursive => true,
+      else => false,
+    };
+  }
+
+  /// a tag type
+  pub inline fn isTag(self: *Self) bool {
+    return switch (self.kind) {
+      .Tag => true,
       else => false,
     };
   }
@@ -1040,7 +1358,7 @@ pub const Type = struct {
     return false;
   }
 
-  inline fn isBoolUnionTy(self: *Self) bool {
+  pub inline fn isBoolUnionTy(self: *Self) bool {
     return self.union_().isBoolUnionTy();
   }
 
@@ -1077,7 +1395,7 @@ pub const Type = struct {
     return (
       self.isVariable() and
       self.variable().tokens.len() == 1 and
-      std.mem.eql(u8, self.variable().tokens.getLast().value, ks.NeverVar)
+      self.variable().tokens.getLast().valueEql(ks.NeverVar)
     );
   }
 
@@ -1093,8 +1411,17 @@ pub const Type = struct {
     return self.isXClassTy(ks.TupleVar);
   }
 
+  pub fn isJustTy(self: *Self) bool {
+    return self.isTag() and self.tag().ty == .TkJust;
+  }
+
+  pub fn isNoneTy(self: *Self) bool {
+    return self.isTag() and self.tag().ty == .TkNone;
+  }
+
+  /// Tag error type
   pub fn isErrorTy(self: *Self) bool {
-    return self.isXClassTy(ks.ErrVar);
+    return self.isTag() and self.tag().ty == .TkError;
   }
 
   /// extract the appropriate typeinfo of this type
@@ -1122,6 +1449,10 @@ pub const Type = struct {
     return &self.kind.Union;
   }
 
+  pub inline fn taggedUnion(self: *Self) *TaggedUnion {
+    return &self.kind.TaggedUnion;
+  }
+
   pub inline fn function(self: *Self) *Function {
     return &self.kind.Function;
   }
@@ -1132,6 +1463,10 @@ pub const Type = struct {
 
   pub inline fn instance(self: *Self) *Instance {
     return &self.kind.Instance;
+  }
+
+  pub inline fn tag(self: *Self) *Tag {
+    return &self.kind.Tag;
   }
 
   pub inline fn top(self: *Self) *Top {
@@ -1167,6 +1502,74 @@ pub const Type = struct {
     return false;
   }
 
+  /// check if a type contains a variable type (param)
+  pub fn hasVariable(self: *Self) bool {
+    return switch (self.kind) {
+      .Concrete, .Constant, .Instance => false,
+      .Variable => true,
+      .Class => |*cls| {
+        if (cls.tparams) |tparams| {
+          for (tparams.items()) |ty| {
+            if (ty.hasVariable()) {
+              return true;
+            }
+          }
+        }
+        for (cls.getSlice()) |ty| {
+          if (ty.hasVariable()) {
+            return true;
+          }
+        }
+        return false;
+      },
+      .Tag => |*tg| {
+        for (tg.paramSlice()) |prm| {
+          if (prm.typ.hasVariable()) {
+            return true;
+          }
+        }
+        return false;
+      },
+      .TaggedUnion => |*uni| {
+        for (uni.variants.items()) |ty| {
+          if (ty.hasVariable()) {
+            return true;
+          }
+        }
+        return false;
+      },
+      .Function => |*fun| {
+        if (fun.tparams) |tparams| {
+          for (tparams.items()) |ty| {
+            if (ty.hasVariable()) {
+              return true;
+            }
+          }
+        }
+        for (fun.params.items()) |ty| {
+          if (ty.hasVariable()) {
+            return true;
+          }
+        }
+        return false;
+      },
+      .Top => |*tp| tp.child.hasVariable(),
+      .Generic => |*gen| {
+        if (gen.base.hasVariable()) {
+          return true;
+        }
+        for (gen.getSlice()) |ty| {
+          if (ty.hasVariable()) {
+            return true;
+          }
+        }
+        return false;
+      },
+      .Recursive => true, 
+      else => false,
+    };
+  }
+
   pub fn getName(self: *Self) []const u8 {
     return switch (self.kind) {
       .Variable => |*name| name.tokens.getLast().value,
@@ -1194,7 +1597,6 @@ pub const Type = struct {
         for (gen.getSlice()) |typ| {
           self.tid += typ.typeid();
         }
-        self.tid += @intFromBool(gen.empty);
       },
       .Class => |*cls| {
         self.tid = 5 << ID_HASH;
@@ -1213,13 +1615,6 @@ pub const Type = struct {
             }
           }
         }
-        // TODO: method type may not be available at the
-        //       time this typeid is being computed
-        // for (cls.methods.items()) |nd| {
-        //   self.tid += nd.getType().?.typeid();
-        // }
-        self.tid += @intCast(cls.methods.len());
-        self.tid += @intFromBool(cls.empty);
       },
       .Union => |*uni| {
         self.tid = 6 << ID_HASH;
@@ -1268,7 +1663,25 @@ pub const Type = struct {
       },
       .Recursive => |*rec| {
         self.tid = rec.base.typeid();
-      }
+      },
+      .Tag => |*tg| {
+        self.tid = 16 << ID_HASH;
+        for (tg.name) |ch| {
+          self.tid += @as(u8, ch);
+        }
+        if (tg.params) |params| {
+          self.tid += @intCast(params.len());
+          for (params.items()) |param| {
+            self.tid += param.typ.typeid();
+          }
+        }
+      },
+      .TaggedUnion => |*uni| {
+        self.tid = 17 << ID_HASH;
+        for (uni.variants.items()) |ty| {
+          self.tid += ty.typeid();
+        }
+      },
     }
     std.debug.assert(self.tid != 0);
     return self.tid;
@@ -1330,10 +1743,26 @@ pub const Type = struct {
           ty._unfoldRecursive(step + 1, list, visited);
         }
       },
+      .TaggedUnion => |*uni| {
+        for (uni.variants.items()) |ty| {
+          ty._unfoldRecursive(step + 1, list, visited);
+        }
+      },
+      .Tag => |*tg| {
+        var name_ty = Type.newVariable(list.allocator()).box(list.allocator());
+        var token = Token.getDefault();
+        token.value = tg.name;
+        name_ty.variable().append(token);
+        list.append(name_ty);
+        // params
+        for (tg.paramSlice()) |param| {
+          param.typ._unfoldRecursive(step + 1, list, visited);
+        }
+      },
       .Recursive => |*rec| {
         visited.set(typ.typeid(), typ);
         rec.base._unfoldRecursive(step + 1, list, visited);
-      }
+      },
     }
   }
 
@@ -1373,13 +1802,29 @@ pub const Type = struct {
         for (uni.variants.values()) |ty| {
           ty._unfold(list);
         }
-      }, 
+      },
+      .TaggedUnion => |*uni| {
+        for (uni.variants.items()) |ty| {
+          ty._unfold(list);
+        }
+      },
+      .Tag => |*tg| {
+        var name_ty = Type.newVariable(list.allocator()).box(list.allocator());
+        var token = Token.getDefault();
+        token.value = tg.name;
+        name_ty.variable().append(token);
+        list.append(name_ty);
+        // params
+        for (tg.paramSlice()) |param| {
+          param.typ._unfold(list);
+        }
+      },
       .Recursive => |*rec| {
         var visited = TypeHashSet.init(list.allocator());
         visited.set(self.typeid(), self);
         rec.base._unfoldRecursive(0, list, &visited);
         visited.clearAndFree();
-      }
+      },
     }
   }
 
@@ -1436,8 +1881,16 @@ pub const Type = struct {
       .Union => |*uni| {
         // upcasting/widening
         if (cast_ty.isRelatedTo(node_ty, ctx, A)) {
-          // keep track of the active
+          // keep track of the active type
           uni.active = node_ty;
+          return cast_ty;
+        }
+      },
+      .TaggedUnion => |*uni| {
+        // upcasting/widening
+        if (uni._isRelatedTo(node_ty, ctx, A)) |active| {
+          // keep track of the active type
+          uni.active = @intCast(active);
           return cast_ty;
         }
       },
@@ -1449,26 +1902,24 @@ pub const Type = struct {
     }
     // downcasting
     if (node_ty.castContainsType(cast_ty, ctx, A)) {
-      if (node_ty.union_().active) |active| {
-        // check if the active type can be cast to the cast type
-        _ = active.canBeCastTo(cast_ty, ctx, A) catch return error.UnionCastError;
-        return cast_ty;
+      if (node_ty.isTaggedUnion()) {
+        if (node_ty.taggedUnion().activeTy()) |active| {
+          // check if the active type can be cast to the cast type
+          _ = active.canBeCastTo(cast_ty, ctx, A) catch return error.UnionCastError;
+          return cast_ty;
+        } else {
+          // TODO: runtime active type tracking
+          return node_ty;
+        }
       } else {
-        // TODO:
-        // we need to keep track of a cast like this. For example:
-        // let p: str | num = 5
-        // (p as num) + 2  # ok
-        // (p as str).concat(...) # not okay  <-- to avoid this, we need to somehow keep 
-        // track of casts performed without an active type being known (in runtime cases)
-        // just return the union in this case, for now.
-        return node_ty;
+        if (node_ty.union_().active) |active| {
+          // check if the active type can be cast to the cast type
+          _ = active.canBeCastTo(cast_ty, ctx, A) catch return error.UnionCastError;
+          return cast_ty;
+        } else {
+          return node_ty;
+        }
       }
-    }
-    // Due to the nature of typeid, T | S is equal to S | T.
-    // Hence, we allow generics and other checks take precedence before equality comparison,
-    // that way, things like: x: map{num, str} ; x as map{str, num} would be properly caught.
-    if (node_ty.typeidEql(cast_ty)) {
-      return cast_ty;
     }
     return error.CastError;
   }
@@ -1499,15 +1950,17 @@ pub const Type = struct {
           return target;
         }
       },
+      .TaggedUnion => |*uni| {
+        if (uni._isRelatedTo(source, ctx, A)) |active| {
+          uni.active = @intCast(active);
+          return target;
+        }
+      },
       else => {
         if (target.isRelatedTo(source, ctx, A)) {
           return target;
         }
       },
-    }
-    // lowest precedence
-    if (target.typeidEql(source)) {
-      return target;
     }
     return null;
   }
@@ -1536,6 +1989,27 @@ pub const Type = struct {
           }
         }
       },
+      .TaggedUnion => |*uni_a| {
+        switch (cast_ty.kind) {
+          .TaggedUnion => |*uni_b| {
+            for (uni_b.variants.items()) |ty| {
+              if (!node_ty.castContainsType(ty, ctx, A)) {
+                return false;
+              }
+            }
+            return true;
+          },
+          else => {
+            for (uni_a.variants.items()) |ty| {
+              if (ty.typeidEql(cast_ty)) {
+                return true;
+              } else if (cast_ty.canBeCastTo(ty, ctx, A) catch null) |_| {
+                return true;
+              }
+            }
+          }
+        }
+      },
       else => {}
     }
     return false;
@@ -1550,11 +2024,18 @@ pub const Type = struct {
     }
   }
 
+  pub fn toTaggedUnion(self: *Self) *Self {
+    const al = self.union_().variants.allocator();
+    var tu = TaggedUnion.init(al);
+    tu.addSlice(self.union_().variants.values());
+    return tu.toType().box(al);
+  }
+
   fn writeName(tokens: *ds.ArrayList(Token), u8w: *U8Writer) !void {
     var writer = u8w.writer();
     for (tokens.items(), 0..) |tok, i| {
       // variables starting with $ are generated and internal, so use this symbol instead
-      _ = if (tok.value[0] != '$') try writer.write(tok.value) else try writer.write(ks.GeneratedTypeVar);
+      _ = if (tok.value[0] != ks.GeneratedVarMarker) try writer.write(tok.value) else try writer.write(ks.GeneratedTypeVar);
       if (i != tokens.len() - 1) {
         // compound names are separated via '.'
         _ = try writer.write(".");
@@ -1564,19 +2045,20 @@ pub const Type = struct {
 
   fn _typename(self: *Self, depth: *usize, u8w: *U8Writer) !void {
     depth.* = depth.* + 1;
+    defer depth.* = depth.* - 1;
     if (depth.* > MAX_STEPS) {
       _ = try u8w.writer().write("...");
       return;
     }
     switch (self.kind) {
       .Concrete => |conc| switch (conc.tkind) {
-        .TyBool     => _ = try u8w.writer().write("bool"),
-        .TyNumber   => _ = try u8w.writer().write("num"),
-        .TyString   => _ = try u8w.writer().write("str"),
-        .TyNil      => _ = try u8w.writer().write("nil"),
-        .TyVoid     => _ = try u8w.writer().write("void"),
-        .TyNoReturn => _ = try u8w.writer().write("noreturn"),
-        .TyAny      => _ = try u8w.writer().write("any"),
+        .TyBool     => _ = try u8w.writer().write(ks.BoolVar),
+        .TyNumber   => _ = try u8w.writer().write(ks.NumVar),
+        .TyString   => _ = try u8w.writer().write(ks.StrVar),
+        .TyNil      => _ = try u8w.writer().write(ks.NilVar),
+        .TyVoid     => _ = try u8w.writer().write(ks.VoidVar),
+        .TyNoReturn => _ = try u8w.writer().write(ks.NoReturnVar),
+        .TyAny      => _ = try u8w.writer().write(ks.AnyVar),
       },
       .Constant => |*cons| {
         _ = try u8w.writer().write(cons.val);
@@ -1615,7 +2097,7 @@ pub const Type = struct {
       },
       .Union => |*uni| {
         if (uni.isBoolUnionTy()) {
-          _ = try u8w.writer().write("bool");
+          _ = try u8w.writer().write(ks.BoolVar);
           return;
         }
         var writer = u8w.writer();
@@ -1629,7 +2111,7 @@ pub const Type = struct {
             _ = try writer.write(")");
           }
           if (i != values.len - 1) {
-            _ = try writer.write(" | ");
+            _ = try writer.write(" && ");
           }
         }
       },
@@ -1670,6 +2152,30 @@ pub const Type = struct {
       },
       .Top => {
         _ = try u8w.writer().write("Type");
+      },
+      .Tag => |*tg| {
+        _ = try u8w.writer().write(tg.name);
+        if (tg.params) |params| {
+          _ = try u8w.writer().write("(");
+          const last = params.len() - 1;
+          for (params.items(), 0..) |tp, i| {
+            try tp.typ._typename(depth, u8w);
+            if (i < last) {
+              _ = try u8w.writer().write(", ");
+            }
+          }
+          _ = try u8w.writer().write(")");
+        }
+      },
+      .TaggedUnion => |*uni| {
+        var writer = u8w.writer();
+        const last = uni.variants.len() -| 1;
+        for (uni.variants.items(), 0..) |typ, i| {
+          try typ._typename(depth, u8w);
+          if (i != last) {
+            _ = try writer.write(" | ");
+          }
+        }
       },
       .Variable => |*vr| try writeName(&vr.tokens, u8w),
       .Recursive => _ = try u8w.writer().write("{...}"),
@@ -1756,6 +2262,57 @@ pub const Type = struct {
     return typeset.values()[0];
   }
 
+  /// combine types in typelist as much as possible
+  pub fn compressTaggedTypes(typelist: *TypeList, uni: ?*Type) *Type {
+    const al = typelist.allocator();
+    if (typelist.len() > 1) {
+      var final = TypeList.init(al);
+      var last_ty: ?*Type = null;
+      var none_ty: ?*Type = null;
+      for (typelist.items()) |typ| {
+        // any supercedes all other types
+        if (typ.isAnyTy()) {
+          return typ;
+        }
+        if (typ.isNoneTy()) {
+          none_ty = typ;
+          continue;
+        }
+        if (last_ty) |ty| {
+          if (ty.isRelatedTo(typ, .RCAny, al)) {
+            continue;
+          }
+        }
+        last_ty = typ;
+        final.append(typ);
+      }
+      // convert types to a single tagged union type
+      var typ: *Type = undefined;
+      if (final.len() == typelist.len()) {
+        if (uni) |ty| {
+          return ty;
+        }
+      }
+      if (final.len() > 1) {
+        typ = Type.newTaggedUnion(al).box(al);
+        typ.taggedUnion().addAll(&final);
+      } else {
+        typ = final.itemAt(0);
+      }
+      if (none_ty) |none| {
+        if (typ.isTaggedUnion()) {
+          typ.taggedUnion().append(none);
+        } else {
+          var tmp = Type.newTaggedUnion(al).box(al);
+          tmp.taggedUnion().addSlice(&[_]*Type{typ, none});
+          typ = tmp;
+        }
+      }
+      return typ;
+    }
+    return typelist.itemAt(0);
+  }
+
   /// combine t1 and t2 into a union type if possible
   inline fn _unionify(t1: *Type, t2: *Type, allocator: std.mem.Allocator) *Type {
     if (t1.typeid() == t2.typeid()) {
@@ -1776,20 +2333,30 @@ pub const Type = struct {
         return t1;
       }
       if (t2.isUnion()) {
-        var variants = t2.union_().variants.clone();
+        var variants = t2.union_().variants.copy();
         variants.set(t1.typeid(), t1);
         return compressTypes(&variants, null);
+      }
+      if (t2.isTaggedUnion()) {
+        var variants = t2.taggedUnion().variants.copy();
+        variants.append(t1);
+        return compressTaggedTypes(&variants, null);
       }
       if (t2.isRelatedTo(t1, .RCAny, allocator)) {
         return t2;
       }
       if (t1.isUnion()) {
-        var variants = t1.union_().variants.clone();
+        var variants = t1.union_().variants.copy();
         variants.set(t2.typeid(), t2);
         return compressTypes(&variants, null);
       }
-      var tmp = Type.newUnion(allocator).box(allocator);
-      tmp.union_().addSlice(([_]*Type{t1, t2})[0..]);
+      if (t1.isTaggedUnion()) {
+        var variants = t1.taggedUnion().variants.copy();
+        variants.append(t2);
+        return compressTaggedTypes(&variants, null);
+      }
+      var tmp = Type.newTaggedUnion(allocator).box(allocator);
+      tmp.taggedUnion().addSlice(&[_]*Type{t1, t2});
       return tmp;
     }
   }
@@ -1824,6 +2391,15 @@ pub const Type = struct {
           }
           return compressTypes(&uni2, null);
         },
+        .TaggedUnion => |*uni| {
+          var uni2 = TypeList.init(allocator);
+          for (uni.variants.items()) |typ| {
+            if (typ.intersect(t2, allocator)) |ty| {
+              uni2.append(ty);
+            }
+          }
+          return compressTaggedTypes(&uni2, null);
+        },
         .Recursive => {
           var typs = t1.unfold(allocator);
           for (typs.items()) |typ| {
@@ -1844,6 +2420,15 @@ pub const Type = struct {
             }
           }
           return compressTypes(&uni2, null);
+        },
+        .TaggedUnion => |*uni| {
+          var uni2 = TypeList.init(allocator);
+          for (uni.variants.items()) |typ| {
+            if (typ.intersect(t1, allocator)) |ty| {
+              uni2.append(ty);
+            }
+          }
+          return compressTaggedTypes(&uni2, null);
         },
         .Recursive => {
           var typs = t2.unfold(allocator);
@@ -1874,8 +2459,20 @@ pub const Type = struct {
         }
         return Self.compressTypes(&new_uni, null);
       },
-      .Constant, .Concrete, .Generic, .Variable, .Top, .Function, .Method, .Class, .Instance => return error.Negation,
-      // TODO: c'est fini?
+      .TaggedUnion => |*uni| {
+        var new_uni = TypeList.init(allocator);
+        for (uni.variants.items()) |ty| {
+          if (ty.is(t2, allocator) == null) {
+            new_uni.append(ty);
+          }
+        }
+        if (new_uni.isEmpty()) {
+          return error.Negation;
+        }
+        return Self.compressTaggedTypes(&new_uni, null);
+      },
+      .Constant, .Concrete, .Generic, .Variable, .Top,
+      .Function, .Method, .Class, .Instance, .Tag => return error.Negation,
       .Recursive => return t1,
     }
   }
@@ -1908,8 +2505,8 @@ pub const Type = struct {
       },
       .Class => |*cls1| {
         if (t2.isClass() or t2.isClassFromTop()) {
-          var ty = if (t2.isClass()) t2 else t2.top().child;
-          if (cls1.isRelatedTo(ty, .RCIs, al)) {
+          const ty = if (t2.isClass()) t2 else t2.top().child;
+          if (std.mem.eql(u8, cls1.name, ty.klass().name)) {
             return t1;
           }
         }
@@ -1919,6 +2516,17 @@ pub const Type = struct {
           if (is(ty, t2, al)) |typ| {
             return typ;
           }
+        }
+      },
+      .TaggedUnion => |*uni| {
+        var list = TypeList.init(uni.variants.allocator());
+        for (uni.variants.items()) |ty| {
+          if (is(ty, t2, al)) |typ| {
+            list.append(typ);
+          }
+        }
+        if (list.isNotEmpty()) {
+          return compressTaggedTypes(&list, t1);
         }
       },
       .Variable => |*vr| {
@@ -1956,10 +2564,16 @@ pub const Type = struct {
           }
         }
       },
+      .Tag => |*tg| {
+        if (t2.isTag()) {
+          if (tg.nameEql(t2.tag().name)) {
+            return t1;
+          }
+        }
+      },
       .Top => |*tp| {
         return tp.child.is(t2, al);
       },
-      // TODO:
       .Recursive => return t1,
     }
     return null;

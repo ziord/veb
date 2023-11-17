@@ -2,8 +2,9 @@ const std = @import("std");
 const BuiltinsSrc = @import("prelude.zig").BuiltinsSrc;
 const OpCode = @import("opcode.zig").OpCode;
 const VebAllocator = @import("allocator.zig");
+pub const ks = @import("constants.zig");
 
-const keywords = std.ComptimeStringMap(TokenType, .{
+pub const Keywords = std.ComptimeStringMap(TokenType, .{
   .{"return", .TkReturn},
   .{"if", .TkIf},
   .{"else", .TkElse},
@@ -21,29 +22,34 @@ const keywords = std.ComptimeStringMap(TokenType, .{
   .{"end", .TkEnd},
   .{"not", .TkNot},
   .{"case", .TkCase},
-  .{"true", .TkTrue},
-  .{"false", .TkFalse},
   .{"match", .TkMatch},
-  .{"num", .TkNum},
-  .{"map", .TkMap},
-  .{"str", .TkStr},
-  .{"nil", .TkNil},
   .{"try", .TkTry},
-  .{"bool", .TkBool},
-  .{"list", .TkList},
-  .{"err", .TkErr},
-  .{"any", .TkAny},
+  .{"alias", .TkAlias},
   .{"type", .TkType},
-  .{"tuple", .TkTuple},
   .{"then", .TkThen},
   .{"break", .TkBreak},
-  .{"void", .TkVoid},
-  .{"self", .TkSelf},
   .{"with", .TkWith},
   .{"class", .TkClass},
   .{"orelse", .TkOrElse},
   .{"continue", .TkContinue},
-  .{"noreturn", .TkNoReturn},
+  .{ks.OkVar, .TkOk},
+  .{ks.SelfVar, .TkSelf},
+  .{ks.VoidVar, .TkVoid},
+  .{ks.NoReturnVar, .TkNoReturn},
+  .{ks.TrueVar, .TkTrue},
+  .{ks.FalseVar, .TkFalse},
+  .{ks.NumVar, .TkNum},
+  .{ks.MapVar, .TkMap},
+  .{ks.StrVar, .TkStr},
+  .{ks.BoolVar, .TkBool},
+  .{ks.JustVar, .TkJust},
+  .{ks.NoneVar, .TkNone},
+  .{ks.MaybeVar, .TkMaybe},
+  .{ks.ResultVar, .TkResult},
+  .{ks.ListVar, .TkList},
+  .{ks.ErrorVar, .TkError},
+  .{ks.AnyVar, .TkAny},
+  .{ks.TupleVar, .TkTuple},
 });
 
 pub const TokenType = enum (u8) {
@@ -71,9 +77,10 @@ pub const TokenType = enum (u8) {
   TkTilde,          // ~
   TkDot,            // .
   TkQMark,          // ?
+  Tk2QMark,         // ??
   TkNewline,        // \n
   TkEqGrt,          // =>
-  Tk2Dot,         // ..
+  Tk2Dot,           // ..
   TkLeq,            // <=
   TkGeq,            // >=
   Tk2Eq,            // ==
@@ -85,6 +92,7 @@ pub const TokenType = enum (u8) {
   TkFn,             // fn
   TkIs,             // is
   TkIf,             // if
+  TkOk,             // ok
   TkOr,             // or
   TkFor,            // for
   TkAnd,            // and
@@ -95,11 +103,13 @@ pub const TokenType = enum (u8) {
   TkNum,            // num
   TkMap,            // map
   TkStr,            // str
-  TkNil,            // nil
-  TkErr,            // err
+  TkError,          // error
   TkAny,            // any
   TkTry,            // try
+  TkAlias,          // alias
   TkBool,           // bool
+  TkJust,           // just
+  TkNone,           // none
   TkList,           // list
   TkThen,           // then
   TkType,           // type
@@ -114,8 +124,10 @@ pub const TokenType = enum (u8) {
   TkBreak,          // break
   TkFalse,          // false
   TkMatch,          // match
+  TkMaybe,          // maybe
   TkTuple,          // tuple
   TkWhile,          // while
+  TkResult,         // result
   TkOrElse,         // orelse
   TkReturn,         // return
   TkContinue,       // continue
@@ -124,7 +136,7 @@ pub const TokenType = enum (u8) {
   TkString,         // <string>
   TkAllocString,    // <string>
   TkIdent,          // <identifier>
-  TkError,          // <error>
+  TkUnindentified,  // <error>
   TkEof,            // <eof>
 
 
@@ -199,6 +211,7 @@ pub const TokenType = enum (u8) {
       .TkTilde => "~",
       .TkDot => ".",
       .TkQMark => "?",
+      .Tk2QMark => "??",
       .TkNewline => "<newline>",
       .TkEqGrt => "=>",
       .Tk2Dot => "..",
@@ -220,38 +233,43 @@ pub const TokenType = enum (u8) {
       .TkEnd => "end",
       .TkNot => "not",
       .TkLet => "let",
-      .TkNum => "num",
-      .TkMap => "map",
-      .TkStr => "str",
-      .TkNil => "nil",
-      .TkErr => "err",
-      .TkAny => "any",
       .TkTry => "try",
-      .TkBool => "bool",
-      .TkList => "list",
       .TkThen => "then",
+      .TkAlias => "alias",
       .TkType => "type",
       .TkElse => "else",
       .TkElif => "elif",
       .TkCase => "case",
-      .TkTrue => "true",
-      .TkVoid => "void",
-      .TkSelf => "self",
       .TkWith => "with",
       .TkClass => "class",
       .TkBreak => "break",
-      .TkFalse => "false",
+      .TkOk => ks.OkVar,
+      .TkTrue => ks.TrueVar,
+      .TkNum => ks.NumVar,
+      .TkMap => ks.MapVar,
+      .TkStr => ks.StrVar,
+      .TkError => ks.ErrorVar,
+      .TkAny => ks.AnyVar,
+      .TkBool => ks.BoolVar,
+      .TkJust => ks.JustVar,
+      .TkNone => ks.NoneVar,
+      .TkList => ks.ListVar,
+      .TkSelf => ks.SelfVar,
+      .TkVoid => ks.VoidVar,
+      .TkFalse => ks.FalseVar,
+      .TkTuple => ks.TupleVar,
+      .TkNoReturn => ks.NoReturnVar,
+      .TkMaybe => ks.MaybeVar,
+      .TkResult => ks.ResultVar,
       .TkMatch => "match",
-      .TkTuple => "tuple",
       .TkWhile => "while",
       .TkOrElse => "orelse",
       .TkReturn => "return",
       .TkContinue => "continue",
-      .TkNoReturn => "noreturn",
       .TkNumber => "<number>",
       .TkString, .TkAllocString => "<string>",
       .TkIdent => "<identifier>",
-      .TkError => "<error>",
+      .TkUnindentified => "<error>",
       .TkEof => "<eof>",
     };
   }
@@ -351,8 +369,12 @@ pub const Token = struct {
     return self.offset == other.offset and self.ty == other.ty;
   }
 
+  pub inline fn valueEql(self: *const @This(), val: []const u8) bool {
+    return std.mem.eql(u8, self.value, val);
+  }
+
   pub fn isErr(self: @This()) bool {
-    return self.is(.TkError);
+    return self.is(.TkUnindentified);
   }
 
   pub fn parseNum(self: @This()) !f64 {
@@ -367,13 +389,14 @@ pub const Token = struct {
 
   pub fn column(self: @This(), src: []const u8) usize {
     // FIXME: elegantly handle this
-    if (self.offset >= src.len) return self.column(BuiltinsSrc);
+    if (self.offset > src.len) return self.column(BuiltinsSrc);
+    const offset = if (self.offset == src.len) self.offset - 1 else self.offset;
     return (
-      if (std.mem.lastIndexOf(u8, src[0..self.offset], "\n")) |col|
-        self.offset - col - 1
-      else 
-        self.offset
-    ) + self.value.len 
+      if (std.mem.lastIndexOf(u8, src[0..offset], "\n")) |col|
+        offset - col - 1
+      else
+        offset
+    ) + self.value.len
       + @intFromBool((self.ty == .TkString or self.ty == .TkAllocString)); // quote
   }
 
@@ -383,8 +406,8 @@ pub const Token = struct {
 
   pub fn getLine(self: @This(), src: []const u8) []const u8 {
     // FIXME: elegantly handle this
-    if (self.offset >= src.len) return self.getLine(BuiltinsSrc);
-    var offset: usize = if (self.ty == .TkNewline or self.ty == .TkEof) self.offset - 1 else self.offset;
+    if (self.offset > src.len) return self.getLine(BuiltinsSrc);
+    const offset = if (self.ty == .TkNewline or self.ty == .TkEof) self.offset - 1 else self.offset;
     // walk backwards
     var start_col: usize = offset;
     while (start_col > 0): (start_col -= 1) {
@@ -449,6 +472,17 @@ pub const Token = struct {
     self.printSquig(if (self.value.len != 0) self.value.len else 1);
     std.debug.print("\n", .{});
   }
+};
+
+/// A snapshot of the lexer's state at any point in lexing
+pub const LexSnapShot = struct {
+  at_error: bool,
+  allow_nl: usize,
+  line: usize,
+  column: usize,
+  start: usize,
+  current: usize,
+  token: Token = undefined,
 };
 
 pub const Lexer = struct {
@@ -522,7 +556,7 @@ pub const Lexer = struct {
   }
 
   fn errToken(self: *Self, cause: ?[]const u8) Token {
-    var token = self.newToken(.TkError);
+    var token = self.newToken(.TkUnindentified);
     token.value = cause orelse "Illegal token";
     return token;
   }
@@ -696,7 +730,7 @@ pub const Lexer = struct {
   fn lexIdent(self: *Self) Token {
     while (!self.atEnd() and self.isAlpha(self.src[self.current])): (_ = self.advance()) {}
     var token = self.newToken(.TkIdent);
-    if (keywords.get(token.value)) |ty| {
+    if (Keywords.get(token.value)) |ty| {
       token.ty = ty;
     }
     return token;
@@ -763,6 +797,33 @@ pub const Lexer = struct {
     return token;
   }
 
+  pub fn snapshot(self: *Self) LexSnapShot {
+    return .{
+      .allow_nl = self.allow_nl,
+      .at_error = self.at_error,
+      .line = self.line,
+      .column = self.column,
+      .current = self.current,
+      .start = self.start
+    };
+  }
+
+  pub fn rewind(self: *Self, ss: LexSnapShot) void {
+    self.allow_nl = ss.allow_nl;
+    self.at_error = ss.at_error;
+    self.line = ss.line;
+    self.column = ss.column;
+    self.current = ss.current;
+    self.start = ss.start;
+  }
+
+  pub fn getTentativeToken(self: *Self) Token {
+    const ss = self.snapshot();
+    const tok = self.getToken();
+    self.rewind(ss);
+    return tok;
+  }
+
   pub fn getToken(self: *Self) Token {
     self.skipWhitespace() catch {
       return self.errToken("Unclosed comment");
@@ -797,9 +858,9 @@ pub const Lexer = struct {
       '^' => self.newToken(.TkCaret),
       '|' => self.newToken(.TkPipe),
       '~' => self.newToken(.TkTilde),
-      '?' => self.newToken(.TkQMark),
       '\n' => self.newToken(.TkNewline),
       '"', '\'' => self.lexStr(ch),
+      '?' => self.newToken(if (self.match('?')) .Tk2QMark else .TkQMark),
       '.' => self.newToken(if (self.match('.')) .Tk2Dot else .TkDot),
       '!' => self.newToken(if (self.match('=')) .TkNeq else .TkExMark),
       '=' => self.newToken(if (self.match('=')) .Tk2Eq else if (self.match('>')) .TkEqGrt else .TkEqual),

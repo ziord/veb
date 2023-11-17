@@ -24,8 +24,6 @@ pub const Constructor = struct {
   tag: ConsTag,
   args: ds.ArrayList(*Pattern),
   name: []const u8,
-  synth_name: ?[]const u8 = null,
-  targs: ?*ast.AstList = null,
   node: ?*ast.AstNode = null,
   typ: ?*Type = null,
 
@@ -35,6 +33,15 @@ pub const Constructor = struct {
 
   pub fn eql(self: *@This(), other: *@This()) bool {
     return std.mem.eql(u8, self.cname(), other.cname());
+  }
+
+  pub fn hasField(self: *@This()) bool {
+    for (self.args.items()) |arg| {
+      if (arg.alat.hasField()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   pub fn newOrCons(al: std.mem.Allocator) @This() {
@@ -47,10 +54,6 @@ pub const Constructor = struct {
 
   pub fn newTupleCons(al: std.mem.Allocator) @This() {
     return @This().init(ks.TupleVar, true, .Tuple, false, al);
-  }
-
-  pub fn newErrCons(al: std.mem.Allocator) @This() {
-    return @This().init(ks.ErrVar, true, .Err, false, al);
   }
 
   pub fn newMapCons(al: std.mem.Allocator) @This() {
@@ -77,26 +80,7 @@ pub const Constructor = struct {
     return this;
   }
 
-  pub fn cname(self: *@This()) []const u8 {
-    if (self.synth_name) |name| {
-      return name;
-    }
-    if (self.typ) |typ| {
-      if (!typ.isClsGeneric()) {
-        self.synth_name = self.name;
-        return self.name;
-      } else {
-        const name = TypeChecker.makeSynthName(
-          self.args.allocator(),
-          self.name,
-          typ.klass().builtin,
-          typ.klass().tparams.?,
-          null
-        );
-        self.synth_name = name;
-        return name;
-      }
-    }
+  pub inline fn cname(self: *@This()) []const u8 {
     return self.name;
   }
 
@@ -112,13 +96,9 @@ pub const Constructor = struct {
     if (self.node) |node| {
       new.node = node.clone(al);
     }
-    if (self.targs) |targs| {
-      new.targs = ast.AstList.clone(targs, al).box();
-    }
     if (self.typ) |typ| {
       new.typ = typ.clone(al);
     }
-    new.synth_name = self.synth_name;
     return new;
   }
 
@@ -129,15 +109,6 @@ pub const Constructor = struct {
       _ = try writer.write("lit.");
     }
     _ = try writer.write(self.name);
-    if (self.targs) |targs| {
-      _ = try writer.write("{");
-      var len = targs.len() - 1;
-      for (targs.items(), 0..) |node, i| {
-        if (i < len) _ = try writer.write(", ");
-        node.AstNType.typ.typenameInPlace(u8w);
-      }
-      _ = try writer.write("}");
-    }
     if (self.args.isEmpty()) {
       _ = try writer.write("()");
       return;
@@ -646,7 +617,6 @@ pub const ConsTag = enum (u8) {
   List,
   Tuple,
   Map,
-  Err,
   Literal,
   Other,
 };
@@ -916,7 +886,7 @@ pub const MatchCompiler = struct {
 
   fn varEql(self: *Self, v1: *Node, v2: *Node) bool {
     _ = self;
-    return std.mem.eql(u8, v1.AstVar.token.value, v2.AstVar.token.value);
+    return v1.AstVar.token.valueEql(v2.AstVar.token.value);
   }
 
   inline fn isExpandedPattern(self: *Self, variant: *MatchVariant) bool {
@@ -961,7 +931,7 @@ pub const MatchCompiler = struct {
 
   fn genFreshVarToken(self: *Self, tok: ?Token, start: []const u8) Token {
     std.debug.assert(start.len != 0);
-    var slice = if (start[0] == '$') start[1..] else start;
+    var slice = if (start[0] == ks.GeneratedVarMarker) start[1..] else start;
     var id = self.namegen.generate("${s}", .{slice});
     var token = if (tok) |token| Token.from(&token) else Token.getDefault();
     token.value = id;
@@ -1068,8 +1038,13 @@ pub const MatchCompiler = struct {
   inline fn capturePatternIfAliased(self: *Self, case: *Case, pattern: *Pattern, expr: *Node) void {
     // convert to a var decl and save to the case's body
     if (pattern.alat.hasAlias()) {
-      std.debug.assert(expr.isVariable());
-      case.body.addNode(self.convertCaptureToVarDecl(expr, pattern.alat.alias.?));
+      if (pattern.isVariable() and pattern.variant.vari.ident.AstVar.isGeneratedVar()) {
+        // capture the pattern's variable if it's generated
+        case.body.addNode(self.convertCaptureToVarDecl(pattern.variant.vari.ident, pattern.alat.alias.?));
+      } else {
+        std.debug.assert(expr.isVariable());
+        case.body.addNode(self.convertCaptureToVarDecl(expr, pattern.alat.alias.?));
+      }
     }
   }
 
@@ -1100,10 +1075,6 @@ pub const MatchCompiler = struct {
     var new = Constructor.init(cons.cname(), cons.builtin, cons.tag, cons.rested, self.allocator);
     new.node = cons.node;
     new.typ = cons.typ;
-    new.synth_name = cons.synth_name;
-    if (cons.targs) |targs| {
-      new.targs = targs.clone(self.allocator).box();
-    }
     self.resetIdCount();
     if (cons.tag != .Literal) {
       for (cons.args.items()) |arg| {
@@ -1375,29 +1346,29 @@ pub const DecisionTreeTransformer = struct {
     return Self {.allocator = allocator, .tc = tc, .cached_pairs = ds.ArrayList(MapPair).init(allocator)};
   }
 
-  inline fn andToken(self: *Self, token: Token) Token {
+  inline fn _token(self: *Self, token: Token, ty: ast.lex.TokenType) Token {
     _ = self;
-    return Token.fromWithValue(&token, "and", .TkAnd);
+    return Token.fromWithValue(&token, ty.str(), ty);
+  }
+
+  inline fn andToken(self: *Self, token: Token) Token {
+    return self._token(token, ast.lex.TokenType.TkAnd);
   }
 
   inline fn isToken(self: *Self, token: Token) Token {
-    _ = self;
-    return Token.fromWithValue(&token, "is", .TkIs);
+    return self._token(token, ast.lex.TokenType.TkIs);
   }
 
   inline fn eqeqToken(self: *Self, token: Token) Token {
-    _ = self;
-    return Token.fromWithValue(&token, "==", .Tk2Eq);
+    return self._token(token, ast.lex.TokenType.Tk2Eq);
   }
 
   inline fn leqToken(self: *Self, token: Token) Token {
-    _ = self;
-    return Token.fromWithValue(&token, "<=", .TkLeq);
+    return self._token(token, ast.lex.TokenType.TkLeq);
   }
 
   inline fn geqToken(self: *Self, token: Token) Token {
-    _ = self;
-    return Token.fromWithValue(&token, ">=", .TkGeq);
+    return self._token(token, ast.lex.TokenType.TkGeq);
   }
 
   fn newNumberNode(self: *Self, token: Token, val: f64) *Node {
@@ -1440,7 +1411,7 @@ pub const DecisionTreeTransformer = struct {
     rhs.* = .{.AstVar = ast.VarNode.init(tok)};
     // create ident.field
     var dot_expr = Node.create(self.allocator);
-    dot_expr.* = .{.AstDotAccess = ast.DotAccessNode.init(ident.clone(self.allocator), rhs)};
+    dot_expr.* = .{.AstDotAccess = ast.DotAccessNode.init(ident.clone(self.allocator), rhs, false)};
     return dot_expr;
   }
 
@@ -1508,6 +1479,24 @@ pub const DecisionTreeTransformer = struct {
     return decl;
   }
 
+  /// transform field access in a tag constructor to a var decl, for ex:
+  /// Cons(id) => id = occ.field_index
+  fn tagFieldAccessToVarDecl(self: *Self, source: *Node, field: usize, target: *Node) *Node {
+    // create field
+    var rhs = Node.create(self.allocator);
+    const tok = Token.fromWithValue(&source.AstVar.token, ks.GeneratedTypeVar, .TkNumber);
+    rhs.* = .{.AstNumber = ast.LiteralNode.init(tok)};
+    rhs.AstNumber.value = @floatFromInt(field);
+    // create ident.field
+    var dot_expr = Node.create(self.allocator);
+    dot_expr.* = .{.AstDotAccess = ast.DotAccessNode.init(source.clone(self.allocator), rhs, true)};
+    dot_expr.AstDotAccess.allow_tag = true;
+    // create var decl
+    var decl = Node.create(self.allocator);
+    decl.* = .{.AstVarDecl = ast.VarDeclNode.init(&target.AstVar, dot_expr, false)};
+    return decl;
+  }
+
   fn elsOrToBlock(self: *Self, els: *Node) *Node {
     if (!els.isBlock()) {
       const els_body = self.newBlock();
@@ -1547,12 +1536,12 @@ pub const DecisionTreeTransformer = struct {
         const pair = self.cached_pairs.getLast();
         const key = pair.key.AstVar.token.value;
         // -5 for '_keys'.len. See mapConstructorMethodToVarDecl()
-        break :blk (std.mem.eql(u8, id.AstVar.token.value, key[0..key.len - 5]));
+        break :blk (id.AstVar.token.valueEql(key[0..key.len - 5]));
       }
       break :blk from_map;
     };
     switch (cons.tag) {
-      .List, .Tuple, .Map, .Err, .Other => {
+      .List, .Tuple, .Map, .Other => {
         var lhs: *Node = undefined;
         if (!(cons.tag == .List and from_map)) {
           lhs = Node.create(self.allocator);
@@ -1581,31 +1570,31 @@ pub const DecisionTreeTransformer = struct {
             }
           }
         } else if (cons.tag == .List or cons.tag == .Tuple) {
-          // length check & rested: id.len() (>= || ==) cons.args.len
-          var rhs = Node.create(self.allocator);
-          const len = self.newNumberNode(swch.token, @floatFromInt(cons.args.len()));
-          const op = if (cons.rested) self.geqToken(swch.token) else self.eqeqToken(swch.token);
-          rhs.* = .{.AstBinary = ast.BinaryNode.init(self.newMethodCall(id, "len"), len, op)};
-          if_cond = Node.create(self.allocator);
-          if_cond.* = .{.AstBinary = ast.BinaryNode.init(lhs, rhs, self.andToken(swch.token))};
-          lhs.AstBinary.allow_rested = cons.rested;
-          for (cons.args.items(), 0..) |arg, index| {
-            // don't capture wildcard patterns
-            if (arg.isWildcard()) continue;
-            // transform vars to var decl
-            if_body.block().nodes.append(self.constructorSubscriptToVarDecl(arg, id, index));
+          if (!(cons.tag == .Tuple and cons.args.isEmpty())) {
+            // length check & rested: id.len() (>= || ==) cons.args.len
+            var rhs = Node.create(self.allocator);
+            const len = self.newNumberNode(swch.token, @floatFromInt(cons.args.len()));
+            const op = if (cons.rested) self.geqToken(swch.token) else self.eqeqToken(swch.token);
+            rhs.* = .{.AstBinary = ast.BinaryNode.init(self.newMethodCall(id, "len"), len, op)};
+            if_cond = Node.create(self.allocator);
+            if_cond.* = .{.AstBinary = ast.BinaryNode.init(lhs, rhs, self.andToken(swch.token))};
+            lhs.AstBinary.allow_rested = cons.rested;
+            for (cons.args.items(), 0..) |arg, index| {
+              // don't capture wildcard patterns
+              if (arg.isWildcard()) continue;
+              // transform vars to var decl
+              if_body.block().nodes.append(self.constructorSubscriptToVarDecl(arg, id, index));
+            }
+          } else {
+            if_cond = lhs;
           }
         } else if (cons.tag == .Map) {
-          // transform constructor `map(var)` into `var = id.listItems()`
+          // transform constructor `C(var)` into `var = keys() ; var = values()`
           _parent = cons;
           const pair = self.mapConstructorMethodToVarDecl(cons, id, _parent);
           if_body.block().nodes.appendSlice(&[_]*Node{pair.@"0", pair.@"1"});
           if_cond = lhs;
-        } else if (cons.tag == .Err) {
-          // transform constructor `err(var)` into `var = id.value()`
-          if_body.block().nodes.append(self.constructorMethodToVarDecl(cons, id, "value"));
-          if_cond = lhs;
-        } else {
+        } else if (ty.isClass()) {
           // .Other -> validate fields
           // C(a, b, ..)
           var cls = ty.klass();
@@ -1628,6 +1617,34 @@ pub const DecisionTreeTransformer = struct {
               }
               // transform field access - by position, to a var decl
               if_body.block().nodes.append(self.fieldAccessToVarDecl(id, field.AstVarDecl.ident, arg.variant.vari.ident));
+            }
+            if (self.tc.diag.hasErrors()) {
+              return error.CheckError;
+            }
+          }
+          if_cond = lhs;
+        } else {
+          std.debug.assert(ty.isTag());
+          var tag = ty.tag();
+          if (cons.args.isNotEmpty()) {
+            // verify class fields.
+            const tyname = ty.typename(&self.tc.u8w);
+            for (cons.args.items(), 0..) |arg, i| {
+              // don't capture wildcard patterns
+              if (arg.isWildcard()) continue;
+              if (arg.alat.hasField()) {
+                var fd = &arg.alat.field.?.AstVar;
+                if (tag.getParamWithId(fd.token.value)) |idx| {
+                  // transform field access to a var decl
+                  if_body.block().nodes.append(self.tagFieldAccessToVarDecl(id, idx, arg.variant.vari.ident));
+                  continue;
+                } else {
+                  self.tc.softError(fd.token, "type '{s}' has no field '{s}'", .{tyname, fd.token.value});
+                  continue;
+                }
+              }
+              // transform field access - by position, to a var decl
+              if_body.block().nodes.append(self.tagFieldAccessToVarDecl(id, i, arg.variant.vari.ident));
             }
             if (self.tc.diag.hasErrors()) {
               return error.CheckError;

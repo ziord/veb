@@ -117,6 +117,12 @@ pub const Diagnostic = struct {
     };
   }
 
+  pub fn addDiagnosticsDirect(self: *Self, token: Token, msg: []const u8) void {
+    self.data.append(.{.level = self.level, .msg = msg, .token = token}) catch |e| {
+      std.debug.print("Could not add diagnostic: {}", .{e});
+    };
+  }
+
   pub fn addDiagnosticsWithLevel(self: *Self, level: DiagLevel, token: Token, comptime fmt: []const u8, args: anytype) void {
     self.pushData(level, token, fmt, args) catch |e| {
       std.debug.print("Could not add diagnostic: {}", .{e});

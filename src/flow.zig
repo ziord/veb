@@ -141,6 +141,20 @@ pub const FlowNode = struct {
   pub fn isPrev(itm: FlowData) bool {
     return itm.prev;
   }
+
+  pub const FilterPredicate = struct {
+    pub inline fn isNot(itm: *FlowNode, predicate: fn (*FlowNode) bool) bool {
+      return !predicate(itm);
+    }
+    
+    pub inline fn isNotDeadNode(node: *FlowNode) bool {
+      return !node.isDeadNode();
+    }
+
+    pub inline fn isNonRetFlowNode(node: *FlowNode) bool {
+      return if (node.bb.getNonScopeLast()) |lst| !lst.isRet() else true;
+    }
+  };
 };
 
 pub const ResolutionState = enum {
@@ -273,7 +287,7 @@ pub const CFGBuilder = struct {
     }
   }
 
-  fn connectVerticesWithEdgeInfo(self: *Self, prev: FlowList, next: *FlowNode, edge: FlowEdge) void {
+  pub fn connectVerticesWithEdgeInfo(self: *Self, prev: FlowList, next: *FlowNode, edge: FlowEdge) void {
     self.connectVertices(prev, next);
     next.edge = edge;
   }
@@ -421,6 +435,12 @@ pub const CFGBuilder = struct {
             atomic = false;
           },
           .AstMatch => {
+            // link everything before match
+            if (bb_nodes.isNotEmpty()) {
+              _prev = self.linkAtomic(bb_nodes, _prev, edge, .CfgOther);
+              bb_nodes = NodeList.init(self.alloc);
+            }
+            // make match own its basic block 
             bb_nodes.append(item);
             _prev = self.linkAtomic(bb_nodes, _prev, edge, .CfgOther);
             atomic = false;
@@ -536,10 +556,7 @@ pub const CFGBuilder = struct {
     self.cfg = cfg;
     var err = node.AstOrElse.err;
     if (!err.isBlock()) {
-      err = Node.create(self.alloc);
-      var block = ast.BlockNode.init(self.alloc);
-      block.nodes.append(node.AstOrElse.err);
-      err.* = .{.AstBlock = block};
+      err = ast.BlockNode.newBlockWithNodes(self.alloc, &[_]*Node{node.AstOrElse.err});
     }
     _ = self.link(err, self.entry.toList(self.alloc), .ESequential);
     return FlowMeta.init(self.entry, self.exit, self.dead);

@@ -27,6 +27,7 @@ pub const NativeFns = [_][]const u8 {
   "listItems",
   "delete",
   "remove",
+  "println",
 };
 
 
@@ -50,8 +51,8 @@ inline fn addNativeClass(vm: *VM, cls: *vl.ObjClass) void {
   _ = vm.globals.set(cls.name, vl.objVal(cls), vm);
 }
 
-inline fn newString(vm: *VM, chars: []const u8) *vl.ObjString {
-  return @constCast(vl.createString(vm, &vm.strings, chars, false));
+inline fn newString(vm: *VM, chars: []const u8) *const vl.ObjString {
+  return vl.createString(vm, &vm.strings, chars, false);
 }
 
 inline fn getArg(vm: *VM, pos: u32) Value {
@@ -85,7 +86,7 @@ pub fn fnExit(vm: *VM, argc: u32, args: u32) Value {
 pub fn fnPanic(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var msg = vl.asString(vl.valueToString(getArg(vm, args), vm));
-  vm.panicUnwindError("Error: '{s}'", .{msg.str[0..msg.len]});
+  vm.panicUnwindError("panicked at: '{s}'", .{msg.str[0..msg.len]});
   vm.deinit();
   std.os.exit(1);
 }
@@ -93,7 +94,20 @@ pub fn fnPanic(vm: *VM, argc: u32, args: u32) Value {
 /// print(args*: any): void
 pub fn fnPrint(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
-  var tup = vl.asTuple(getArg(vm, args));
+  var tup = vl.asList(getArg(vm, args));
+  for (tup.items[0..tup.len], 1..) |val, i| {
+    vl.printValue(val);
+    if (i < tup.len) {
+      util.print(" ", .{});
+    }
+  }
+  return NOTHING_VAL;
+}
+
+/// println(args*: any): void
+pub fn fnPrintln(vm: *VM, argc: u32, args: u32) Value {
+  _ = argc;
+  var tup = vl.asList(getArg(vm, args));
   for (tup.items[0..tup.len], 1..) |val, i| {
     vl.printValue(val);
     if (i < tup.len) {
@@ -136,13 +150,6 @@ fn createStringClass(vm: *VM) *vl.ObjClass {
 
 //******** list ********//
 
-// init(args*: T): void
-fn listInit(vm: *VM, argc: u32, args: u32) Value {
-  _ = args;
-  _ = vm;
-  _ = argc;
-  return NOTHING_VAL;
-}
 
 // append(item: T): void
 fn listAppend(vm: *VM, argc: u32, args: u32) Value {
@@ -158,38 +165,37 @@ fn listLen(vm: *VM, argc: u32, args: u32) Value {
   return vl.numberVal(@floatFromInt(list.len));
 }
 
-// pop(): T
+// pop(): Maybe{T}
 fn listPop(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var list = vl.asList(getArg(vm, args));
   if (list.len == 0) {
-    vm.panicUnwindError("Error: pop from empty list", .{});
-    return NOTHING_VAL;
+    return vl.noneVal();
   }
   var val = list.items[list.len - 1];
   list.len -= 1;
-  return val;
+  return vl.justVal(vm, val);
 }
 
-// get(index: num): T?
+// get(index: num): Maybe{T}
 fn listGet(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var list = vl.asList(getArg(vm, args));
-  if (list.len == 0) return vl.NIL_VAL;
+  if (list.len == 0) return vl.noneVal();
   var idx = vl.asIntNumber(i64, getArg(vm, args + 1));
   if (idx < 0) idx += @intCast(list.len);
-  if (idx >= list.len) return vl.NIL_VAL;
-  return list.items[@intCast(idx)];
+  if (idx >= list.len) return vl.noneVal();
+  return vl.justVal(vm, list.items[@intCast(idx)]);
 }
 
 fn createListClass(vm: *VM) *vl.ObjClass {
   //*** method executable ***//
   // NOTE: Methods are set according to the order in prelude
-  const methods = [_]NativeFn {listInit, listAppend, listLen, listPop, listGet};
+  const methods = [_]NativeFn {listAppend, listLen, listPop, listGet};
   //*** arity of each method ***//
-  const arities = [_]u32 {VarArgC, 1, 0, 0, 1};
+  const arities = [_]u32 {1, 0, 0, 1};
   //*** index into NativeFns array ***//
-  const names = [_]usize{7, 4, 5, 8, 10};
+  const names = [_]usize{4, 5, 8, 10};
   var cls = vl.createClass(vm, methods.len);
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
@@ -201,13 +207,6 @@ fn createListClass(vm: *VM) *vl.ObjClass {
 
 //******** tuple ********//
 
-// init(args*: T): void
-fn tupleInit(vm: *VM, argc: u32, args: u32) Value {
-  _ = args;
-  _ = vm;
-  _ = argc;
-  return NOTHING_VAL;
-}
 
 // len(): num
 fn tupleLen(vm: *VM, argc: u32, args: u32) Value {
@@ -216,24 +215,13 @@ fn tupleLen(vm: *VM, argc: u32, args: u32) Value {
   return vl.numberVal(@floatFromInt(tuple.len));
 }
 
-// get(index: num): T?
-fn tupleGet(vm: *VM, argc: u32, args: u32) Value {
-  _ = argc;
-  var tuple = vl.asTuple(getArg(vm, args));
-  if (tuple.len == 0) return vl.NIL_VAL;
-  var idx = vl.asIntNumber(i64, getArg(vm, args + 1));
-  if (idx < 0) idx += @intCast(tuple.len);
-  if (idx >= tuple.len) return vl.NIL_VAL;
-  return tuple.items[@intCast(idx)];
-}
-
 fn createTupleClass(vm: *VM) *vl.ObjClass {
   //*** method executable ***//
-  const methods = [_]NativeFn {tupleInit, tupleLen, tupleGet};
+  const methods = [_]NativeFn {tupleLen};
   //*** arity of each method ***//
-  const arities = [_]u32 {0, VarArgC, 1};
+  const arities = [_]u32 {VarArgC};
   //*** index into NativeFns array ***//
-  const names = [_]usize{7, 5, 10};
+  const names = [_]usize{5};
   var cls = vl.createClass(vm, methods.len);
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
@@ -260,13 +248,13 @@ fn mapSet(vm: *VM, argc: u32, args: u32) Value {
   return vl.boolVal(res);
 }
 
-// get(key: K): V?
+// get(key: K): Maybe{V}
 fn mapGet(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   if (vl.asMap(getArg(vm, args)).meta.get(getArg(vm, args + 1), vm)) |res| {
-    return res;
+    return vl.justVal(vm, res);
   }
-  return vl.NIL_VAL;
+  return vl.noneVal();
 }
 
 // delete(key: K): bool
@@ -283,19 +271,19 @@ fn mapRemove(vm: *VM, argc: u32, args: u32) Value {
   return vl.boolVal(val);
 }
 
-// keys(): list{K}
+// keys(): List{K}
 fn mapKeys(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   return vl.asMap(getArg(vm, args)).meta.keys(vm);
 }
 
-// values(): list{V}
+// values(): List{V}
 fn mapValues(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   return vl.asMap(getArg(vm, args)).meta.values(vm);
 }
 
-// items(): list{tuple{K | V}}
+// items(): List{Tuple{K, V}}
 fn mapItems(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var map = vl.asMap(getArg(vm, args));
@@ -311,15 +299,15 @@ fn mapItems(vm: *VM, argc: u32, args: u32) Value {
   return vl.objVal(list);
 }
 
-// listItems(): list{K | V}
+// listItems(): List{MapEntry{K, V}} -> List{Key(K) | Value(V)}
 fn mapListItems(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var map = vl.asMap(getArg(vm, args));
   var list = vl.createList(vm, map.meta.len << 1);
   var kvc: usize = 0;
   for (map.meta.items[0..map.meta.len]) |item| {
-    list.items[kvc] = item.key;
-    list.items[kvc + 1] = item.value;
+    list.items[kvc] = vl.structVal(vm, item.key, ks.KeyVar);
+    list.items[kvc + 1] = vl.structVal(vm, item.value, ks.ValueVar);
     kvc += 2;
   }
   return vl.objVal(list);
@@ -353,32 +341,10 @@ fn createMapClass(vm: *VM) *vl.ObjClass {
 
 //******** err ********//
 
-// init(val: T): void
-fn errInit(vm: *VM, argc: u32, args: u32) Value {
-  _ = args;
-  _ = vm;
-  _ = argc;
-  return NOTHING_VAL;
-}
 
-// value(): T
-fn errValue(vm: *VM, argc: u32, args: u32) Value {
-  _ = argc;
-  return vl.asError(getArg(vm, args)).val;
-}
-
-fn createErrClass(vm: *VM) *vl.ObjClass {
-  //*** method executable ***//
-  const methods = [_]NativeFn {errInit, errValue};
-  //*** arity of each method ***//
-  const arities = [_]u32 {1, 0};
-  //*** index into NativeFns array ***//
-  const names = [_]usize{7, 6};
-  var cls = vl.createClass(vm, methods.len);
-  for (methods, arities, names, 0..) |mtd, arity, name, i| {
-    cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
-  }
-  cls.name = newString(vm, ks.ErrVar);
+fn createErrorClass(vm: *VM) *vl.ObjClass {
+  var cls = vl.createClass(vm, 0);
+  cls.name = newString(vm, ks.ErrorVar);
   vm.classes.err = cls;
   return cls;
 }
@@ -391,11 +357,12 @@ pub fn addBuiltins(vm: *VM) void {
   addNativeClass(vm, createListClass(vm));
   addNativeClass(vm, createTupleClass(vm));
   addNativeClass(vm, createMapClass(vm));
-  addNativeClass(vm, createErrClass(vm));
+  addNativeClass(vm, createErrorClass(vm));
   // Add builtin functions
   //** VM, fn-name, fn-name-index, arity, fn-exec **//
   addNativeFn(vm, "assert", 0, 2, fnAssert);
   addNativeFn(vm, "exit", 1, 1, fnExit);
   addNativeFn(vm, "panic", 2, 1, fnPanic);
-  addNativeFn(vm, "print", 3, 1, fnPrint);
+  addNativeFn(vm, "print", 3, VarArgC, fnPrint);
+  addNativeFn(vm, "println", 17, VarArgC, fnPrintln);
 }

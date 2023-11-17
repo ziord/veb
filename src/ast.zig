@@ -1,9 +1,10 @@
 const std = @import("std");
-const lex = @import("lex.zig");
 const types = @import("type.zig");
 const util = @import("util.zig");
 const ptn = @import("pattern.zig");
+pub const lex = @import("lex.zig");
 pub const ds = @import("ds.zig");
+pub const ks = lex.ks;
 
 const Type = types.Type;
 const OpType = lex.OpType;
@@ -292,6 +293,10 @@ pub const VarNode = struct {
     return new;
   }
 
+  pub inline fn isGeneratedVar(self: *@This()) bool {
+    return self.token.value[0] == ks.GeneratedVarMarker;
+  }
+
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = try u8w.writer().write(self.token.value);
@@ -310,7 +315,7 @@ pub const ExprStmtNode = struct {
       if (self.expr.AstAssign.left.isDotAccess()) {
         if (self.expr.AstAssign.left.AstDotAccess.lhs.isVariable()) {
           var value = self.expr.AstAssign.left.AstDotAccess.lhs.AstVar.token.value;
-          if (std.mem.eql(u8, "self", value)) {
+          if (std.mem.eql(u8, ks.SelfVar, value)) {
             return &self.expr.AstAssign.left.AstDotAccess;
           }
         }
@@ -406,6 +411,15 @@ pub const BlockNode = struct {
   pub fn getSecondLast(self: *BlockNode) ?*AstNode {
     if (self.nodes.len() > 1) return self.nodes.itemAt(self.nodes.len() - 2);
     return null;
+  }
+
+  pub fn canAssumeEmpty(self: *BlockNode, comptime assume: fn (*AstNode) callconv(.Inline) bool) bool {
+    for (self.nodes.items()) |itm| {
+      if (!assume(itm)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
@@ -508,6 +522,7 @@ pub const DerefNode = struct {
 
 pub const ConditionNode = struct {
   cond: *AstNode,
+  has_never_typ_in_false_path: bool = false,
 
   pub fn init(cond: *AstNode) @This() {
     return @This() {.cond = cond};
@@ -760,7 +775,7 @@ pub const CallNode = struct {
     var tuple = AstList.init(al);
     tuple.appendSlice(self.args.items()[self.va_start..]);
     var node = util.alloc(AstNode, al);
-    node.* = .{.AstTuple = .{.elems = tuple}};
+    node.* = .{.AstList = .{.elems = tuple}};
     if (self.args.isNotEmpty()) {
       self.args.items()[self.va_start] = node;
     } else {
@@ -931,11 +946,14 @@ pub const FunNode = struct {
 pub const DotAccessNode = struct {
   lhs: *AstNode,
   rhs: *AstNode,
+  parent: ?*AstNode = null,
   narrowed: ?*VarNode = null,
   typ: ?*Type = null,
+  /// allow a tag's params to be accessed by index
+  allow_tag: bool,
 
-  pub fn init(lhs: *AstNode, rhs: *AstNode) @This() {
-    return @This() { .lhs = lhs, .rhs = rhs};
+  pub fn init(lhs: *AstNode, rhs: *AstNode, allow_tag: bool) @This() {
+    return @This() { .lhs = lhs, .rhs = rhs, .allow_tag = allow_tag};
   }
 
   pub inline fn line(self: *@This()) usize {
@@ -947,10 +965,11 @@ pub const DotAccessNode = struct {
   }
 
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
-    var da = DotAccessNode.init(self.lhs.clone(al), self.rhs.clone(al));
+    var da = DotAccessNode.init(self.lhs.clone(al), self.rhs.clone(al), self.allow_tag);
     if (self.narrowed) |narrowed| {
       da.narrowed = &narrowed.clone(al).AstVar;
     }
+    da.parent = self.parent;
     var new = util.alloc(AstNode, al);
     new.* = .{.AstDotAccess = da};
     return new;
@@ -1039,8 +1058,6 @@ pub const LblArgNode = struct {
 };
 
 pub const MatchNode = struct {
-  /// debug token
-  token: Token,
   /// var decl if expr was converted to one
   decl: ?*AstNode = null,
   /// match expr
@@ -1053,8 +1070,8 @@ pub const MatchNode = struct {
 
   pub const CaseList = ds.ArrayList(*ptn.Case);
 
-  pub fn init(token: Token, expr: *AstNode, cases: CaseList) @This() {
-    return @This() {.token = token, .expr = expr, .cases = cases};
+  pub fn init(expr: *AstNode, cases: CaseList) @This() {
+    return @This() {.expr = expr, .cases = cases};
   }
 
   pub inline fn getVariableOfInterest(self: *@This()) Token {
@@ -1062,7 +1079,7 @@ pub const MatchNode = struct {
   }
 
   pub fn clone(self: *@This(), al: std.mem.Allocator) *AstNode {
-    var match = @This().init(self.token, self.expr.clone(al), ds.ArrayList(*ptn.Case).clone(&self.cases, al));
+    var match = @This().init(self.expr.clone(al), ds.ArrayList(*ptn.Case).clone(&self.cases, al));
     match.decl = if (self.decl) |decl| decl.clone(al) else self.decl;
     match.typ = if (self.typ) |ty| ty.clone(al) else self.typ;
     var new = util.alloc(AstNode, al);
@@ -1300,6 +1317,20 @@ pub const AstNode = union(AstType) {
     };
   }
 
+  pub inline fn isNoneLiteral(self: *@This()) bool {
+    return switch (self.*) {
+      .AstNType => |*nt| nt.typ.isNoneTy(),
+      else => false,
+    };
+  }
+
+  pub inline fn isNumberLiteral(self: *@This()) bool {
+    return switch (self.*) {
+      .AstNumber => true,
+      else => false,
+    };
+  }
+
   pub inline fn isConstLiteral(self: *@This()) bool {
     return switch (self.*) {
       .AstBool, .AstString, .AstNumber => true,
@@ -1525,16 +1556,16 @@ pub const AstNode = union(AstType) {
       .AstBinary, .AstAssign => |*bin| bin.typ = typ,
       .AstUnary => |*una| una.typ = typ,
       .AstDotAccess => |*dot| {
-        if (dot.narrowed) |nrw| nrw.typ = typ
-        else dot.typ = typ;
+        if (dot.narrowed) |nrw| nrw.typ = typ;
+        dot.typ = typ;
       },
       .AstSubscript => |*sub| {
-        if (sub.narrowed) |nrw| nrw.typ = typ
-        else sub.typ = typ;
+        if (sub.narrowed) |nrw| nrw.typ = typ;
+        sub.typ = typ;
       },
       .AstDeref => |*der| {
-        if (der.narrowed) |nrw| nrw.typ = typ
-        else der.typ = typ;
+        if (der.narrowed) |nrw| nrw.typ = typ;
+        der.typ = typ;
       },
       .AstVar => |*vr| vr.typ = typ,
       .AstCast => |*cst| cst.typn.typ = typ,
@@ -1559,11 +1590,21 @@ pub const AstNode = union(AstType) {
       .AstNil => |nil| {
         tyn = TypeNode.init(Type.newConcrete(.TyNil).box(al), nil.token);
       },
+      .AstNType => return self,
+      .AstVar => |*vr| {
+        std.debug.assert(vr.token.valueEql(ks.NoneVar));
+        tyn = TypeNode.init(Type.newNoneTag(al), vr.token);
+        vr.typ = tyn.typ;
+      },
       else => unreachable,
     }
     var node = util.alloc(AstNode, al);
     node.* = .{.AstNType = tyn};
     return node;
+  }
+
+  pub inline fn toIntNumber(self: *@This(), comptime T: type) T {
+    return @intFromFloat(self.AstNumber.value);
   }
 
   pub fn toMatchCondition(self: *@This(), al: std.mem.Allocator) *@This() {

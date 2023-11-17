@@ -22,7 +22,7 @@ pub fn doRuntimeTest(src: []const u8) !void {
   try tych.typecheck(node, &cna, true);
   var cpu = vm.VM.init(&cna);
   defer cpu.deinit();
-  var fun = value.createFn(&cpu, 0);
+  var fun = value.createScriptFn(&cpu, 0);
   var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych._prelude, null, null);
   try compiler.compile(node);
   debug.Disassembler.disCode(&fun.code, "test");
@@ -46,7 +46,7 @@ pub fn doStaticTest(src: []const u8) !void {
   try tych.typecheck(node, &cna, true);
   var cpu = vm.VM.init(&cna);
   defer cpu.deinit();
-  var fun = value.createFn(&cpu, 0);
+  var fun = value.createScriptFn(&cpu, 0);
   var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych._prelude, null, null);
   try compiler.compile(node);
   debug.Disassembler.disCode(&fun.code, "test");

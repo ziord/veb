@@ -15,6 +15,7 @@ const exit = std.os.exit;
 const Type = types.Type;
 const Generic = types.Generic;
 const Union = types.Union;
+const TaggedUnion = types.TaggedUnion;
 const Variable = types.Variable;
 const Concrete = types.Concrete;
 const Function = types.Function;
@@ -22,6 +23,7 @@ const Class = types.Class;
 const TypeList = types.TypeList;
 const NodeList = ast.AstList;
 const Diagnostic = diagnostics.Diagnostic;
+const DiagLevel = diagnostics.DiagLevel;
 const Pattern = ptn.Pattern;
 pub const TypeKind = types.TypeKind;
 
@@ -56,6 +58,7 @@ pub const Parser = struct {
     class: ?*Node = null,
     m_literals: ds.ArrayList(NameTuple),
     mode: ParseMode,
+    in_type_decl: bool = false,
 
     const NameTuple = struct{*Node, *Node, bool};
 
@@ -119,6 +122,7 @@ pub const Parser = struct {
     .{.bp = .Unary, .prefix = Self.unary, .infix = null},               // TkTilde
     .{.bp = .Access, .prefix = null, .infix = Self.dotderef},           // TkDot
     .{.bp = .None, .prefix = null, .infix = null},                      // TkQMark
+    .{.bp = .None, .prefix = null, .infix = null},                      // Tk2QMark
     .{.bp = .None, .prefix = null, .infix = null},                      // TkNewline
     .{.bp = .None, .prefix = null, .infix = null},                      // TkEqGrt
     .{.bp = .None, .prefix = null, .infix = null},                      // Tk2Dot
@@ -133,6 +137,7 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkFn
     .{.bp = .Equality, .prefix = null, .infix = Self.binIs},            // TkIs
     .{.bp = .None, .prefix = null, .infix = null},                      // TkIf
+    .{.bp = .Or, .prefix = Self.variable, .infix = null},               // TkOk
     .{.bp = .Or, .prefix = null, .infix = Self.binary},                 // TkOr
     .{.bp = .None, .prefix = null, .infix = null},                      // TkFor
     .{.bp = .And, .prefix = null, .infix = Self.binary},                // TkAnd
@@ -143,11 +148,13 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkNum
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkMap
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkStr
-    .{.bp = .None, .prefix = Self.nullable, .infix = null},             // TkNil
-    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkErr
+    .{.bp = .None, .prefix = Self.variable, .infix = null},             // TkError
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkAny
     .{.bp = .Unary, .prefix = Self.tryExpr, .infix = null},             // TkTry
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkAlias
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkBool
+    .{.bp = .None, .prefix = Self.variable, .infix = null},             // TkJust
+    .{.bp = .None, .prefix = Self.variable, .infix = null},             // TkNone
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkList
     .{.bp = .None, .prefix = null, .infix = null},                      // TkThen
     .{.bp = .None, .prefix = null, .infix = null},                      // TkType
@@ -162,8 +169,10 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkBreak
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkFalse
     .{.bp = .None, .prefix = null, .infix = null},                      // TkMatch
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkMaybe
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkTuple
     .{.bp = .None, .prefix = null, .infix = null},                      // TkWhile
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkResult
     .{.bp = .Term, .prefix = null, .infix = Self.orElseExpr},           // TkOrElse
     .{.bp = .None, .prefix = null, .infix = null},                      // TkReturn
     .{.bp = .None, .prefix = null, .infix = null},                      // TkContinue
@@ -172,7 +181,7 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = Self.string, .infix = null},               // TkString
     .{.bp = .None, .prefix = Self.string, .infix = null},               // TkAllocString
     .{.bp = .None, .prefix = Self.variable, .infix = null},             // TkIdent
-    .{.bp = .None, .prefix = null, .infix = null},                      // TkError
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkUnindentified
     .{.bp = .None, .prefix = null, .infix = null},                      // TkEof
   };
 
@@ -198,25 +207,44 @@ pub const Parser = struct {
     return self.meta.mode == .Builtin;
   }
 
-  inline fn _errWithArgs(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
-    self.diag.addDiagnosticsWithLevel(.DiagError, token, "Error: " ++ fmt, args);
+  inline fn _errWithArgs(self: *Self, level: DiagLevel, token: Token, comptime fmt: []const u8, args: anytype) void {
+    const start = if (level == .DiagError) "Error: " else "Warning: ";
+    self.diag.addDiagnosticsWithLevel(level, token, start ++ fmt, args);
   }
 
   fn softErrArgs(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
-   self._errWithArgs(token, fmt, args);
+   self._errWithArgs(.DiagError, token, fmt, args);
   }
 
   fn softErrMsg(self: *Self, token: Token, msg: []const u8) void {
-    self._errWithArgs(token, "{s}", .{msg});
+    self._errWithArgs(.DiagError, token, "{s}", .{msg});
   }
 
   fn errMsg(self: *Self, token: Token, msg: []const u8) ParseError {
-    self._errWithArgs(token, "{s}", .{msg});
+    self._errWithArgs(.DiagError, token, "{s}", .{msg});
     return error.ParseError;
   }
 
   fn errArgs(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) ParseError {
-   self._errWithArgs(token, fmt, args);
+   self._errWithArgs(.DiagError, token, fmt, args);
+   return error.ParseError;
+  }
+
+  fn softWarnArgs(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
+   self._errWithArgs(.DiagWarn, token, fmt, args);
+  }
+
+  fn softWarnMsg(self: *Self, token: Token, msg: []const u8) void {
+    self._errWithArgs(.DiagWarn, token, "{s}", .{msg});
+  }
+
+  fn warnMsg(self: *Self, token: Token, msg: []const u8) ParseError {
+    self._errWithArgs(.DiagWarn, token, "{s}", .{msg});
+    return error.ParseError;
+  }
+
+  fn warnArgs(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) ParseError {
+   self._errWithArgs(.DiagWarn, token, fmt, args);
    return error.ParseError;
   }
 
@@ -302,6 +330,22 @@ pub const Parser = struct {
         try self.consume(.TkNewline);
       }
     }
+  }
+
+  fn snapshot(self: *Self) lex.LexSnapShot {
+    var ss = self.lexer.snapshot();
+    ss.token = self.current_tok;
+    return ss;
+  }
+
+  fn rewind(self: *Self, ss: lex.LexSnapShot) void {
+    self.lexer.rewind(ss);
+    self.previous_tok = ss.token;
+    self.current_tok = ss.token;
+  }
+
+  fn getDisambiguator(self: *Self, comptime T: type) std.StringHashMap(T) {
+    return std.StringHashMap(T).init(self.allocator);
   }
 
   inline fn createObj(self: *Self, comptime T: type) *T {
@@ -537,6 +581,16 @@ pub const Parser = struct {
       var node = self.newNode();
       node.* = .{.AstDeref = ast.DerefNode.init(left, token)};
       return try self.handleAugAssign(node, assignable);
+    } else if (self.match(.Tk2QMark)) {
+      const num_token = Token.fromWithValue(&self.previous_tok, ks.GeneratedTypeVar, .TkNumber);
+      var num = self.newNode();
+      num.* = .{.AstNumber = ast.LiteralNode.init(num_token)};
+      num.AstNumber.value = 0;
+      var deref = self.newNode();
+      deref.* = .{.AstDeref = ast.DerefNode.init(left, token)};
+      var node = self.newNode();
+      node.* = .{.AstDotAccess = ast.DotAccessNode.init(deref, num, false)};
+      return try self.handleAugAssign(node, assignable);
     } else {
       return self.dotExpr(left, assignable);
     }
@@ -549,7 +603,7 @@ pub const Parser = struct {
     const bp = ptable[@intFromEnum(self.previous_tok.ty)].bp;
     const right = try self._parse(bp);
     var node = self.newNode();
-    node.* = .{.AstDotAccess = ast.DotAccessNode.init(left, right)};
+    node.* = .{.AstDotAccess = ast.DotAccessNode.init(left, right, false)};
     return try self.handleAugAssign(node, assignable);
   }
 
@@ -573,6 +627,7 @@ pub const Parser = struct {
     if (self.match(.TkLCurly)) {
       targs = try self.typeParams();
     }
+    self.incNl();
     try self.consume(.TkLBracket);
     var args = NodeList.init(self.allocator);
     var start: ast.Token = undefined;
@@ -597,8 +652,10 @@ pub const Parser = struct {
         args.append(arg);
       }
     }
+    self.decNl();
     try self.consume(.TkRBracket);
     self.assertMaxArgs(args.len(), "arguments");
+    self.validateMaybeTagCall(left, &args);
     var node = self.newNode();
     node.* = .{.AstCall = ast.CallNode.init(left, args, targs, 0, false, labeled)};
     return node;
@@ -617,19 +674,23 @@ pub const Parser = struct {
 
   fn tryExpr(self: *Self, assignable: bool) !*Node {
     _ = assignable;
-    if (self.meta.func == null) {
-      self.softErrMsg(
-        self.current_tok,
-        "use of 'try' expression in top-level code. Consider using 'orelse' instead."
-      );
-    }
     try self.consume(.TkTry);
     var ok = try self._parse(ptable[@intFromEnum(self.previous_tok.ty)].bp);
-    const token = Token.fromWithValue(&self.previous_tok, self.genName("e"), .TkAllocString);
+    const token = Token.fromWithValue(&self.previous_tok, self.genName("e"), .TkString);
     var evar = self.newNode();
     evar.* = .{.AstVar = ast.VarNode.init(token)};
     var err_ = self.newNode();
-    err_.* = .{.AstRet = ast.RetNode.init(evar, token)};
+    if (self.meta.func == null) {
+      // panic in top-level code
+      const ptok = Token.fromWithValue(&token, "panic", .TkIdent);
+      var panic = self.newNode();
+      panic.* = .{.AstVar = ast.VarNode.init(ptok)};
+      const args = NodeList.initWith(self.allocator, evar);
+      err_.* = .{.AstCall = ast.CallNode.init(panic, args, null, 0, false, false)};
+    } else {
+      // return in function code
+      err_.* = .{.AstRet = ast.RetNode.init(evar, token)};
+    }
     var node = self.newNode();
     node.* = .{.AstOrElse = ast.OrElseNode.init(ok, err_, &evar.AstVar)};
     node.AstOrElse.from_try = true;
@@ -703,18 +764,11 @@ pub const Parser = struct {
   }
 
   fn variable(self: *Self, assignable: bool) !*Node {
-    try self.consume(.TkIdent);
+    if (!self.matchBuiltinTag()) try self.consume(.TkIdent);
     var ident = self.previous_tok;
     var node = self.newNode();
     node.* = .{.AstVar = ast.VarNode.init(ident)};
     return try self.handleAugAssign(node, assignable);
-  }
-
-  fn nullable(self: *Self, assignable: bool) !*Node {
-    _ = assignable;
-    var node = self.newNode();
-    node.* = .{.AstNil = try self.literal(.TkNil)};
-    return node;
   }
 
   inline fn assertMaxTParams(self: *Self, len: usize) void {
@@ -745,8 +799,6 @@ pub const Parser = struct {
     var exp: usize = (
       if (typ.isListTy()) 1
       else if (typ.isMapTy()) 2
-      else if (typ.isTupleTy()) 1
-      else if (typ.isErrorTy()) 1
       else return
     );
     if (cls.tparamsLen() != exp) {
@@ -762,10 +814,48 @@ pub const Parser = struct {
     for (alias.getSlice()) |typ| {
       // `param` and `typ` have Variable.tokens equal to size 1.
       var token = param.variable().tokens.getLast();
-      if (std.mem.eql(u8, typ.variable().tokens.getLast().value, token.value)) {
+      if (token.valueEql(typ.variable().tokens.getLast().value)) {
         return self.softErrMsg(token, "redefinition of type parameter");
       }
     }
+  }
+
+  inline fn validateMaybeTagCall(self: *Self, maybe: *Node, args: *NodeList) void {
+    if (!maybe.isVariable()) return;
+    const id = maybe.AstVar.token;
+    if (id.is(.TkJust) or id.is(.TkError) or id.is(.TkOk)) {
+      if (args.len() != 1) {
+        self.softErrMsg(id, "expected tag parameter");
+      }
+    } else if (id.is(.TkNone)) {
+      if (args.len() != 0) {
+        self.softErrMsg(id, "unexpected tag parameter");
+      }
+    }
+  }
+
+  inline fn builtinTaggedUnionToIdent(self: *Self) void {
+    if (self.check(.TkMaybe) or self.check(.TkResult)) {
+      self.current_tok.ty = .TkIdent;
+    }
+  }
+
+  inline fn checkBuiltinTag(self: *Self) bool {
+    return (
+      self.check(.TkJust)
+      or self.check(.TkNone)
+      or self.check(.TkOk)
+      or self.check(.TkError)
+    );
+  }
+
+  inline fn matchBuiltinTag(self: *Self) bool {
+    return (
+      self.match(.TkJust)
+      or self.match(.TkNone)
+      or self.match(.TkOk)
+      or self.match(.TkError)
+    );
   }
 
   fn aliasParam(self: *Self) !Type {
@@ -863,7 +953,7 @@ pub const Parser = struct {
         .TkList,
         .TkMap,
         .TkTuple,
-        .TkErr => try self.builtinType(),
+        .TkError => try self.builtinType(),
         else => self.errMsg(self.current_tok, "invalid type")
       };
     }
@@ -941,9 +1031,10 @@ pub const Parser = struct {
   fn tPrimary(self: *Self) ParseError!Type {
     // Primary  := ( Generic | Constant | Concrete | Function | “(“ Expression “)” ) "?"?
     var typ: Type = undefined;
+    self.builtinTaggedUnionToIdent();
     switch (self.current_tok.ty) {
       // Generic
-      .TkIdent, .TkList, .TkMap, .TkTuple, .TkErr => {
+      .TkIdent, .TkList, .TkMap, .TkTuple, .TkError => {
         typ = try self.tGeneric();
       },
       // Function
@@ -957,7 +1048,7 @@ pub const Parser = struct {
         try self.consume(.TkRBracket);
       },
       // Concrete
-      .TkBool, .TkNum, .TkStr, .TkVoid, .TkNoReturn, .TkAny, .TkNil => |ty| {
+      .TkBool, .TkNum, .TkStr, .TkVoid, .TkNoReturn, .TkAny, => |ty| {
           var tkind: TypeKind = switch (ty) {
           .TkBool => .TyBool,
           .TkNum => .TyNumber,
@@ -965,7 +1056,6 @@ pub const Parser = struct {
           .TkVoid => .TyVoid,
           .TkNoReturn => .TyNoReturn,
           .TkAny => .TyAny,
-          .TkNil => .TyNil,
           else => unreachable,
         };
         // direct 'unit' types such as listed above do not need names
@@ -978,7 +1068,7 @@ pub const Parser = struct {
       },
     }
     if (self.match(.TkQMark)) {
-      typ = Type.newNullable(
+      typ = Type.newTaggedNullable(
         typ.box(self.allocator),
         self.allocator, null
       ).*;
@@ -986,30 +1076,112 @@ pub const Parser = struct {
     return typ;
   }
 
-  fn tUnion(self: *Self) !Type {
-    // Union := Primary ( “|” Primary )*
-    var typ = try self.tPrimary();
-    if (self.check(.TkPipe)) {
-      var uni = Union.init(self.allocator);
-      uni.set(typ.box(self.allocator));
-      while (self.match(.TkPipe)) {
-        typ = try self.tPrimary();
-        uni.set(typ.box(self.allocator));
+  fn tExpr(self: *Self) !Type {
+    // Expression := Primary
+    return self.tPrimary();
+  }
+
+  fn typing(self: *Self, assignable: bool) !*Node { 
+    _ = assignable;
+    const token = self.current_tok;
+    const typ = try self.tExpr();
+    var node = self.newNode();
+    node.* = .{.AstNType = ast.TypeNode.init(typ.box(self.allocator), token)};
+    return node;
+  }
+
+  fn taggedTypeParam(self: *Self) !types.Tag.TagParam {
+    // TaggedTypeParam := (ID ":")? TaggedType
+    if (self.check(.TkIdent)) {
+      const id = self.current_tok;
+      const tok = self.lexer.getTentativeToken();
+      if (tok.is(.TkColon)) {
+        try self.advance();
+        try self.advance();
+        const typ = (try self.tExpr()).box(self.allocator);
+        return types.Tag.TagParam{.name = id, .typ = typ};
       }
+    }
+    const typ = (try self.tExpr()).box(self.allocator);
+    return types.Tag.TagParam{.name = null, .typ = typ};
+  }
+
+  fn taggedPrimary(self: *Self) ParseError!Type {
+    // ID (“(“TypeParam (“,” TypeParam)* “)”)? "?"?
+    const id = self.current_tok;
+    if (self.meta.in_type_decl) {
+      // we only allow definition of Just & None in builtin-mode
+      if (self.inBuiltinMode()) {
+        if (!self.matchBuiltinTag()) {
+          try self.consume(.TkIdent);
+        }
+      } else try self.consume(.TkIdent);
+    } else try self.consume(.TkIdent);
+    var typ = Type.newTag(id.value, id.ty);
+    var disamb = self.getDisambiguator(u32);
+    if (self.match(.TkLBracket)) {
+      typ.tag().initParams(self.allocator);
+      while (true) {
+        if (typ.tag().params.?.isNotEmpty()) {
+          try self.consume(.TkComma);
+          if (self.check(.TkRBracket)) break;
+        }
+        const param = try self.taggedTypeParam();
+        if (param.name) |name| {
+          if (disamb.get(name.value) != null) {
+            self.softErrMsg(name, "duplicate param handle");
+          } else {
+            disamb.put(name.value, 1) catch {};
+          }
+        }
+        typ.tag().appendParam(param);
+        if (self.check(.TkEof) or self.check(.TkRBracket)) break;
+      }
+      try self.consume(.TkRBracket);
+    }
+    return typ;
+  }
+
+  fn taggedUnion(self: *Self) !Type {
+    // Union := TaggedPrimary ( “|” TaggedPrimary )*
+    const stepped = self.match(.TkNewline);
+    if (stepped) _ = self.match(.TkPipe);
+    var typ = try self.taggedPrimary();
+    if (stepped) _ = self.match(.TkNewline);
+    if (self.check(.TkPipe)) {
+      var disamb = self.getDisambiguator(u32);
+      if (typ.isTag()) disamb.put(typ.tag().name, 1) catch {};
+      var uni = TaggedUnion.init(self.allocator);
+      uni.set(typ.box(self.allocator));
+      var ss: lex.LexSnapShot = undefined;
+      while (self.match(.TkPipe)) {
+        typ = try self.taggedPrimary();
+        if (typ.isTag()) {
+          if (disamb.get(typ.tag().name) != null) {
+            self.softErrMsg(self.current_tok, "duplicate tag");
+          } else {
+            disamb.put(typ.tag().name, 1) catch {};
+          }
+        }
+        uni.set(typ.box(self.allocator));
+        ss = self.snapshot();
+        if (stepped) _ = self.match(.TkNewline);
+      }
+      if (self.previous_tok.is(.TkNewline)) self.rewind(ss);
       return uni.toType();
     }
     return typ;
   }
 
-  fn tExpr(self: *Self) !Type {
+  fn taggedExpr(self: *Self) !Type {
     // Expression := Union
-    return try self.tUnion();
+    return try self.taggedUnion();
   }
 
-  fn typing(self: *Self, assignable: bool) !*Node {
+  fn taggedTyping(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     var token = self.current_tok;
-    var typ = try self.tExpr();
+    var typ = try self.taggedExpr();
     var node = self.newNode();
     node.* = .{.AstNType = ast.TypeNode.init(typ.box(self.allocator), token)};
     return node;
@@ -1033,6 +1205,13 @@ pub const Parser = struct {
           }
         }
       },
+      .Tag => |*tg| {
+        for (tg.paramSlice()) |tp| {
+          if (self.checkGenericTParam(tvar, tp.typ)) |tok| {
+            return tok;
+          }
+        }
+      },
       .Class => |*cls| {
         for (cls.getSlice()) |item| {
           if (self.checkGenericTParam(tvar, item)) |tok| {
@@ -1042,6 +1221,13 @@ pub const Parser = struct {
       },
       .Union => |*uni| {
         for (uni.variants.values()) |ty| {
+          if (self.checkGenericTParam(tvar, ty)) |tok| {
+            return tok;
+          }
+        }
+      },
+      .TaggedUnion => |*uni| {
+        for (uni.variants.items()) |ty| {
           if (self.checkGenericTParam(tvar, ty)) |tok| {
             return tok;
           }
@@ -1067,6 +1253,34 @@ pub const Parser = struct {
     }
   }
 
+  fn warnIfGenericParamsMatchesTagNames(self: *Self, abs_ty: *Type, rhs_ty: *Type) void {
+      // warn if the type parameters in the abstract type is used as tags in the tagged union
+      const warning = "type variable is used as a tag in its type definition.\n\t" 
+        ++ "If this is a mistake, consider renaming the type parameter.";
+      switch (abs_ty.kind) {
+        .Generic => |*gen| {
+          if (rhs_ty.isTaggedUnion()) {
+            for (gen.getSlice()) |param| {
+              const token = param.variable().tokens.getLast();
+              for (rhs_ty.taggedUnion().variants.items()) |tag| {
+                if (token.valueEql(tag.tag().name)) {
+                  return self.softWarnMsg(token, warning);
+                }
+              }
+            }
+          } else {
+            for (gen.getSlice()) |param| {
+              const token = param.variable().tokens.getLast();
+              if (token.valueEql(rhs_ty.tag().name)) {
+                return self.softWarnMsg(token, warning);
+              }
+            }
+          }
+        },
+        else => {}
+      }
+    }
+
   fn assertNoDirectRecursiveAlias(self: *Self, abs_ty: *Type, rhs_ty: *Type) void {
     // Check that type alias name is not used directly in the aliasee. This is not an in-depth
     // check, as it's possible for the alias to be meaningfully hidden in the aliasee.
@@ -1077,17 +1291,47 @@ pub const Parser = struct {
   }
 
   fn typeAlias(self: *Self) !*Node {
-    // TypeAlias   := "type" AbstractType "=" ConcreteType
+    // TypeAlias   := "alias" AbstractType "=" ConcreteType
     var alias_typ = (try self.abstractType()).box(self.allocator);
     var alias = self.newNode();
     alias.* = .{.AstNType = ast.TypeNode.init(alias_typ, self.current_tok)};
     try self.consume(.TkEqual);
     var aliasee = try self.typing(false);
-    var node = self.newNode();
     // check that generic type variable parameters in `AbstractType` are not generic in `ConcreteType`
     self.assertNoGenericParameterTypeVariable(alias_typ, aliasee.AstNType.typ);
     // TODO: should this be disallowed? It poses no issues at the moment.
     // self.assertNoDirectRecursiveAlias(&alias_typ, &aliasee.AstNType.typ);
+    var node = self.newNode();
+    node.* = .{.AstAlias = ast.AliasNode.init(&alias.AstNType, &aliasee.AstNType)};
+    try self.consumeNlOrEof();
+    return node;
+  }
+
+  fn typeDecl(self: *Self) !*Node {
+    // “type” AbstractType = ID (“(“TypeParam (“,” TypeParam)* “)”)?  (“|”   ID (“(“TypeParam (“,” TypeParam)* “)”)?)*
+    const name = self.current_tok;
+    if (self.inBuiltinMode()) {
+      self.builtinTaggedUnionToIdent();
+    }
+    var typ_name = (try self.abstractType()).box(self.allocator);
+    var alias = self.newNode();
+    alias.* = .{.AstNType = ast.TypeNode.init(typ_name, name)};
+    try self.consume(.TkEqual);
+    self.meta.in_type_decl = true;
+    defer self.meta.in_type_decl = false;
+    var aliasee = try self.taggedTyping(false);
+    // check that generic type variable parameters in `AbstractType` are not generic in `ConcreteType`
+    self.assertNoGenericParameterTypeVariable(typ_name, aliasee.AstNType.typ);
+    self.warnIfGenericParamsMatchesTagNames(typ_name, aliasee.AstNType.typ);
+    if (aliasee.AstNType.typ.isTaggedUnion()) {
+      // forbid a type whose name collides with its variants
+      for (aliasee.AstNType.typ.taggedUnion().variants.items()) |ty| {
+        if (ty.tag().nameEql(name.value)) {
+          self.softErrArgs(name, "type with name '{s}' collides with one of its variants", .{name.value});
+        }
+      }
+    }
+    var node = self.newNode();
     node.* = .{.AstAlias = ast.AliasNode.init(&alias.AstNType, &aliasee.AstNType)};
     try self.consumeNlOrEof();
     return node;
@@ -1218,7 +1462,7 @@ pub const Parser = struct {
   fn funParams(self: *Self, variadic: *bool) !ast.VarDeclList {
     // Params      :=  "(" Ident ":" Type ("," Ident ":" Type)* ")"
     var params = ast.VarDeclList.init(self.allocator);
-    var disamb = std.StringHashMap(u32).init(self.allocator);
+    var disamb = self.getDisambiguator(u32);
     if (self.match(.TkLBracket)) {
       while (!self.check(.TkEof) and !self.check(.TkRBracket)) {
         if (params.isNotEmpty()) {
@@ -1239,13 +1483,12 @@ pub const Parser = struct {
           params.append(ast.VarDeclNode.init(ident.box(self.allocator), undefined, true));
         } else {
           variadic.* = true;
-          var tuple = Type.newClass(ks.TupleVar, self.allocator).box(self.allocator);
-          tuple.klass().builtin = true;
-          tuple.klass().initTParams(self.allocator);
           try self.consume(.TkColon);
           try self.annotation(&ident);
-          tuple.klass().appendTParam(ident.typ.?);
-          ident.typ = tuple;
+          var ty = Type.newBuiltinGenericClass(ks.ListVar, self.allocator);
+          ty.klass().appendTParam(ident.typ.?);
+          ty.klass().immutable = true;
+          ident.typ = ty;
           params.append(ast.VarDeclNode.init(ident.box(self.allocator), undefined, true));
           if (!self.check(.TkRBracket)) {
             self.softErrMsg(
@@ -1325,12 +1568,13 @@ pub const Parser = struct {
     if (!self.inFun()) {
       self.softErrMsg(self.previous_tok, "return statement used outside function");
     }
+    const token = self.previous_tok;
     var node = self.newNode();
     var expr: ?*Node = null;
     if (!self.check(.TkNewline)) {
       expr = try self.parseExpr();
     }
-    node.* = .{.AstRet = ast.RetNode.init(expr, self.previous_tok)};
+    node.* = .{.AstRet = ast.RetNode.init(expr, token)};
     if (!self.meta.func.?.AstFun.isAnonymous()) {
       try self.consumeNlOrEof();
     } else if (self.check(.TkNewline) or self.check(.TkEof)) {
@@ -1367,7 +1611,7 @@ pub const Parser = struct {
     var cls = self.newNode();
     self.meta.class = cls;
     switch (self.current_tok.ty) {
-      .TkList, .TkErr, .TkTuple, .TkMap, .TkStr => if (self.inBuiltinMode()) try self.advance() else try self.consume(.TkIdent),
+      .TkList, .TkError, .TkTuple, .TkMap, .TkStr => if (self.inBuiltinMode()) try self.advance() else try self.consume(.TkIdent),
       else => try self.consume(.TkIdent)
     }
     var ident = ast.VarNode.init(self.previous_tok).box(self.allocator);
@@ -1381,7 +1625,7 @@ pub const Parser = struct {
     self.skipNewlines();
     // ClassBody
     // ClassFields
-    var disamb = std.StringHashMap(Token).init(self.allocator);
+    var disamb = self.getDisambiguator(Token);
     var fields: *NodeList = NodeList.init(self.allocator).box();
     if (self.check(.TkIdent)) {
       while (self.match(.TkIdent)) {
@@ -1411,7 +1655,7 @@ pub const Parser = struct {
       }
     }
     // ClassMethods
-    var mdisamb = std.StringHashMap(Token).init(self.allocator);
+    var mdisamb = self.getDisambiguator(Token);
     var methods: *NodeList = NodeList.init(self.allocator).box();
     if (self.check(.TkDef)) {
       while (self.check(.TkDef)) {
@@ -1531,12 +1775,6 @@ pub const Parser = struct {
       // group_pattern
       var pat = try self._pattern();
       if (self.match(.TkRBracket)) {
-        // error_pattern: (pat)!
-        if (self.match(.TkExMark)) {
-          var cons = ptn.Constructor.newErrCons(self.allocator);
-          cons.args.append(pat);
-          return Pattern.init(cons.toVariant(self.allocator), token, .{}).box(self.allocator);
-        }
         return pat;
       }
       // sequence_pattern (non-empty)
@@ -1609,8 +1847,7 @@ pub const Parser = struct {
       var tok = self.current_tok;
       var key: *Pattern = switch (tok.ty) {
         // literal_pattern
-        .TkNumber, .TkNil, .TkTrue,
-        .TkFalse, .TkString, .TkMinus, => try self._pattern(),
+        .TkNumber, .TkTrue, .TkFalse, .TkString, .TkMinus, => try self._pattern(),
         // constant_pattern := attr := name_or_attr
         .TkIdent => (
             Pattern.init( // use capture pattern for now
@@ -1651,24 +1888,26 @@ pub const Parser = struct {
     }
     var id = try self.variable(false);
     if (!self.check(.TkLBracket) and !self.check(.TkLCurly)) {
-      // at this point, this is a capture_pattern
-      return (
-        Pattern.init(
-          ptn.Variable.init(id).toVariant(self.allocator),
-          id.AstVar.token,
-          .{}
-        ).box(self.allocator)
-      );
-    }
-    var targs: ?*NodeList = null;
-    if (self.match(.TkLCurly)) {
-      targs = try self.typeParams();
+      // check if this pattern starts with uppercase
+      if (!std.ascii.isUpper(id.AstVar.token.value[0])) {
+        // at this point, this is a capture_pattern
+        return (
+          Pattern.init(
+            ptn.Variable.init(id).toVariant(self.allocator),
+            id.AstVar.token,
+            .{}
+          ).box(self.allocator)
+        );
+      } else {
+        // a possible tag type
+        const cons = ptn.Constructor.newClassCons(id.AstVar.token.value, id, self.allocator);
+        return Pattern.init(cons.toVariant(self.allocator), id.AstVar.token, .{}).box(self.allocator);
+      }
     }
     try self.consume(.TkLBracket);
     var cons = ptn.Constructor.newClassCons(id.AstVar.token.value, id, self.allocator);
-    cons.targs = targs;
     var start: Token = undefined;
-    var disamb = std.StringHashMap(u32).init(self.allocator);
+    var disamb = self.getDisambiguator(u32);
     while (!self.check(.TkEof) and !self.check(.TkRBracket)) {
       if (cons.args.isNotEmpty()) {
         try self.consume(.TkComma);
@@ -1707,7 +1946,6 @@ pub const Parser = struct {
     // literal_pattern
     var token = self.current_tok;
     switch (self.current_tok.ty) {
-      .TkNil => return self.literalCons(try self.nullable(false), token),
       .TkTrue, .TkFalse => return self.literalCons(try self.boolean(false), token),
       .TkString => return self.literalCons(try self.string(false), token),
       .TkMinus, .TkNumber => return self._numberOrRangePattern(),
@@ -1715,7 +1953,7 @@ pub const Parser = struct {
     }
 
     // capture_pattern  | wildcard_pattern | class_pattern
-    if (self.check(.TkIdent)) {
+    if (self.check(.TkIdent) or self.checkBuiltinTag()) {
       return try self._classPattern();
     }
 
@@ -1849,7 +2087,7 @@ pub const Parser = struct {
       }
     }
     var node = self.newNode();
-    node.* = .{.AstMatch = ast.MatchNode.init(tok, expr, cases)};
+    node.* = .{.AstMatch = ast.MatchNode.init(expr, cases)};
     self.convertMatchExprToVar(&node.AstMatch, tok);
     return node;
   }
@@ -1889,8 +2127,10 @@ pub const Parser = struct {
   fn statement(self: *Self) !*Node {
     if (self.match(.TkLet)) {
       return self.varDecl();
-    } else if (self.match(.TkType)) {
+    } else if (self.match(.TkAlias)) {
       return self.typeAlias();
+    } else if (self.match(.TkType)) {
+      return self.typeDecl();
     } else if (self.check(.TkDo)) {
       return self.blockStmt(false, false, true);
     } else if (self.match(.TkNewline)) {

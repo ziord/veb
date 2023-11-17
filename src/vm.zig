@@ -18,10 +18,13 @@ const ObjClass = vl.ObjClass;
 const CallFrame = vl.CallFrame;
 const StringHashMap = vl.StringHashMap;
 const Dis = debug.Disassembler;
+const U8Writer = vl.U8Writer;
+const ks = vl.ks;
 
 pub const VM = struct {
   fiber: *ObjFiber,
   strings: StringHashMap,
+  tags: StringHashMap,
   gsyms: [MAX_GSYM_ITEMS]Value,
   globals: StringHashMap,
   objects: ?*vl.Obj,
@@ -29,6 +32,7 @@ pub const VM = struct {
   mem: Mem,
   gc: GC,
   has_error: bool = false,
+  u8w: U8Writer,
 
   const Self = @This();
   const STACK_MAX = 0xfff;
@@ -66,15 +70,18 @@ pub const VM = struct {
   };
 
   pub fn init(allocator: *VebAllocator) Self {
+    const al = allocator.getAllocator();
     var vm = Self {
       .fiber = undefined,
-      .mem = Mem.init(allocator.getAllocator()),
+      .mem = Mem.init(al),
       .gc = GC.init(allocator),
       .strings = StringHashMap.init(),
+      .tags = StringHashMap.init(),
       .gsyms = undefined,
       .globals = StringHashMap.init(),
       .objects = null,
       .classes = BuiltinCls.init(),
+      .u8w = U8Writer.init(al),
     };
     native.addBuiltins(&vm);
     return vm;
@@ -93,6 +100,7 @@ pub const VM = struct {
       curr = next;
     }
     self.strings.free(self);
+    self.tags.free(self);
     self.globals.free(self);
     self.gc.deinit();
     self.mem.deinit();
@@ -546,7 +554,7 @@ pub const VM = struct {
         .Asrt => {
           // asrt rx
           if (vl.isNil(fp.stack[vl.Code.readRX(code)])) {
-            return self.runtimeError("Attempt to use value 'nil'", .{});
+            return self.runtimeError("Attempt to use value '" ++ ks.NoneVar ++ "'", .{});
           }
           continue;
         },
@@ -615,6 +623,22 @@ pub const VM = struct {
           var obj = vl.asObj(self.RK(rk1, fp));
           var cls = vl.asClass(self.RK(rk2, fp));
           fp.stack[rx] = vl.boolVal((obj.cls.? == cls));
+          continue;
+        },
+        .Istag => {
+          // istag rx, rk(x), rk(y)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(code, &rx, &rk1, &rk2);
+          @setRuntimeSafety(false);
+          const val = self.RK(rk1, fp);
+          if (!vl.isNil(val)) {
+            const name = if (vl.isStruct(val)) vl.asStruct(val).name else vl.asTag(val).name;
+            fp.stack[rx] = vl.boolVal(name == vl.asString(self.RK(rk2, fp)));
+          } else {
+            fp.stack[rx] = vl.boolVal(false);
+          }
           continue;
         },
         .Xor => {
@@ -760,6 +784,16 @@ pub const VM = struct {
           vl.asInstance(fp.stack[rx]).fields[idx] = self.RK(rk, fp);
           continue;
         },
+        .Ssfd => {
+          // ssfd rx(inst), prop.idx, rk(value)
+          var rx: u32 = undefined;
+          var idx: u32 = undefined;
+          var rk: u32 = undefined;
+          self.read3Args(code, &rx, &idx, &rk);
+          @setRuntimeSafety(false);
+          vl.asStruct(fp.stack[rx]).methods[idx] = self.RK(rk, fp);
+          continue;
+        },
         .Gfd => {
           // gfd rx, rk(inst), prop.idx
           var rx: u32 = undefined;
@@ -768,6 +802,17 @@ pub const VM = struct {
           self.read3Args(code, &rx, &rk, &idx);
           @setRuntimeSafety(false);
           fp.stack[rx] = vl.asInstance(self.RK(rk, fp)).fields[idx];
+          continue;
+        },
+        .Gsfd => {
+          // gsfd rx, rk(inst), prop.idx
+          var rx: u32 = undefined;
+          var rk: u32 = undefined;
+          var idx: u32 = undefined;
+          self.read3Args(code, &rx, &rk, &idx);
+          @setRuntimeSafety(false);
+          const val = self.RK(rk, fp);
+          fp.stack[rx] = if (vl.isStruct(val)) vl.asStruct(self.RK(rk, fp)).methods[idx] else vl.asError(val).val;
           continue;
         },
         .Nerr => {
@@ -892,7 +937,7 @@ pub const VM = struct {
             continue;
           }
           var kstr = vl.asString(vl.valueToString(key, self));
-          return self.runtimeError("KeyError: map has no key: '{s}'", .{kstr.str[0..kstr.len]});
+          return self.runtimeError("KeyError: map has no key: '{s}'", .{kstr.string()});
         },
         .Bcst => {
           // bcst rx, rk(x): rk(x) == bx

@@ -3904,3 +3904,98 @@ test "binary tree" {
   ;
   try doRuntimeTest(src);
 }
+
+test "match expressions .1" {
+  const src =
+  \\ def think(n: num)
+  \\  if n > 0xff
+  \\    return Ok(n * 0xff)
+  \\  end
+  \\  return Error('bad')
+  \\ end
+  \\ let t = [1, 2, 3]
+  \\ let j = match t
+  \\  case [a, b, c] => a + b + c
+  \\  case _ => 0
+  \\ end
+  \\ # println(j)
+  \\ assert(j == 6, 'should be 6')
+  \\ let p = j + match think(j)
+  \\  case Ok(n) => n
+  \\  case Error(_) => j / 2
+  \\ end + 15
+  \\ assert(p == 24, 'should be 24')
+  \\ do
+  \\   def think(n: num)
+  \\    if n > 0xff
+  \\      return Ok(n * 0xff)
+  \\    end
+  \\    return Error('bad')
+  \\   end
+  \\   let t = [1, 2, 3]
+  \\   let j = match t
+  \\    case [a, b, c] => a + b + c
+  \\    case _ => 0
+  \\   end
+  \\   # println(j)
+  \\   assert(j == 6, 'should be 6')
+  \\   let p = j + (
+  \\      match think(j * 150) with
+  \\        case Ok(n) => n
+  \\        case Error(_) => j / 2
+  \\      end
+  \\    ) + 15
+  \\   assert(p == 0x38091, 'should be 0x38091')
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
+test "match expressions .2" {
+  const src =
+  \\ def think(n: num)
+  \\  if n > 0xff
+  \\    return Ok(n * 0xff)
+  \\  end
+  \\  return Error('bad')
+  \\ end
+  \\ 
+  \\ def fun(t: List{num})
+  \\  let j = match t
+  \\   case [a, b, c] => a + b + c
+  \\   case _ => 0
+  \\  end
+  \\  # println(j)
+  \\  assert(j == 6, 'should be 6')
+  \\ end
+  \\ fun([1, 2, 3])
+  \\
+  \\ do
+  \\  def think(n: num)
+  \\   if n > 0xff
+  \\     return Ok(n * 0xff)
+  \\   end
+  \\   return Error('bad')
+  \\  end
+  \\  
+  \\  def fun(t: List{num})
+  \\   let j = match t
+  \\    case [a, b, c] => a + b + c
+  \\    case _ => 0
+  \\   end
+  \\   # println(j)
+  \\   assert(j == 6, 'should be 6')
+  \\  end
+  \\  fun([1, 2, 3])
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
+test "match expressions .3" {
+  const src =
+  \\ let t = (match 5 case 1..3 => 10 case 4..10 as n => n * 2 case _ => 0 end)
+  \\ assert(t == 10, 'should be 10')
+  ;
+  try doRuntimeTest(src);
+}

@@ -168,7 +168,7 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkClass
     .{.bp = .None, .prefix = null, .infix = null},                      // TkBreak
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkFalse
-    .{.bp = .None, .prefix = null, .infix = null},                      // TkMatch
+    .{.bp = .None, .prefix = Self.matchExpr, .infix = null},            // TkMatch
     .{.bp = .None, .prefix = null, .infix = null},                      // TkMaybe
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkTuple
     .{.bp = .None, .prefix = null, .infix = null},                      // TkWhile
@@ -319,6 +319,10 @@ pub const Parser = struct {
 
   inline fn inFun(self: *Self) bool {
     return self.meta.func != null;
+  }
+
+  inline fn inParenthesizedExpr(self: *Self) bool {
+    return self.meta.allow_nl > 0;
   }
 
   inline fn consumeNlOrEof(self: *Self) !void {
@@ -1543,12 +1547,9 @@ pub const Parser = struct {
     var body = blk: {
       if (!lambda) break :blk try self.blockStmt(true, lambda, false);
       if (self.match(.TkEqGrt)) {
-        var expr = try self.parseExpr();
-        var block = self.newNode();
-        block.* = .{.AstBlock = ast.BlockNode.init(self.allocator)};
         var rexp = self.newNode();
-        rexp.* = .{.AstRet = ast.RetNode.init(expr, self.previous_tok)};
-        block.block().nodes.append(rexp);
+        rexp.* = .{.AstRet = ast.RetNode.init(try self.parseExpr(), self.previous_tok)};
+        const block = ast.BlockNode.newBlockWithNodes(self.allocator, &[_]*Node{rexp});
         break :blk block;
       } else {
         break :blk try self.blockExpr();
@@ -2000,7 +2001,7 @@ pub const Parser = struct {
     return (try self._asPattern());
   }
 
-  fn caseStmt(self: *Self) !*ptn.Case {
+  fn caseStmt(self: *Self, is_stmt: bool) !*ptn.Case {
     // case_block: "case" patterns guard? '=>' (expr | block)
     // patterns: pattern
     self.meta.m_literals.clearRetainingCapacity();
@@ -2011,7 +2012,14 @@ pub const Parser = struct {
       guard = try self.parseExpr();
     }
     try self.consume(.TkEqGrt);
-    var body = try self.statement();
+    var ret_token: Token = undefined;
+    var body: *Node = undefined;
+    if (is_stmt) {
+      body = try self.statement();
+    } else {
+      ret_token = self.current_tok;
+      body = try self.parseExpr();
+    }
     if (self.meta.m_literals.isNotEmpty()) {
       // take all {name, id} pairs, and generate conditions
       const op_and = Token.fromWithValue(&token, "and", .TkAnd);
@@ -2036,12 +2044,22 @@ pub const Parser = struct {
     }
     // a case with a guard must have a block body with lift markers for
     // hoisting any added declarations in the case's body during ptn compilation
-    if (guard != null) {
+    if (guard != null and is_stmt) {
       const marker = @as(Node, .{.AstLiftMarker = ast.MarkerNode.init(token)}).box(self.allocator);
       if (!body.isBlock()) {
         body = ast.BlockNode.newBlockWithNodes(self.allocator, &[_]*Node{marker, body});
       } else {
         body.block().nodes.prepend(marker);
+      }
+    } else if (!is_stmt) {
+      // transform `expr` to `return expr`
+      var ret = self.newNode();
+      ret.* = .{.AstRet = ast.RetNode.init(body, ret_token)};
+      if (guard != null) {
+        const marker = @as(Node, .{.AstLiftMarker = ast.MarkerNode.init(token)}).box(self.allocator);
+        body = ast.BlockNode.newBlockWithNodes(self.allocator, &[_]*Node{marker, ret});
+      } else {
+        body = ret;
       }
     }
     var node = self.createObj(ptn.Case);
@@ -2061,16 +2079,20 @@ pub const Parser = struct {
     m.expr = id;
   }
 
-  fn matchStmt(self: *Self) !*Node {
+  fn matchStmt(self: *Self, is_stmt: bool) !*Node {
     // match_stmt: "match" match_expr 'with'? NEWLINE case_block+ "end"
     const tok = self.previous_tok;
     var expr = try self.parseExpr();
     _ = self.match(.TkWith);
-    try self.consume(.TkNewline);
-    self.skipNewlines();
+    if (is_stmt or !self.inParenthesizedExpr()) {
+      try self.consume(.TkNewline);
+    } else {
+      _ = self.match(.TkNewline);
+    }
+    if (is_stmt) self.skipNewlines();
     var cases = ast.MatchNode.CaseList.init(self.allocator);
     while (self.match(.TkCase)) {
-      cases.append(try self.caseStmt());
+      cases.append(try self.caseStmt(is_stmt));
       self.skipNewlines();
     }
     try self.consume(.TkEnd);
@@ -2089,7 +2111,24 @@ pub const Parser = struct {
     var node = self.newNode();
     node.* = .{.AstMatch = ast.MatchNode.init(expr, cases)};
     self.convertMatchExprToVar(&node.AstMatch, tok);
-    return node;
+    if (is_stmt) {
+      return node;
+    } else {
+      // convert [match expr] to (fn(){[match expr]})()
+      const body = ast.BlockNode.newBlockWithNodes(self.allocator, &[_]*Node{node});
+      var fun = self.newNode();
+      fun.* = .{.AstFun = ast.FunNode.init(ast.VarDeclList.init(self.allocator), body, null, null, null, false, false)};
+      // create call expr
+      var call = self.newNode();
+      call.* = .{.AstCall = ast.CallNode.init(fun, NodeList.init(self.allocator), null, 0, false, false)};
+      return call;
+    }
+  }
+
+  fn matchExpr(self: *Self, assignable: bool) !*Node {
+    _ = assignable;
+    try self.consume(.TkMatch);
+    return self.matchStmt(false);
   }
 
   fn exprStmt(self: *Self) !*Node {
@@ -2148,7 +2187,7 @@ pub const Parser = struct {
     } else if (self.match(.TkClass)) {
       return self.classStmt();
     } else if (self.match(.TkMatch)) {
-      return self.matchStmt();
+      return self.matchStmt(true);
     }
     return self.exprStmt();
   }

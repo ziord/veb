@@ -18,7 +18,7 @@ const ObjClass = vl.ObjClass;
 const CallFrame = vl.CallFrame;
 const StringHashMap = vl.StringHashMap;
 const Dis = debug.Disassembler;
-const U8Writer = vl.U8Writer;
+const ValueStringWriter = vl.ValueStringWriter;
 const ks = vl.ks;
 
 pub const VM = struct {
@@ -31,8 +31,8 @@ pub const VM = struct {
   classes: BuiltinCls,
   mem: Mem,
   gc: GC,
+  vsw: ValueStringWriter,
   has_error: bool = false,
-  u8w: U8Writer,
 
   const Self = @This();
   const STACK_MAX = 0xfff;
@@ -81,15 +81,18 @@ pub const VM = struct {
       .globals = StringHashMap.init(),
       .objects = null,
       .classes = BuiltinCls.init(),
-      .u8w = U8Writer.init(al),
+      .vsw = ValueStringWriter.init(),
     };
     native.addBuiltins(&vm);
     return vm;
   }
 
   pub fn boot(self: *Self, fun: *ObjFn) void {
-    var clo = vl.createClosure(self, fun);
-    self.fiber = vl.createFiber(self, clo, .Root, null);
+    self.fiber = vl.createFiber(self, vl.createClosure(self, fun), .Root, null);
+  }
+
+  pub fn shutdown(self: *Self) void {
+    self.deinit();
   }
 
   pub fn deinit(self: *Self) void {
@@ -104,6 +107,7 @@ pub const VM = struct {
     self.globals.free(self);
     self.gc.deinit();
     self.mem.deinit();
+    self.vsw.deinit(self);
   }
 
   inline fn readWord(self: *Self, fp: *CallFrame) Inst {

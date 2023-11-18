@@ -576,7 +576,8 @@ pub const TypeChecker = struct {
       defer self.tests = curr_tests;
       // reset match node, tests & redmarker for a new match check
       self.tc.match_node = node;
-      self.tests = NodeList.init(self.tc.ctx.allocator());
+      const al = self.tc.ctx.allocator();
+      self.tests = NodeList.init(al);
       self.redmarker = null;
       // infer all
       if (node.decl) |decl| {
@@ -584,7 +585,6 @@ pub const TypeChecker = struct {
       }
       var m_expr_ty = try self.tc.infer(node.expr);
       var expr_ty = m_expr_ty.classOrInstanceClass();
-      const al = self.tc.ctx.allocator();
       var conses = ConsList.init(al);
       for (node.cases.items()) |case| {
         // use a new scope for resolving each pattern, so that each variable type
@@ -593,7 +593,7 @@ pub const TypeChecker = struct {
         var ty = try self.inferPatternx(case.pattern, &conses, expr_ty, al);
         logger.debug("Resolved type: {s}", .{self.tc.getTypename(ty)});
         if (case.pattern.isConstructor()) {
-          if (expr_ty.canBeAssigned(ty, .RCAny, self.tc.ctx.allocator())) |_| {
+          if (expr_ty.canBeAssigned(ty, .RCAny, al)) |_| {
             case.pattern.variant.cons.typ = ty;
           } else if (case.pattern.isOrConstructor()) { // Or cons still uses untagged unions
             case.pattern.variant.cons.typ = ty;
@@ -618,7 +618,7 @@ pub const TypeChecker = struct {
         lnode.render(0, &self.tc.u8w) catch {};
         logger.debug("tree:\n{s}\n", .{self.tc.u8w.items()});
       }
-      var builder = CFGBuilder.init(self.tc.ctx.allocator());
+      var builder = CFGBuilder.init(al);
       var flo = builder.buildBlock(&self.tc.cfg, lnode);
       // save and restore diag level on exit
       const level = self.tc.diag.getLevel();

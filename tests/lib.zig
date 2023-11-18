@@ -21,7 +21,7 @@ pub fn doRuntimeTest(src: []const u8) !void {
   var tych = check.TypeChecker.init(al, &parser.diag);
   try tych.typecheck(node, &cna, true);
   var cpu = vm.VM.init(&cna);
-  defer cpu.deinit();
+  defer cpu.shutdown();
   var fun = value.createScriptFn(&cpu, 0);
   var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych._prelude, null, null);
   try compiler.compile(node);

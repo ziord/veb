@@ -6,6 +6,8 @@ const Obj = value.Obj;
 
 pub const BUFFER_INIT_SIZE = 8;
 
+pub const MAX_VALUE_STRING_CAP = 0xfff;
+
 pub inline fn growCapacity(cap: usize) usize {
   return if (cap < BUFFER_INIT_SIZE) BUFFER_INIT_SIZE else cap << 2;
 }

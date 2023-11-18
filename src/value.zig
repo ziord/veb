@@ -5,7 +5,6 @@ const Vec = @import("vec.zig").Vec;
 const Map = @import("map.zig").Map;
 const NativeFns = @import("native.zig").NativeFns;
 const OpCode = @import("opcode.zig").OpCode;
-pub const U8Writer = util.U8Writer;
 pub const ks = @import("constants.zig");
 pub const OpType = @import("lex.zig").OpType;
 
@@ -414,6 +413,45 @@ pub const FiberStatus = enum {
   Completed,
 };
 
+pub const ValueStringWriter = struct {
+  backing: Vec(u8),
+
+  pub const Writer = Vec(u8).Writer;
+
+  pub fn init() @This() {
+    return @This(){.backing = Vec(u8).init()};
+  }
+
+  pub fn writer(self: *@This(), vm: *VM) Writer {
+    return self.backing.writer(vm);
+  }
+
+  pub inline fn allocator(self: *@This()) std.mem.Allocator {
+    return self.backing.allocator;
+  }
+
+  pub inline fn capacity(self: *@This()) usize {
+    return self.backing.capacity;
+  }
+
+  pub inline fn len(self: *@This()) usize {
+    return self.backing.items.len;
+  }
+
+  pub inline fn clear(self: *@This()) void {
+    self.backing.clearRetainingCapacity();
+  }
+
+  pub fn items(self: *@This()) []const u8 {
+    const chars = self.backing.getItems();
+    self.backing.len = 0;
+    return chars;
+  }
+
+  pub fn deinit(self: *@This(), vm: *VM) void {
+    self.backing.clearAndFree(vm);
+  }
+};
 
 pub inline fn numberVal(num: f64) Value {
   return @as(*const Value, @ptrCast(&num)).*;
@@ -796,127 +834,145 @@ pub fn printObject(val: Value) void {
   }
 }
 
-inline fn writeValues(items: []Value, last: usize, vm: *VM, uw: *U8Writer.Writer) anyerror!void {
+inline fn writeValues(items: []Value, last: usize, vm: *VM, uw: *ValueStringWriter.Writer) void {
   for (items, 0..) |itm, i| {
-    try objToString(itm, vm, uw);
+    _valToString(itm, vm, uw);
     if (i < last) {
-      _ = try uw.write(", ");
+      uw.write(", ");
     }
   }
 }
 
-fn objToString(val: Value, vm: *VM, uw: *U8Writer.Writer) anyerror!void {
+fn _objToString(val: Value, vm: *VM, uw: *ValueStringWriter.Writer) void {
   switch (asObj(val).id) {
     .objstring => {
-      _ = try uw.write(asString(val).string());
+      uw.write(asString(val).string());
     },
     .objvalmap => {
-      _ = try uw.write("{");
+      uw.write("{");
       var map = asMap(val);
       const last = map.meta.len -| 1;
       for (map.meta.items[0..map.meta.len], 0..) |itm, i| {
-        try objToString(itm.key, vm, uw);
-        _ = try uw.write(": ");
-        try objToString(itm.value, vm, uw);
+        _valToString(itm.key, vm, uw);
+        uw.write(": ");
+        _valToString(itm.value, vm, uw);
         if (i < last) {
-          _ = try uw.write(", ");
+          uw.write(", ");
         }
       }
-      _ = try uw.write("}");
+      uw.write("}");
     },
     .objlist => {
-      _ = try uw.write("[");
+      uw.write("[");
       var list = asList(val);
-      try @call(.always_inline, writeValues, .{list.items[0..list.len], list.len -| 1, vm, uw});
-      _ = try uw.write("]");
+      @call(.always_inline, writeValues, .{list.items[0..list.len], list.len -| 1, vm, uw});
+      uw.write("]");
     },
     .objtuple => {
-      _ = try uw.write("(");
+      uw.write("(");
       var tuple = asTuple(val);
-      try @call(.always_inline, writeValues, .{tuple.items[0..tuple.len], tuple.len -| 1, vm, uw});
-      _ = try uw.write(")");
+      @call(.always_inline, writeValues, .{tuple.items[0..tuple.len], tuple.len -| 1, vm, uw});
+      uw.write(")");
     },
     .objerror => {
-      // TODO: val
-      _ = try uw.write("Error(");
-      try objToString(asError(val).val, vm, uw);
-      _ = try uw.write(")");
+      uw.write("Error(");
+      _valToString(asError(val).val, vm, uw);
+      uw.write(")");
     },
     .objclosure => {
-      _ = try uw.write("{fn ");
-      _ = try uw.write(asFn(val).getName());
-      _ = try uw.write("}");
+      uw.write("{fn ");
+      uw.write(asFn(val).getName());
+      uw.write("}");
     },
     .objnativefn => {
-      _ = try uw.write("{builtin_fn ");
-      _ = try uw.write(asNativeFn(val).getName());
-      _ = try uw.write("}");
+      uw.write("{builtin_fn ");
+      uw.write(asNativeFn(val).getName());
+      uw.write("}");
     },
     .objfiber => {
-      _ = try uw.write("<fiber>");
+      uw.write("<fiber>");
     },
     .objinstance => {
-      _ = try uw.write("{");
-      _ = try uw.write(asObj(val).cls.?.name.string());
-      _ = try uw.write(" instance}");
+      uw.write("{");
+      uw.write(asObj(val).cls.?.name.string());
+      uw.write(" instance}");
     },
     .objmethod => {
-      _ = try uw.write("{bound-method ");
+      uw.write("{bound-method ");
       var mtd = asMethod(val);
       if (mtd.isBoundUserMethod()) {
-        _ = try uw.write(mtd.as.user.closure.fun.getName());
+        uw.write(mtd.as.user.closure.fun.getName());
       } else {
-        _ = try uw.write(mtd.as.native.fun.getName());
+        uw.write(mtd.as.native.fun.getName());
       }
-      _ = try uw.write("}");
+      uw.write("}");
     },
     .objclass => {
-      _ = try uw.write("{class ");
-      _ = try uw.write(asClass(val).nameStr());
-      _ = try uw.write("}");
+      uw.write("{class ");
+      uw.write(asClass(val).nameStr());
+      uw.write("}");
     },
     .objstruct => {
       var stk = asStruct(val);
-      _ = try uw.write(stk.nameStr());
-      _ = try uw.write("(");
-      try @call(.always_inline, writeValues, .{stk.methods[0..stk.mlen], stk.mlen -| 1, vm, uw});
-      _ = try uw.write(")");
+      uw.write(stk.nameStr());
+      uw.write("(");
+      @call(.always_inline, writeValues, .{stk.methods[0..stk.mlen], stk.mlen -| 1, vm, uw});
+      uw.write(")");
     },
     .objtag => {
-      _ = try uw.write(asTag(val).name.string());
+      uw.write(asTag(val).name.string());
     },
     .objupvalue, .objfn => unreachable,
   }
 }
 
-pub fn objectToString(val: Value, vm: *VM) Value {
-  var writer = vm.u8w.writer();
-  objToString(val, vm, &writer) catch {
-    vm.panicUnwindError("cannot stringify value", .{});
-    return NOTHING_VAL;
-  };
-  return objVal(createString(vm, &vm.strings, vm.u8w.items(), true));
-}
-
-pub fn valueToString(val: Value, vm: *VM) Value {
-  if (isObj(val)) return objectToString(val, vm);
-  if (isNumber(val)) {
+fn _valToString(val: Value, vm: *VM, uw: *ValueStringWriter.Writer) void {
+  if (isObj(val)) {
+    _objToString(val, vm, uw);
+  } else if (isNumber(val)) {
     var num = asNumber(val);
     if (std.math.isNan(num)) {
-      return createStringV(vm, &vm.strings, "nan", false);
+      uw.write("nan");
     } else if (std.math.isInf(num)) {
-      return createStringV(vm, &vm.strings, if (num > 0) "inf" else "-inf", false);
+      uw.write(if (num > 0) "inf" else "-inf");
     } else {
       var buff: [25]u8 = undefined;
-      var fmt = std.fmt.bufPrint(&buff, "{d}", .{num}) catch unreachable;
-      return createStringV(vm, &vm.strings, fmt, false);
+      const fmt = std.fmt.bufPrint(&buff, "{d}", .{num}) catch unreachable;
+      uw.write(fmt);
     }
   } else if (isBool(val)) {
-    return createStringV(vm, &vm.strings, if (asBool(val)) ks.TrueVar else ks.FalseVar, false);
+    uw.write(if (asBool(val)) ks.TrueVar else ks.FalseVar);
   } else if (isNil(val)) {
-    return createStringV(vm, &vm.strings, ks.NoneVar, false);
+    uw.write(ks.NoneVar);
   }
-  unreachable;
+}
+
+/// stringify an object value
+pub fn objectToString(val: Value, vm: *VM) Value {
+  // no allocations if we're already dealing with a string
+  if (isString(val)) return val;
+  var writer = vm.vsw.writer(vm);
+  _objToString(val, vm, &writer);
+  defer {
+    if (vm.vsw.capacity() > Mem.MAX_VALUE_STRING_CAP) {
+      vm.vsw.deinit(vm);
+    }
+  }
+  return objVal(createString(vm, &vm.strings, vm.vsw.items(), false));
+}
+
+/// stringify any value
+pub fn valueToString(val: Value, vm: *VM) Value {
+  // no allocations if we're already dealing with a string
+  if (isString(val)) return val;
+  var writer = vm.vsw.writer(vm);
+  _valToString(val, vm, &writer);
+  defer {
+    if (vm.vsw.capacity() > Mem.MAX_VALUE_STRING_CAP) {
+      vm.vsw.deinit(vm);
+    }
+  }
+  return objVal(createString(vm, &vm.strings, vm.vsw.items(), false));
 }
 
 pub fn hashString(str: []const u8) u64 {

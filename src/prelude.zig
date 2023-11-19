@@ -26,25 +26,25 @@ pub const BuiltinsSrc =
 \\ end
 \\
 \\ class List{T}
-\\  def append(item: T): void
+\\  pub def append(item: T): void
 \\    #[[internal]]
 \\  end
 \\
-\\  def len(): num
+\\  pub def len(): num
 \\    #[[internal]]
 \\  end
 \\
-\\  def pop(): Maybe{T}
+\\  pub def pop(): Maybe{T}
 \\    #[[internal]]
 \\  end
 \\
-\\  def get(index: num): Maybe{T}
+\\  pub def get(index: num): Maybe{T}
 \\    #[[internal]]
 \\  end
 \\ end
 \\
 \\ class Tuple{T}
-\\  def len(): num
+\\  pub def len(): num
 \\    #[[internal]]
 \\  end
 \\ end
@@ -53,45 +53,45 @@ pub const BuiltinsSrc =
 \\ type MapEntry{K, V} = Key(K) | Value(V)
 \\
 \\ class Map{K, V}
-\\  def set(key: K, value: V): bool
+\\  pub def set(key: K, value: V): bool
 \\    #[[internal]]
 \\  end
 \\
-\\  def get(key: K): Maybe{V}
+\\  pub def get(key: K): Maybe{V}
 \\    #[[internal]]
 \\  end
 \\
-\\  def delete(key: K): bool
+\\  pub def delete(key: K): bool
 \\    #[[internal]]
 \\  end
 \\
-\\  def remove(key: K): bool
+\\  pub def remove(key: K): bool
 \\    #[[internal]]
 \\  end
 \\
-\\  def keys(): List{K}
+\\  pub def keys(): List{K}
 \\    #[[internal]]
 \\  end
 \\
-\\  def values(): List{V}
+\\  pub def values(): List{V}
 \\    #[[internal]]
 \\  end
 \\  
-\\  def items(): List{Tuple{K, V}}
+\\  pub def items(): List{Tuple{K, V}}
 \\    #[[internal]]
 \\  end
 \\
-\\  def listItems(): List{MapEntry{K, V}}
+\\  pub def listItems(): List{MapEntry{K, V}}
 \\    #[[internal]]
 \\  end
 \\
-\\  def len(): num
+\\  pub def len(): num
 \\    #[[internal]]
 \\  end
 \\ end
 \\
 \\ class str
-\\  def len(): num
+\\  pub def len(): num
 \\    #[[internal]]
 \\  end
 \\ end

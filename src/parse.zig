@@ -147,6 +147,7 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkLet
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkNum
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkMap
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkPub
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkStr
     .{.bp = .None, .prefix = Self.variable, .infix = null},             // TkError
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkAny
@@ -336,13 +337,13 @@ pub const Parser = struct {
     }
   }
 
-  fn snapshot(self: *Self) lex.LexSnapShot {
+  inline fn snapshot(self: *Self) lex.LexSnapShot {
     var ss = self.lexer.snapshot();
     ss.token = self.current_tok;
     return ss;
   }
 
-  fn rewind(self: *Self, ss: lex.LexSnapShot) void {
+  inline fn rewind(self: *Self, ss: lex.LexSnapShot) void {
     self.lexer.rewind(ss);
     self.previous_tok = ss.token;
     self.current_tok = ss.token;
@@ -1520,7 +1521,6 @@ pub const Parser = struct {
     try self.consume(.TkDef);
     var prev_func = self.meta.func;
     var func = self.newNode();
-    self.meta.func = func;
     var ident: ?*ast.VarNode = null;
     if (!lambda) {
       try self.consume(.TkIdent);
@@ -1532,6 +1532,7 @@ pub const Parser = struct {
       .tparams = undefined, .is_builtin = false,
       .variadic = false,
     }};
+    self.meta.func = func;
     var tparams: ?*TypeList = null;
     if (self.check(.TkLCurly)) {
       if (lambda) self.softErrMsg(self.current_tok, "generic lambdas are unsupported");
@@ -1570,18 +1571,22 @@ pub const Parser = struct {
       self.softErrMsg(self.previous_tok, "return statement used outside function");
     }
     const token = self.previous_tok;
-    var node = self.newNode();
     var expr: ?*Node = null;
     if (!self.check(.TkNewline)) {
       expr = try self.parseExpr();
     }
-    node.* = .{.AstRet = ast.RetNode.init(expr, token)};
-    if (!self.meta.func.?.AstFun.isAnonymous()) {
-      try self.consumeNlOrEof();
-    } else if (self.check(.TkNewline) or self.check(.TkEof)) {
-      try self.consumeNlOrEof();
+    if (self.meta.func) |func| {
+      var node = self.newNode();
+      node.* = .{.AstRet = ast.RetNode.init(expr, token)};
+      if (!func.AstFun.isAnonymous()) {
+        try self.consumeNlOrEof();
+      } else if (self.check(.TkNewline) or self.check(.TkEof)) {
+        try self.consumeNlOrEof();
+      }
+      return node;
+    } else {
+      return error.ParseError;
     }
-    return node;
   }
 
   fn classTypeAnnotation(self: *Self) !?*Type {
@@ -1628,57 +1633,63 @@ pub const Parser = struct {
     // ClassFields
     var disamb = self.getDisambiguator(Token);
     var fields: *NodeList = NodeList.init(self.allocator).box();
-    if (self.check(.TkIdent)) {
-      while (self.match(.TkIdent)) {
-        if (disamb.get(self.previous_tok.value)) |tok| {
-          self.softErrMsg(self.previous_tok, "illegal duplicate field");
-          self.softErrMsg(tok, "field also declared here");
-        }
-        if (fields.len() > MAX_FIELDS) {
-          self.softErrMsg(self.previous_tok, "maximum number of field declarations exceeded");
-        }
-        var id = ast.VarNode.init(self.previous_tok).box(self.allocator);
-        var val: *Node = undefined;
-        var has_default = false;
-        if (self.match(.TkColon)) {
-          try self.annotation(id);
-        }
-        if (self.match(.TkEqual)) {
-          val = try self.parseExpr();
-          has_default = true;
-        }
-        var field = @as(Node, .{.AstVarDecl = ast.VarDeclNode.init(id, val, false)}).box(self.allocator);
-        field.AstVarDecl.is_field = true;
-        field.AstVarDecl.has_default = has_default;
-        fields.append(field);
-        disamb.put(id.token.value, id.token) catch {};
-        self.skipNewlines();
+    while (self.check(.TkIdent) or self.check(.TkPub)) {
+      const ss = self.snapshot();
+      const is_pub = self.match(.TkPub);
+      if (self.check(.TkDef)) {
+        self.rewind(ss);
+        break;
       }
+      try self.consume(.TkIdent);
+      if (disamb.get(self.previous_tok.value)) |tok| {
+        self.softErrMsg(self.previous_tok, "illegal duplicate field");
+        self.softErrMsg(tok, "field also declared here");
+      }
+      if (fields.len() > MAX_FIELDS) {
+        self.softErrMsg(self.previous_tok, "maximum number of field declarations exceeded");
+      }
+      var id = ast.VarNode.init(self.previous_tok).box(self.allocator);
+      var val: *Node = undefined;
+      var has_default = false;
+      if (self.match(.TkColon)) {
+        try self.annotation(id);
+      }
+      if (self.match(.TkEqual)) {
+        val = try self.parseExpr();
+        has_default = true;
+      }
+      var field = @as(Node, .{.AstVarDecl = ast.VarDeclNode.init(id, val, false)}).box(self.allocator);
+      field.AstVarDecl.is_field = true;
+      field.AstVarDecl.has_default = has_default;
+      field.AstVarDecl.is_public = is_pub;
+      fields.append(field);
+      disamb.put(id.token.value, id.token) catch {};
+      self.skipNewlines();
     }
     // ClassMethods
     var mdisamb = self.getDisambiguator(Token);
     var methods: *NodeList = NodeList.init(self.allocator).box();
-    if (self.check(.TkDef)) {
-      while (self.check(.TkDef)) {
-        var method = try self.funStmt(false);
-        if (disamb.get(method.AstFun.name.?.token.value)) |tok| {
-          self.softErrArgs(method.AstFun.name.?.token, "method conflicts with field '{s}'", .{tok.value});
-          self.softErrMsg(tok, "field declared here");
-        }
-        if (mdisamb.get(method.AstFun.name.?.token.value)) |tok| {
-          self.softErrMsg(method.AstFun.name.?.token, "illegal duplicate method");
-          self.softErrMsg(tok, "method also declared here");
-        }
-        if (method.AstFun.isGeneric()) {
-          self.softErrMsg(method.AstFun.name.?.token, "generic methods are unsupported");
-        }
-        if (methods.len() > MAX_METHODS) {
-          self.softErrMsg(method.getToken(), "maximum number of method declarations exceeded");
-        }
-        methods.append(method);
-        mdisamb.put(method.AstFun.name.?.token.value, method.AstFun.name.?.token) catch {};
-        self.skipNewlines();
+    while (self.check(.TkDef) or self.check(.TkPub)) {
+      const is_pub = self.match(.TkPub);
+      var method = try self.funStmt(false);
+      if (disamb.get(method.AstFun.name.?.token.value)) |tok| {
+        self.softErrArgs(method.AstFun.name.?.token, "method conflicts with field '{s}'", .{tok.value});
+        self.softErrMsg(tok, "field declared here");
       }
+      if (mdisamb.get(method.AstFun.name.?.token.value)) |tok| {
+        self.softErrMsg(method.AstFun.name.?.token, "illegal duplicate method");
+        self.softErrMsg(tok, "method also declared here");
+      }
+      if (method.AstFun.isGeneric()) {
+        self.softErrMsg(method.AstFun.name.?.token, "generic methods are unsupported");
+      }
+      if (methods.len() > MAX_METHODS) {
+        self.softErrMsg(method.getToken(), "maximum number of method declarations exceeded");
+      }
+      method.AstFun.is_public = is_pub;
+      methods.append(method);
+      mdisamb.put(method.AstFun.name.?.token.value, method.AstFun.name.?.token) catch {};
+      self.skipNewlines();
     }
     self.skipNewlines();
     try self.consume(.TkEnd);
@@ -2118,6 +2129,7 @@ pub const Parser = struct {
       const body = ast.BlockNode.newBlockWithNodes(self.allocator, &[_]*Node{node});
       var fun = self.newNode();
       fun.* = .{.AstFun = ast.FunNode.init(ast.VarDeclList.init(self.allocator), body, null, null, null, false, false)};
+      fun.AstFun.allow_all_aspec = true;
       // create call expr
       var call = self.newNode();
       call.* = .{.AstCall = ast.CallNode.init(fun, NodeList.init(self.allocator), null, 0, false, false)};

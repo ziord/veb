@@ -841,6 +841,23 @@ pub const AliasInfo = struct {
   }
 };
 
+pub const AccessSpecifier = enum(u4) {
+  SpecPublic,
+  SpecPrivate,
+
+  pub fn getASpec(is_public: bool) @This() {
+    return if (is_public) .SpecPublic else .SpecPrivate;
+  }
+
+  pub fn isPublic(self: @This()) bool {
+    return self == .SpecPublic;
+  }
+
+  pub fn isPrivate(self: @This()) bool {
+    return self == .SpecPrivate;
+  }
+};
+
 pub const TypeInfo = union(enum) {
   Concrete: Concrete,
   Constant: Constant,
@@ -873,6 +890,8 @@ pub const Type = struct {
   tid: u32 = 0,
   alias: ?*Type = null,
   kind: TypeInfo,
+  /// how this type can be accessed
+  aspec: AccessSpecifier = .SpecPublic,
   /// only applies to function types; whether this function type is variadic
   variadic: bool = false,
   /// whether this type was inferred automatically i.e not an annotation
@@ -895,6 +914,7 @@ pub const Type = struct {
     ty1.alias = ty2.alias;
     ty1.variadic = ty2.variadic;
     ty1.inferred = ty2.inferred;
+    ty1.aspec = ty2.aspec;
   }
 
   fn _clone(self: *Self, al: std.mem.Allocator, map: *TypeHashMap) *Self {
@@ -2035,7 +2055,9 @@ pub const Type = struct {
     var writer = u8w.writer();
     for (tokens.items(), 0..) |tok, i| {
       // variables starting with $ are generated and internal, so use this symbol instead
-      _ = if (tok.value[0] != ks.GeneratedVarMarker) try writer.write(tok.value) else try writer.write(ks.GeneratedTypeVar);
+      _ = if (tok.value.len > 0 and tok.value[0] != ks.GeneratedVarMarker)
+            try writer.write(tok.value)
+          else try writer.write(ks.GeneratedTypeVar);
       if (i != tokens.len() - 1) {
         // compound names are separated via '.'
         _ = try writer.write(".");

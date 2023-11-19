@@ -986,8 +986,8 @@ test "narrowing-21" {
   const src =
   \\ type NumStr = N(num) | S(str)
   \\ class Fox
-  \\    x: NumStr = N(5)
-  \\    u = 12
+  \\    pub x: NumStr = N(5)
+  \\    pub u = 12
   \\ end
   \\
   \\ let f = (Fox(), 5)
@@ -1015,12 +1015,12 @@ test "narrowing-22" {
   \\ type NumStr = N(num) | S(str)
   \\ type FooFox = Fo(Foo) | Fx(Fox)
   \\ class Fox
-  \\    x: NumStr = N(5)
-  \\    u = 12
+  \\    pub x: NumStr = N(5)
+  \\    pub u = 12
   \\ end
   \\ class Foo
-  \\    x = 'ok'
-  \\    u = 13
+  \\    pub x = 'ok'
+  \\    pub u = 13
   \\ end
   \\
   \\ let f: FooFox = Fx(Fox())
@@ -2224,12 +2224,12 @@ test "errors-7" {
 test "simple-classes-1" {
   const src =
   \\ class Fox
-  \\    x: num
-  \\    u = 12
+  \\    pub x: num
+  \\    pub u = 12
   \\    def init(): void
   \\      self.x = 0
   \\    end
-  \\    def pulse()
+  \\    pub def pulse()
   \\      return self
   \\    end
   \\ end
@@ -2249,8 +2249,8 @@ test "simple-classes-1" {
 test "simple-classes-2" {
   const src =
   \\ class Fox
-  \\    x: num
-  \\    u = 12
+  \\    pub x: num
+  \\    pub u = 12
   \\    def init(): void
   \\      self.x = 0
   \\    end
@@ -2259,8 +2259,8 @@ test "simple-classes-2" {
   \\    end
   \\ end
   \\ class Racoon
-  \\    x: num
-  \\    u = 12
+  \\    pub x: num
+  \\    pub u = 12
   \\    def init(): void
   \\      self.x = self.u
   \\    end
@@ -2281,7 +2281,7 @@ test "simple-classes-2" {
 test "simple-classes-3" {
   const src =
   \\ class Foo
-  \\  x: num = 10
+  \\  pub x: num = 10
   \\ end
   \\
   \\ let j = Foo()
@@ -2294,8 +2294,8 @@ test "simple-classes-4" {
   const src =
   \\ type NumStr = N(num) | S(str)
   \\ class Fox
-  \\    x: NumStr = N(5)
-  \\    u = 12
+  \\    pub x: NumStr = N(5)
+  \\    pub u = 12
   \\ end
   \\
   \\ let f = (Fox(), 5)
@@ -2324,7 +2324,7 @@ test "simple-classes-5" {
   \\ class Fox
   \\    x: NumStr = N(5)
   \\    u = 12
-  \\    def foo()
+  \\    pub def foo()
   \\      return self.u * 3
   \\    end
   \\ end
@@ -2377,7 +2377,7 @@ test "functions-1.<narrowing-return>" {
 test "simple-classes-1.<call & dot access mutation>" {
   const src =
   \\ class Foxy
-  \\  x = [1]
+  \\  pub x = [1]
   \\ end
   \\
   \\ def fun(f: Foxy)
@@ -2405,15 +2405,15 @@ test "simple-classes-2.<instance list assignment>" {
 test "generic-classes-1" {
   const src =
   \\ class Fox{T}
-  \\    x: List{T}
+  \\    pub x: List{T}
   \\    def init(x*: T): void
   \\      self.x = x
   \\    end
-  \\    def pulse()
+  \\    pub def pulse()
   \\      return self
   \\    end
   \\
-  \\    def getGen()
+  \\    pub def getGen()
   \\      alias T = Tuple{str}
   \\      def fun(p: T)
   \\        return p[0]
@@ -2482,15 +2482,15 @@ test "generic-classes-3" {
 test "generic-classes-4" {
   const src =
   \\ class Fox{T}
-  \\    x: List{T}
+  \\    pub x: List{T}
   \\    def init(x*: T): void
   \\      self.x = x
   \\    end
-  \\    def pulse()
+  \\    pub def pulse()
   \\      return self
   \\    end
   \\
-  \\    def getGen()
+  \\    pub def getGen()
   \\      alias T = Tuple{str}
   \\      def fun(p: T)
   \\        return p[0]
@@ -2527,7 +2527,7 @@ test "generic-classes-4" {
 test "generic-classes-5" {
   const src =
 \\ class Fox{T}
-  \\    x: List{T}
+  \\    pub x: List{T}
   \\    def init(x*: T): void
   \\      self.x = x
   \\    end
@@ -2587,13 +2587,13 @@ test "labeled-argument" {
 test "labeled-argument-2" {
   const src =
   \\ class Fun
-  \\  a: num
-  \\  b: str
+  \\  pub a: num
+  \\  pub b: str
   \\  def init(a: num, b: str)
   \\    self.a = a
   \\    self.b = b
   \\  end
-  \\  def send(data: List{any})
+  \\  pub def send(data: List{any})
   \\    let i = 0
   \\    while i < data.len()
   \\      println('sending...', data[i])
@@ -2829,12 +2829,12 @@ test "patterns-5.<match on classes>" {
   const src =
   \\ let z = false
   \\ class Ant
-  \\  a = 5
+  \\  pub a = 5
   \\ end
   \\ class Rat
-  \\  x = 'yes'
-  \\  y = 'no'
-  \\  z = 'ok'
+  \\  pub x = 'yes'
+  \\  pub y = 'no'
+  \\  pub z = 'ok'
   \\ end
   \\ type Animal = A(Ant) | R(Rat)
   \\ let j = R(Rat()) as Animal
@@ -2906,13 +2906,13 @@ test "patterns-9.<nested match on classes>" {
   const src =
   \\ let j = [] as List{num}
   \\ class Pooh
-  \\  x = [1, 2]
+  \\  pub x = [1, 2]
   \\ end
   \\ class Cat
-  \\  x = [Dog()]
+  \\  pub x = [Dog()]
   \\ end
   \\ class Dog
-  \\  x = Pooh()
+  \\  pub x = Pooh()
   \\ end
   \\ type Animal = C(Cat) | D(Dog)
   \\ let p: Animal = C(Cat())
@@ -2929,13 +2929,13 @@ test "patterns-9.<nested match on classes>" {
 test "patterns-10.<nested match on classes>" {
   const src =
   \\ class Pooh
-  \\  x = [1, 2]
+  \\  pub x = [1, 2]
   \\ end
   \\ class Cat
-  \\  y = [Dog()]
+  \\  pub y = [Dog()]
   \\ end
   \\ class Dog
-  \\  z = [Pooh()]
+  \\  pub z = [Pooh()]
   \\ end
   \\ type Animal = C(Cat) | D(Dog)
   \\ let p = C(Cat())
@@ -2958,13 +2958,13 @@ test "patterns-10.<nested match on classes>" {
 test "patterns-11.<nested match on classes>" {
   const src =
   \\ class Pooh
-  \\  x = [1, 2]
+  \\  pub x = [1, 2]
   \\ end
   \\ class Cat
-  \\  x = [Dog()]
+  \\  pub x = [Dog()]
   \\ end
   \\ class Dog
-  \\  x = [Pooh()]
+  \\  pub x = [Pooh()]
   \\ end
   \\ type Animal = C(Cat) | D(Dog)
   \\ let p = C(Cat()) as Animal
@@ -2986,13 +2986,13 @@ test "patterns-11.<nested match on classes>" {
 test "patterns-12.<nested match on classes>" {
   const src =
   \\ class Pooh
-  \\  x = [1, 2]
+  \\  pub x = [1, 2]
   \\ end
   \\ class Cat
-  \\  x = [Dog()]
+  \\  pub x = [Dog()]
   \\ end
   \\ class Dog
-  \\  x = [Pooh()]
+  \\  pub x = [Pooh()]
   \\ end
   \\ type Animal = 
   \\  | C(Cat) 
@@ -3102,7 +3102,7 @@ test "patterns-18.<nullable types>" {
 test "patterns-19.<match on generics>" {
   const src =
   \\ class Fox{T}
-  \\  j: T
+  \\  pub j: T
   \\  def init(j: T)
   \\    self.j = j
   \\  end
@@ -3124,7 +3124,7 @@ test "patterns-19.<match on generics>" {
 test "patterns-20.<match on generics>" {
   const src =
   \\ class Fox{T}
-  \\  j: T
+  \\  pub j: T
   \\  def init(j: T)
   \\    self.j = j
   \\  end
@@ -3152,7 +3152,7 @@ test "patterns-20.<match on generics>" {
 test "patterns-21.<match on generics>" {
   const src =
   \\ class Fox{T}
-  \\  j: List{T}
+  \\  pub j: List{T}
   \\  def init(j*: T)
   \\    self.j = j
   \\  end
@@ -3174,7 +3174,7 @@ test "patterns-21.<match on generics>" {
 test "patterns-22.<match on generics>" {
   const src =
   \\ class Fox{T}
-  \\  j: List{T}
+  \\  pub j: List{T}
   \\  def init(j*: T)
   \\    self.j = j
   \\  end
@@ -3196,7 +3196,7 @@ test "patterns-22.<match on generics>" {
 test "patterns-23.<match on generics>" {
   const src =
   \\ class Fox{T}
-  \\  j: List{T}
+  \\  pub j: List{T}
   \\  def init(j*: T)
   \\    self.j = j
   \\  end
@@ -3218,7 +3218,7 @@ test "patterns-23.<match on generics>" {
 test "patterns-24.<match on generics>" {
   const src =
   \\ class Fox{T}
-  \\  j: List{T}
+  \\  pub j: List{T}
   \\  def init(j*: T)
   \\    self.j = j
   \\  end
@@ -3242,9 +3242,9 @@ test "patterns-24.<match on generics>" {
 test "patterns-25.<match on rested>" {
   const src =
   \\ class Bug
-  \\  x = 5
-  \\  y = 10
-  \\  z = 12
+  \\  pub x = 5
+  \\  pub y = 10
+  \\  pub z = 12
   \\ end
   \\ let z = false
   \\ match Bug()
@@ -3291,14 +3291,14 @@ test "patterns-28.<match on generics>" {
   const src =
   \\ let z = false
   \\ class Oky{A}
-  \\  val: A
+  \\  pub val: A
   \\  def init(val: A)
   \\    self.val = val
   \\  end
   \\ end
   \\
   \\ class Err{B}
-  \\  val: B
+  \\  pub val: B
   \\  def init(val: B)
   \\    self.val = val
   \\  end
@@ -3334,7 +3334,7 @@ test "patterns-29.<match on maps>" {
 test "patterns-30.<match on maps>" {
   const src =
   \\ class Fox
-  \\  url: str
+  \\  pub url: str
   \\  def init(url: str)
   \\    self.url = url
   \\  end
@@ -3355,7 +3355,7 @@ test "patterns-30.<match on maps>" {
 test "patterns-31.<match on maps>" {
   const src =
   \\ class Fox
-  \\  url: str
+  \\  pub url: str
   \\  def init(url: str)
   \\    self.url = url
   \\  end
@@ -3377,7 +3377,7 @@ test "patterns-31.<match on maps>" {
 test "patterns-32.<match on maps>" {
   const src =
   \\ class Fox
-  \\  url: str
+  \\  pub url: str
   \\  def init(url: str)
   \\    self.url = url
   \\  end
@@ -3996,6 +3996,81 @@ test "match expressions .3" {
   const src =
   \\ let t = (match 5 case 1..3 => 10 case 4..10 as n => n * 2 case _ => 0 end)
   \\ assert(t == 10, 'should be 10')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "aspec.<methods 1>" {
+  const src =
+  \\ class Fish
+  \\  pub x: str
+  \\  pub y: num
+  \\  j: List{num}
+  \\
+  \\  def init()
+  \\    self.x = 'a'
+  \\    self.y = 6
+  \\    self.j = [] as List{num}
+  \\  end
+  \\
+  \\  pub def fox()
+  \\    return match Fish()
+  \\      case Fish(x, y, j) => 2 + y
+  \\    end
+  \\  end
+  \\ end
+  \\ assert(Fish().fox() == 8, 'should be 8')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "aspec.<methods 2>" {
+  const src =
+  \\ class Fish
+  \\  pub x: str
+  \\  pub y: num
+  \\  j: List{num}
+  \\
+  \\  def init()
+  \\    self.x = 'a'
+  \\    self.y = 6
+  \\    self.j = [] as List{num}
+  \\  end
+  \\
+  \\  pub def fox()
+  \\    return match self
+  \\      case Fish(x, y, j) => 2 + y
+  \\    end
+  \\  end
+  \\ end
+  \\ assert(Fish().fox() == 8, 'should be 8')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "aspec.<methods 3>" {
+  const src =
+  \\ class Fish
+  \\  x: str
+  \\  y: num
+  \\  j: List{num}
+  \\
+  \\  def init()
+  \\    self.x = 'a'
+  \\    self.y = 6
+  \\    self.j = [] as List{num}
+  \\  end
+  \\
+  \\  def doStuff()
+  \\    self.y += 1
+  \\    return self.y
+  \\  end
+  \\
+  \\  pub def fox()
+  \\    return self.doStuff()
+  \\  end
+  \\ end
+  \\ assert(Fish().fox() == 7, 'should be 7')
   ;
   try doRuntimeTest(src);
 }

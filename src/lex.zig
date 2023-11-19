@@ -25,6 +25,7 @@ pub const Keywords = std.ComptimeStringMap(TokenType, .{
   .{"match", .TkMatch},
   .{"try", .TkTry},
   .{"alias", .TkAlias},
+  .{"pub", .TkPub},
   .{"type", .TkType},
   .{"then", .TkThen},
   .{"break", .TkBreak},
@@ -102,6 +103,7 @@ pub const TokenType = enum (u8) {
   TkLet,            // let
   TkNum,            // num
   TkMap,            // map
+  TkPub,            // pub
   TkStr,            // str
   TkError,          // error
   TkAny,            // any
@@ -233,6 +235,7 @@ pub const TokenType = enum (u8) {
       .TkEnd => "end",
       .TkNot => "not",
       .TkLet => "let",
+      .TkPub => "pub",
       .TkTry => "try",
       .TkThen => "then",
       .TkAlias => "alias",

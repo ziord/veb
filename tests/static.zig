@@ -137,12 +137,12 @@ test "functions-12-user-defined-never" {
 test "simple-classes-1" {
   var src =
   \\ class Fox
-  \\    x: num
-  \\    u = 12
+  \\    pub x: num
+  \\    pub u = 12
   \\    def init(): void
   \\      self.x = 0
   \\    end
-  \\    def pulse()
+  \\    pub def pulse()
   \\      return self
   \\    end
   \\ end
@@ -179,15 +179,15 @@ test "generic-classes-1" {
 test "generic-classes-2" {
   var src =
   \\ class Fox{T}
-  \\    x: List{T}
+  \\    pub x: List{T}
   \\    def init(x*: T): void
   \\      self.x = x
   \\    end
-  \\    def pulse()
+  \\    pub def pulse()
   \\      return self
   \\    end
   \\
-  \\    def getGen()
+  \\    pub def getGen()
   \\      alias T = Tuple{str}
   \\      def fun(p: T)
   \\        return p[0]

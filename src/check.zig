@@ -214,8 +214,10 @@ pub const TypeChecker = struct {
   _prelude: *Node = undefined,
   /// type environment for narrowing
   tenv: ?*TypeEnv = null,
-  /// current function being type checked
-  current_fn: ?*FlowMeta = null,
+  /// flow info of current function/method being type checked
+  current_fn_flm: ?*FlowMeta = null,
+  /// current function/method being type checked
+  current_fn: ?*Node = null,
   /// current match node being type checked
   match_node: ?*ast.MatchNode = null,
   /// cached types
@@ -650,7 +652,7 @@ pub const TypeChecker = struct {
       const returns_on_all_paths = non_ret_preds.len() == 1 and non_ret_preds.itemAt(0).isDeadNode();
       if (returns_on_all_paths) {
         // we can only return in functions, so this is definitely a function
-        const dead = self.tc.current_fn.?.dead;
+        const dead = self.tc.current_fn_flm.?.dead;
         // connect preds to dead,
         builder.connectVerticesWithEdgeInfo(preds, dead, .ESequential);
         // and dead to succ
@@ -722,6 +724,7 @@ pub const TypeChecker = struct {
       const level = self.tc.diag.getLevel();
       defer self.tc.diag.setLevel(level);
       self.tc.diag.setLevel(.DiagError);
+      if (self.tests.isEmpty()) return error.CheckError;
       const nd = self.tests.getLast();
       var allow_rested = false;
       var ident: *ast.VarNode = undefined;
@@ -834,7 +837,7 @@ pub const TypeChecker = struct {
         if (!itm.AstClass.name.token.valueEql(ks.StrVar)) {
           self.builtins.append(self.inferClassPartial(itm) catch unreachable);
         } else {
-          var ty = try self.inferClassPartial(itm);
+          var ty = self.inferClassPartial(itm) catch unreachable;
           self.str_ty = self.inferClass(itm, ty) catch unreachable;
           self.builtins.append(self.str_ty);
         }
@@ -2019,7 +2022,11 @@ pub const TypeChecker = struct {
         node.ident.typ = try self.infer(node.value);
       }
     }
-    if (node.is_param) try self.resolveType(node.ident.typ.?, node.ident.token);
+    if (node.is_param) {
+      try self.resolveType(node.ident.typ.?, node.ident.token);
+    } else if (node.is_field) {
+      node.ident.typ.?.aspec = types.AccessSpecifier.getASpec(node.is_public);
+    }
     self.insertVar(node.ident.token.value, node.ident.typ.?);
     return node.ident.typ.?;
   }
@@ -2109,6 +2116,7 @@ pub const TypeChecker = struct {
       }
     };
     var ty = Type.newFunction(self.ctx.allocator(), ret_ty);
+    ty.aspec = types.AccessSpecifier.getASpec(ast_node.AstFun.is_public);
     var fun = ty.function();
     var node = &ast_node.AstFun;
     fun.node = ast_node;
@@ -2171,9 +2179,12 @@ pub const TypeChecker = struct {
       self.cycles.append(node);
       self.ctx.enterScope();
       defer self.ctx.leaveScope();
-      var prev_fn = self.current_fn;
-      self.current_fn = &flo;
+      const prev_fn_flm = self.current_fn_flm;
+      const prev_fn = self.current_fn;
+      self.current_fn_flm = &flo;
+      if (!fun.allow_all_aspec) self.current_fn = node;
       try self.flowInfer(flo.entry, true);
+      self.current_fn_flm = prev_fn_flm;
       self.current_fn = prev_fn;
       _ = self.cycles.pop();
       ty.function().ret = try self.inferFunReturnType(node, flo, ty);
@@ -2427,6 +2438,17 @@ pub const TypeChecker = struct {
     // we need to infer this first to handle recursive classes
     var cls = &node.AstClass;
     var ty = self.createClsType(node);
+    if (!cls.isGeneric() and !cls.is_builtin) {
+      self.ctx.enterScope();
+      defer self.ctx.leaveScope();
+      if (cls.methods.isNotEmpty()) {
+        self.insertVar(ks.SelfVar, ty);
+        defer self.deleteVar(ks.SelfVar);
+        for (cls.methods.items()) |itm| {
+          ty.klass().methods.append(try self.inferFunPartial(itm));
+        }
+      }
+    }
     // set the class's name to it's full type
     self.ctx.typScope.insert(cls.name.token.value, ty);
     return ty;
@@ -2448,11 +2470,17 @@ pub const TypeChecker = struct {
         if (cls.methods.isNotEmpty()) {
           self.insertVar(ks.SelfVar, ty);
           defer self.deleteVar(ks.SelfVar);
+          var fun_ty: *Type = undefined;
           for (cls.methods.items(), 0..) |itm, i| {
-            var fun_ty = try self.inferFunPartial(itm);
-            ty.klass().methods.append(fun_ty);
-            fun_ty = try self.inferFun(itm, fun_ty);
-            ty.klass().methods.items()[i] = fun_ty;
+            if (ty.klass().methods.len() > i) {
+              // use the partially inferred method type if available
+              fun_ty = ty.klass().methods.itemAt(i);
+            } else {
+              // otherwise, create one
+              fun_ty = try self.inferFunPartial(itm);
+              ty.klass().methods.append(fun_ty);
+            }
+            ty.klass().methods.items()[i] = try self.inferFun(itm, fun_ty);
           }
           if (ty.klass().getMethod(ks.InitVar)) |mtd| {
             self.forbidReturnInInit(mtd);
@@ -2466,8 +2494,7 @@ pub const TypeChecker = struct {
         for (cls.methods.items(), 0..) |itm, i| {
           var fun_ty = try self.inferFunPartial(itm);
           ty.klass().methods.append(fun_ty);
-          fun_ty = try self.inferFun(itm, fun_ty);
-          ty.klass().methods.items()[i] = fun_ty;
+          ty.klass().methods.items()[i] = try self.inferFun(itm, fun_ty);
         }
       }
       _ = self.cycles.pop();
@@ -2674,9 +2701,9 @@ pub const TypeChecker = struct {
         .{self.getTypename(lhs_ty), rhs_tok.value}
       );
     }
-    var ty = lhs_ty.classOrInstanceClass();
-    try self.resolveType(ty, lhs_tok);
-    try self.checkDotAccess(node, ty, &node.rhs.AstVar);
+    var cls_ty = lhs_ty.classOrInstanceClass();
+    try self.resolveType(cls_ty, lhs_tok);
+    try self.checkDotAccess(node, cls_ty, &node.rhs.AstVar);
     return node.typ.?;
   }
   
@@ -3196,7 +3223,7 @@ pub const TypeChecker = struct {
 
   fn inferOrElse(self: *Self, node: *Node) !*Type {
     // - build cfg of this node. 
-    var exit = if (self.current_fn) |curr| curr.exit else self.cfg.program.exit;
+    var exit = if (self.current_fn_flm) |curr| curr.exit else self.cfg.program.exit;
     var builder = CFGBuilder.initWithExit(self.ctx.allocator(), exit);
     var flo = builder.buildOrElse(&self.cfg, node);
     var ok_ty = try self.infer(node.AstOrElse.ok);
@@ -3394,16 +3421,45 @@ pub const TypeChecker = struct {
     node.typ = expr_ty.subtype(self.ctx.allocator());
   }
 
-  fn checkDotAccess(self: *Self, node: *ast.DotAccessNode, ty: *Type, prop: *ast.VarNode) !void {
-    var cls = if (ty.isClass()) ty.klass() else ty.instance().cls.klass();
+  fn checkAccessSpecifier(self: *Self, cls_ty: *Type, prop_ty: *Type, prop: *ast.VarNode, is_field: bool) !void {
+    // class method check: 
+    //  if this method is being accessed outside the class('s methods),
+    //  check that the method is defined as public
+    // class field check:
+    //  if this field is being accessed outside the class('s methods),
+    //  check that the field is defined as public
+    // error if none of the cases above hold.
+    if (prop_ty.aspec.isPrivate()) {
+      if (self.current_fn) |fun| {
+        if (fun.AstFun.name) |name| {
+          if (cls_ty.klass().getMethod(name.token.value) != null) {
+            return;
+          }
+        }
+      }
+    } else return;
+    const thing = if (is_field) "field" else "method";
+    return self.softError(
+      prop.token,
+      "access of private {s} '{s}' outside its defining class method.\n\t"
+      ++ "Consider making this {s} public.",
+      .{thing, prop.token.value, thing}
+    );
+  }
+
+  fn checkDotAccess(self: *Self, node: *ast.DotAccessNode, cls_ty: *Type, prop: *ast.VarNode) !void {
+    var cls = cls_ty.klass();
     if (cls.getField(prop.token.value)) |field| {
-      node.typ = field.AstVarDecl.ident.typ;
+      const typ = field.AstVarDecl.ident.typ;
+      node.typ = typ;
+      return self.checkAccessSpecifier(cls_ty, typ.?, prop, true);
     } else if (cls.getMethodTy(prop.token.value)) |mth_ty| {
-      node.typ = mth_ty; //Type.newMethod(mth_ty, cls_ty).box(self.ctx.allocator());
+      node.typ = mth_ty;
+      return self.checkAccessSpecifier(cls_ty, mth_ty, prop, false);
     } else {
       return self.error_(
         true, prop.token, "{s} has no property '{s}'",
-        .{self.getTypename(ty), prop.token.value}
+        .{self.getTypename(cls_ty), prop.token.value}
       );
     }
   }

@@ -1562,7 +1562,7 @@ test "patterns-24.<match on generics (redundancy)>" {
 test "patterns-25.<match on generics (redundancy)>" {
   const src =
   \\ class Fox{T}
-  \\  j: List{T}
+  \\  pub j: List{T}
   \\  def init(j*: T)
   \\    self.j = j
   \\  end
@@ -2102,5 +2102,160 @@ test "tags.<label>" {
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "illegal or invalid label: 'j'",
+  });
+}
+
+test "aspec.<fields 1>" {
+  const src =
+  \\ class Foo
+  \\  x: num = 19
+  \\  y = 11
+  \\ end
+  \\ let j = Foo()
+  \\ j.x + j.y
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "access of private field 'x' outside its defining class method",
+    "access of private field 'y' outside its defining class method",
+  });
+}
+
+test "aspec.<fields 2>" {
+  const src =
+  \\ class Fish
+  \\  pub x: str
+  \\  pub y: num
+  \\  j: List{num}
+  \\
+  \\  def init()
+  \\    self.x = 'a'
+  \\    self.y = 6
+  \\    self.j = [] as List{num}
+  \\  end
+  \\
+  \\  pub def fox()
+  \\    let x = match Fox()
+  \\      case Fox(x) => 2 + x
+  \\    end
+  \\    return x
+  \\  end
+  \\ end
+  \\
+  \\ class Fox
+  \\  x = 12
+  \\ end
+  \\
+  \\ Fish().fox()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "access of private field 'x' outside its defining class method",
+  });
+}
+
+test "aspec.<fields 3>" {
+  const src =
+  \\ class Fish
+  \\  pub x: str
+  \\  pub y: num
+  \\  j: List{num}
+  \\
+  \\  def init()
+  \\    self.x = 'a'
+  \\    self.y = 6
+  \\    self.j = [] as List{num}
+  \\  end
+  \\
+  \\  pub def fox()
+  \\    let x = def () => (match Fish() case Fish(x, y, j) => 2 + y end)
+  \\    return x()
+  \\  end
+  \\ end
+  \\ Fish().fox()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "access of private field 'j' outside its defining class method",
+  });
+}
+
+test "aspec.<fields 4>" {
+  const src =
+  \\ class Fish
+  \\  pub x: str
+  \\  pub y: num
+  \\  j: List{num}
+  \\
+  \\  def init()
+  \\    self.x = 'a'
+  \\    self.y = 6
+  \\    self.j = [] as List{num}
+  \\  end
+  \\
+  \\  pub def fox()
+  \\    let x = def () => (match self case Fish(x, y, j) => 2 + y end)
+  \\    return x()
+  \\  end
+  \\ end
+  \\ Fish().fox()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "access of private field 'j' outside its defining class method",
+  });
+}
+
+test "aspec.<methods 1>" {
+  const src =
+  \\ class Foo
+  \\  def fun()
+  \\    print(self.fun)
+  \\  end
+  \\ end
+  \\ let j = Foo()
+  \\ j.fun()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "access of private method 'fun' outside its defining class method",
+  });
+}
+
+test "aspec.<methods 2>" {
+  const src =
+  \\ class Fish
+  \\  pub x: str
+  \\  pub y: num
+  \\  j: List{num}
+  \\
+  \\  def init()
+  \\    self.x = 'a'
+  \\    self.y = 0
+  \\    self.j = [] as List{num}
+  \\    print((def () => self.fox())())
+  \\  end
+  \\
+  \\  def fox()
+  \\    return 5
+  \\  end
+  \\ end
+  \\
+  \\ Fish()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "access of private method 'fox' outside its defining class method",
+  });
+}
+
+test "aspec.<methods 3>" {
+  const src =
+  \\ class Fish
+  \\  x: str
+  \\  y: num
+  \\  j: List{num}
+  \\
+  \\  def pub fox()
+  \\    return self.doStuff()
+  \\  end
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "expected token '<identifier>', but found 'pub'",
   });
 }

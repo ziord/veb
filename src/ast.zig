@@ -349,6 +349,8 @@ pub const VarDeclNode = struct {
   is_field: bool = false,
   /// whether this node being a class field has a default value
   has_default: bool = false,
+  /// whether this node is public or private; only applies to class fields
+  is_public: bool = false,
 
   pub fn init(ident: *VarNode, value: *AstNode, is_param: bool) @This() {
     return @This() {.ident = ident, .value = value, .is_param = is_param};
@@ -367,6 +369,7 @@ pub const VarDeclNode = struct {
     vn.is_field = self.is_field;
     vn.has_default = self.has_default;
     vn.has_annotation = self.has_annotation;
+    vn.is_public = self.is_public;
     var new = util.alloc(AstNode, al);
     new.* = .{.AstVarDecl = vn};
     return new;
@@ -883,6 +886,11 @@ pub const FunNode = struct {
   ret: ?*AstNode = null,
   is_builtin: bool,
   variadic: bool,
+  /// whether this function is public i.e. aspec = SpecPublic
+  is_public: bool = false,
+  /// whether all attributes (aspec public/private) can
+  /// be accessed within this function without errors
+  allow_all_aspec: bool = false,
 
   pub fn init(
     params: VarDeclList, body: *AstNode, name: ?*VarNode, ret: ?*AstNode,
@@ -931,6 +939,8 @@ pub const FunNode = struct {
       params, self.body.clone(al), self.name, ret,
       self.tparams, self.is_builtin, self.variadic
     );
+    fun.is_public = self.is_public;
+    fun.allow_all_aspec = self.allow_all_aspec;
     var new = util.alloc(AstNode, al);
     new.* = .{.AstFun = fun};
     return new;

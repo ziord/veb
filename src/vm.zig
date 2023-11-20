@@ -119,26 +119,20 @@ pub const VM = struct {
 
   inline fn read3Args(self: *Self, word: Inst, a1: *u32, a2: *u32, a3: *u32) void {
     _ = self;
-    a1.* = (word >> 18) & Code._8bits;
-    a2.* = (word >> 9) & Code._9bits;
-    a3.* = word & Code._9bits;
+    a1.* = (word >> 6) & Code._8bits;
+    a2.* = (word >> 14) & Code._9bits;
+    a3.* = (word >> 23) & Code._9bits;
   }
 
   inline fn read2Args(self: *Self, word: Inst, a1: *u32, a2: *u32) void {
     _ = self;
-    a1.* = (word >> 18) & Code._8bits;
-    a2.* = word & Code._18bits;
-  }
-
-  inline fn read2ArgsSigned(self: *Self, word: Inst, a1: *u32, a2: *i32) void {
-    _ = self;
-    a1.* = (word >> 18) & Code._8bits;
-    a2.* = vl.Code.readSBX(word);
+    a1.* = (word >> 6) & Code._8bits;
+    a2.* = (word >> 14) & Code._18bits;
   }
 
   inline fn read1Arg(self: *Self, word: Inst, a: *u32) void {
     _ = self;
-    a.* = word & Code._26bits;
+    a.* = (word >> 6);
   }
 
   inline fn readConst(self: *Self, pos: u32, fp: *vl.CallFrame) Value {

@@ -47,46 +47,38 @@ pub const Code = extern struct {
   }
 
   pub inline fn readInstOp(word: u32) OpCode {
-    // [op] rx rk1 rk2
-    //  6   8   9   9
-    const op = (word >> 26) & _6bits;
-    return @enumFromInt(op);
+    // rk2 rk1 rx  [op] 
+    //  9   9   8   6 
+    return @enumFromInt(word & _6bits);
   }
 
 
   pub inline fn readInstOpNoConv(word: u32) u32 {
-    return (word >> 26) & Code._6bits;
+    return word & _6bits;
   }
 
   pub inline fn readRX(word: u32) u32 {
-    // op [rx] rk1 rk2
-    // 6   8    9   9
-    return (word >> 18) & _8bits;
+    // rk2 rk1 [rx] op 
+    //  9   9   8   6       
+    return (word >> 6) & _8bits;
   }
 
   pub inline fn readRK1(word: u32) u32 {
-    // op rx [rk1] rk2
-    // 6  8    9    9
-    return (word >> 9) & _9bits;
+    // rk2 [rk1] rx op 
+    //  9    9   8   6   
+    return (word >> 14) & _9bits;
   }
 
   pub inline fn readRK2(word: u32) u32 {
-    // op rx rk1 [rk2]
-    // 6  8   9    9
-    return word & _9bits;
+    // [rk2] rk1 rx op 
+    //  9    9   8   6  
+    return (word >> 23) & _9bits;
   }
 
   pub inline fn readBX(word: u32) u32 {
-    // op rx [bx] 
-    // 6  8   18
-    return word & _18bits;
-  }
-
-  pub inline fn readSBX(word: u32) i32 {
-    // op rx [sbx] 
-    // 6  8   18
-    const sbx: i32 = @intCast(word & _18bits);
-    return if (sbx & _sign == _sign) sbx - (1 << 18) else sbx;
+    // [bx] rx op 
+    //  18  8  6
+    return (word >> 14) & _18bits;
   }
 
   pub fn resetBy(self: *Self, n: u32) void {
@@ -102,29 +94,30 @@ pub const Code = extern struct {
   }
 
   pub fn write3ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, arg3: u32, line: usize, vm: *VM) void {
-    // [op 6bits][reg 8bits][reg 9bits][reg 9bits]
-    const inst = ((@intFromEnum(op) & _6bits) << 26) | ((arg1 & _8bits) << 18) | ((arg2 & _9bits) << 9) | ((arg3 & _9bits));
+    // [reg 9bits][reg 9bits][reg 8bits][op 6bits]
+    const inst = ((arg3 & _9bits) << 23) | ((arg2 & _9bits) << 14) | ((arg1 & _8bits) << 6) | (@intFromEnum(op) & _6bits);
     self.words.push(inst, vm);
     self.lines.push(@intCast(line), vm);
   }
 
+  // TODO: signed
   pub fn write2ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, line: usize, vm: *VM) void {
-    // [op 6bits][reg 8bits][reg 18bits]
-    const inst = ((@intFromEnum(op) & _6bits) << 26) | ((arg1 & _8bits) << 18) | ((arg2 & _18bits));
+    // [reg 18bits][reg 8bits][op 6bits]
+    const inst = ((arg2 & _18bits) << 14) | ((arg1 & _8bits) << 6) | (@intFromEnum(op) & _6bits);
     self.words.push(inst, vm);
     self.lines.push(@intCast(line), vm);
   }
 
   pub fn write1ArgInst(self: *Self, op: OpCode,  arg: u32, line: usize, vm: *VM) void {
-    // [op 6bits][reg 26bits]
-    const inst = ((@intFromEnum(op) & _6bits) << 26) | ((arg & _26bits));
+    // [reg 26bits][op 6bits]
+    const inst = ((arg & _26bits) << 6) | (@intFromEnum(op) & _6bits);
     self.words.push(inst, vm);
     self.lines.push(@intCast(line), vm);
   }
 
   pub fn writeNoArgInst(self: *Self, op: OpCode, line: usize, vm: *VM) void {
     // [op 6bits]
-    const inst = ((@intFromEnum(op) & _6bits) << 26);
+    const inst = (@intFromEnum(op) & _6bits);
     self.words.push(inst, vm);
     self.lines.push(@intCast(line), vm);
   }
@@ -141,11 +134,11 @@ pub const Code = extern struct {
   pub fn patch2ArgsJmp(self: *Self, index: usize) void {
     const inst = self.words.items[index];
     // get jmp_inst, arg1
-    const first = (inst >> 26) & _6bits;
-    const second = (inst >> 18) & _8bits;
+    const first = inst & _6bits;
+    const second = (inst >> 6) & _8bits;
     const real_offset = self.words.len - index - 1;
     checkOffset(real_offset, _18bits, "max jump offset exceeded");
-    const new = (first << 26) | (second << 18) | real_offset;
+    const new = real_offset << 14 | (second << 6) | first;
     self.words.items[index] = @intCast(new);
   }
 

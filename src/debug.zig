@@ -31,7 +31,7 @@ pub const Disassembler = struct {
   }
 
   pub fn _1ArgInst(name: []const u8, word: u32) void {
-    const a1 = word & Code._26bits;
+    const a1 = word & Code._26Bits;
     std.debug.print("{s} {}\n", .{name, a1});
   }
 
@@ -136,8 +136,8 @@ pub const Disassembler = struct {
         // jmp is a 1-arg inst using a 2-arg format.
         var rx = Code.readRX(word);
         std.debug.assert(rx == 0 or rx == 2);
-        const n = Code.readBX(word);
-        std.debug.print("jmp {s}{}\n", .{if (rx == 0) "-" else "", n});
+        const n = Code.readSBX(word);
+        std.debug.print("jmp {}\n", .{n});
       },
       .Load => {
         __2ArgsInst("load", word);

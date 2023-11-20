@@ -361,13 +361,13 @@ pub const Compiler = struct {
   /// return true if within RK limit else false
   fn withinRKLimit(self: *Self, num_operands: usize) bool {
     // check that we don't exceed the 9 bits of rk (+ num_operands for number of operands to be added)
-    return ((self.fun.code.values.len + value.MAX_REGISTERS + num_operands) <= value.Code._9bits);
+    return ((self.fun.code.values.len + value.MAX_REGISTERS + num_operands) <= value.Code._9Bits);
   }
 
   /// return true if within BX limit else false
   fn withinBXLimit(self: *Self) bool {
     // check that we don't exceed the 18 bits of bx (+ 1 for the new addition)
-    return ((self.fun.code.values.len + value.MAX_REGISTERS + 1) <= value.Code._18bits);
+    return ((self.fun.code.values.len + value.MAX_REGISTERS + 1) <= value.Code._18Bits);
   }
 
   fn addLocal(self: *Self, node: *ast.VarNode) !u32 {
@@ -1184,7 +1184,7 @@ pub const Compiler = struct {
         should_patch_if_then_to_end = false;
         break :blk @as(usize, 0);
       }
-      break :blk self.fun.code.write2ArgsJmp(.Jmp, 2, self.lastLine(), self.vm);
+      break :blk self.fun.code.write2ArgsSJmp(.Jmp, 2, false, self.lastLine(), self.vm);
     };
     var elifs_then_to_end: ds.ArrayList(usize) = undefined;
     // elifs-
@@ -1214,11 +1214,11 @@ pub const Compiler = struct {
     if (node.elifs.isNotEmpty()) {
       // patch up elif_then_to_end 
       for (elifs_then_to_end.items()) |idx| {
-        self.fun.code.patch2ArgsJmp(idx);
+        self.fun.code.patch2ArgsSJmp(idx);
       }
     }
     if (should_patch_if_then_to_end) {
-      self.fun.code.patch2ArgsJmp(if_then_to_end);
+      self.fun.code.patch2ArgsSJmp(if_then_to_end);
     }
     // self.leaveJmp();
     self.vreg.releaseReg(reg);
@@ -1242,13 +1242,13 @@ pub const Compiler = struct {
         should_patch_if_then_to_end = false;
         break :blk @as(usize, 0);
       }
-      break :blk self.fun.code.write2ArgsJmp(.Jmp, 2, self.lastLine(), self.vm);
+      break :blk self.fun.code.write2ArgsSJmp(.Jmp, 2, false, self.lastLine(), self.vm);
     };
     self.fun.code.patch2ArgsJmp(cond_to_else);
     // else-
     _ = try self.cBlock(node.els.block(), reg);
     if (should_patch_if_then_to_end) {
-      self.fun.code.patch2ArgsJmp(if_then_to_end);
+      self.fun.code.patch2ArgsSJmp(if_then_to_end);
     }
     // self.leaveJmp();
     self.vreg.releaseReg(reg);
@@ -1259,11 +1259,11 @@ pub const Compiler = struct {
     for (self.loop_ctrls.items()) |ctrl| {
       if (ctrl.isBreak()) {
         // this is a forward jmp, so patch the jmp offset
-        self.fun.code.patch2ArgsJmp(ctrl.patch_index);
+        self.fun.code.patch2ArgsSJmp(ctrl.patch_index);
       } else {
         // obtain offset to jmp forward to, then rewrite the jmp instruction
-        var offset: u32 = @intCast(ctrl.patch_index - loop_cond + 1);
-        _ = self.fun.code.write2ArgsInst(.Jmp, 0, offset, ctrl.token.line, self.vm);
+        const offset: i32 = @intCast(ctrl.patch_index - loop_cond + 1);
+        _ = self.fun.code.write2ArgsSignedInst(.Jmp, 0, -offset, ctrl.token.line, self.vm);
         self.fun.code.words.items[ctrl.patch_index] = self.fun.code.words.pop();
       }
     }
@@ -1281,8 +1281,8 @@ pub const Compiler = struct {
     _ = try self.cBlock(node.then.block(), reg);
     // loop to cond
     // +1 to include the jmp inst itself, which we already processed
-    var offset: u32 = @intCast(self.fun.code.getInstLen() - to_cond + 1);
-    _ = self.fun.code.write2ArgsInst(.Jmp, 0, offset, self.lastLine(), self.vm);
+    const offset: i32 = @intCast(self.fun.code.getInstLen() - to_cond + 1);
+    _ = self.fun.code.write2ArgsSignedInst(.Jmp, 0, -offset, self.lastLine(), self.vm);
     self.fun.code.patch2ArgsJmp(cond_to_exit);
     self.vreg.releaseReg(reg);
     // patch all loop controls
@@ -1293,10 +1293,10 @@ pub const Compiler = struct {
   fn cControl(self: *Self, node: *ast.ControlNode, dst: u32) u32 {
     if (node.isBreak()) {
       // jmp fwd
-      node.patch_index = self.fun.code.write2ArgsJmp(.Jmp, 2, node.token.line, self.vm);
+      node.patch_index = self.fun.code.write2ArgsSJmp(.Jmp, 2, false, node.token.line, self.vm);
     } else {
       // jmp bck
-      node.patch_index = self.fun.code.write2ArgsJmp(.Jmp, 0, node.token.line, self.vm);
+      node.patch_index = self.fun.code.write2ArgsSJmp(.Jmp, 0, true, node.token.line, self.vm);
     }
     self.loop_ctrls.append(node);
     return dst;
@@ -1305,11 +1305,11 @@ pub const Compiler = struct {
   /// returns jmp_to_next for patching the jmp to the next elif/else/,
   /// and jmp_to_end for patching the jmp to the end of the entire if-stmt
   fn cElif(self: *Self, node: *ast.ElifNode, reg: u32) !JmpPatch {
-    var rx = try self.c(node.cond, reg);
+    const rx = try self.c(node.cond, reg);
     // jmp to else, if any
-    var cond_jmp = self.fun.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
+    const cond_jmp = self.fun.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
     _ = try self.cBlock(node.then.block(), reg);
-    var then_jmp = self.fun.code.write2ArgsJmp(.Jmp, 2, self.lastLine(), self.vm);
+    const then_jmp = self.fun.code.write2ArgsSJmp(.Jmp, 2, false, self.lastLine(), self.vm);
     return .{.jmp_to_next = cond_jmp, .jmp_to_end = then_jmp};
   }
 

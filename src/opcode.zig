@@ -94,7 +94,7 @@ pub const OpCode = enum (u8) {
   // [6] [8]  [18]
   Jf, // jump if false
 
-  // jmp d, bx as jmp rx, bx
+  // jmp d, sbx as jmp _, sbx
   //  `---------> [6] [8]  [18]
   Jmp, // jump
 

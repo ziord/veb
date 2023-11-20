@@ -119,15 +119,21 @@ pub const VM = struct {
 
   inline fn read3Args(self: *Self, word: Inst, a1: *u32, a2: *u32, a3: *u32) void {
     _ = self;
-    a1.* = (word >> 6) & Code._8bits;
-    a2.* = (word >> 14) & Code._9bits;
-    a3.* = (word >> 23) & Code._9bits;
+    a1.* = (word >> 6) & Code._8Bits;
+    a2.* = (word >> 14) & Code._9Bits;
+    a3.* = (word >> 23) & Code._9Bits;
   }
 
   inline fn read2Args(self: *Self, word: Inst, a1: *u32, a2: *u32) void {
     _ = self;
-    a1.* = (word >> 6) & Code._8bits;
-    a2.* = (word >> 14) & Code._18bits;
+    a1.* = (word >> 6) & Code._8Bits;
+    a2.* = (word >> 14) & Code._18Bits;
+  }
+
+  inline fn readSigned2Args(self: *Self, word: Inst, sbx: *i32) void {
+    _ = self;
+    const mag: i32 = @intCast(((word & ((1 << 31) - 1)) >> 14) & Code._17Bits);
+    sbx.* = mag - @as(i32, @intCast(((word >> 31) & 1) << 17));
   }
 
   inline fn read1Arg(self: *Self, word: Inst, a: *u32) void {
@@ -718,13 +724,11 @@ pub const VM = struct {
           continue;
         },
         .Jmp => {
-          // jmp rx, bx
-          var direction: u32 = undefined;
-          var bx: u32 = undefined;
-          self.read2Args(code, &direction, &bx);
-          // 2 -> jmp fwd, 0 -> jmp bck
+          // jmp rx, sbx
+          var bx: i32 = undefined;
+          self.readSigned2Args(code, &bx);
           @setRuntimeSafety(false);
-          fp.ip = @intCast((@as(i64, @intCast(fp.ip))) + (@as(i64, @intCast(direction)) - 1) * (@as(i64, @intCast(bx))));
+          fp.ip = @intCast((@as(i64, @intCast(fp.ip))) + @as(i64, @intCast(bx)));
           continue;
         },
         .Not => {

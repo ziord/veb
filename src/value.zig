@@ -17,13 +17,13 @@ pub const Code = extern struct {
   lines: Vec(u32),
 
   const Self = @This();
-  pub const _6bits: u32 = 0x3f;
-  pub const _8bits: u32 = 0xff;
-  pub const _9bits: u32 = 0x1ff;
-  pub const _18bits: u32 = 0x3ffff;
-  pub const _26bits: u32 = 0x3ffffff;
-  pub const _32bits: u32 = 0xffffffff;
-  pub const _sign: u32 = 0x20000;
+  pub const _6Bits: u32 = 0x3f;
+  pub const _8Bits: u32 = 0xff;
+  pub const _9Bits: u32 = 0x1ff;
+  pub const _17Bits: u32 = 0x1ffff;
+  pub const _18Bits: u32 = 0x3ffff;
+  pub const _26Bits: u32 = 0x3ffffff;
+  pub const _32Bits: u32 = 0xffffffff;
 
   pub fn init() Self {
     return Self {
@@ -49,36 +49,44 @@ pub const Code = extern struct {
   pub inline fn readInstOp(word: u32) OpCode {
     // rk2 rk1 rx  [op] 
     //  9   9   8   6 
-    return @enumFromInt(word & _6bits);
+    return @enumFromInt(word & _6Bits);
   }
 
 
   pub inline fn readInstOpNoConv(word: u32) u32 {
-    return word & _6bits;
+    return word & _6Bits;
   }
 
   pub inline fn readRX(word: u32) u32 {
     // rk2 rk1 [rx] op 
     //  9   9   8   6       
-    return (word >> 6) & _8bits;
+    return (word >> 6) & _8Bits;
   }
 
   pub inline fn readRK1(word: u32) u32 {
     // rk2 [rk1] rx op 
     //  9    9   8   6   
-    return (word >> 14) & _9bits;
+    return (word >> 14) & _9Bits;
   }
 
   pub inline fn readRK2(word: u32) u32 {
     // [rk2] rk1 rx op 
     //  9    9   8   6  
-    return (word >> 23) & _9bits;
+    return (word >> 23) & _9Bits;
   }
 
   pub inline fn readBX(word: u32) u32 {
     // [bx] rx op 
     //  18  8  6
-    return (word >> 14) & _18bits;
+    return (word >> 14) & _18Bits;
+  }
+
+  pub inline fn readSBX(word: u32) i32 {
+    // [sbx] rx op 
+    //  18  8  6
+    const _word = word & ((1 << 31) - 1);
+    const mag: i32 = @intCast((_word >> 14) & _17Bits);
+    return mag - @as(i32, @intCast((((word >> 31) & 1)) << 17));
   }
 
   pub fn resetBy(self: *Self, n: u32) void {
@@ -95,29 +103,45 @@ pub const Code = extern struct {
 
   pub fn write3ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, arg3: u32, line: usize, vm: *VM) void {
     // [reg 9bits][reg 9bits][reg 8bits][op 6bits]
-    const inst = ((arg3 & _9bits) << 23) | ((arg2 & _9bits) << 14) | ((arg1 & _8bits) << 6) | (@intFromEnum(op) & _6bits);
+    const inst = ((arg3 & _9Bits) << 23) | ((arg2 & _9Bits) << 14) | ((arg1 & _8Bits) << 6) | (@intFromEnum(op) & _6Bits);
     self.words.push(inst, vm);
     self.lines.push(@intCast(line), vm);
   }
 
-  // TODO: signed
   pub fn write2ArgsInst(self: *Self, op: OpCode,  arg1: u32, arg2: u32, line: usize, vm: *VM) void {
     // [reg 18bits][reg 8bits][op 6bits]
-    const inst = ((arg2 & _18bits) << 14) | ((arg1 & _8bits) << 6) | (@intFromEnum(op) & _6bits);
+    const inst = ((arg2 & _18Bits) << 14) | ((arg1 & _8Bits) << 6) | (@intFromEnum(op) & _6Bits);
+    self.words.push(inst, vm);
+    self.lines.push(@intCast(line), vm);
+  }
+
+  pub fn write2ArgsSignedInst(self: *Self, op: OpCode,  arg1: u32, arg2: i32, line: usize, vm: *VM) void {
+    // [reg 1bit][reg 17bits][reg 8bits][op 6bits]
+    @setRuntimeSafety(false);
+    var sign_bit: u32 = 0;
+    var magnitude: u32 = 0;
+    if (arg2 >= 0) {
+      magnitude = @intCast(arg2);
+    } else {
+      // set sign_bit to 1 and add 2^bit_length to get the positive counterpart - two's complement form
+      sign_bit = 1;
+      magnitude = @intCast((1 << 17) + arg2);
+    }
+    const inst = (sign_bit << 31) | ((magnitude & _17Bits) << 14) | ((arg1 & _8Bits) << 6) | (@intFromEnum(op) & _6Bits);
     self.words.push(inst, vm);
     self.lines.push(@intCast(line), vm);
   }
 
   pub fn write1ArgInst(self: *Self, op: OpCode,  arg: u32, line: usize, vm: *VM) void {
     // [reg 26bits][op 6bits]
-    const inst = ((arg & _26bits) << 6) | (@intFromEnum(op) & _6bits);
+    const inst = ((arg & _26Bits) << 6) | (@intFromEnum(op) & _6Bits);
     self.words.push(inst, vm);
     self.lines.push(@intCast(line), vm);
   }
 
   pub fn writeNoArgInst(self: *Self, op: OpCode, line: usize, vm: *VM) void {
     // [op 6bits]
-    const inst = (@intFromEnum(op) & _6bits);
+    const inst = (@intFromEnum(op) & _6Bits);
     self.words.push(inst, vm);
     self.lines.push(@intCast(line), vm);
   }
@@ -125,8 +149,7 @@ pub const Code = extern struct {
   pub fn write2ArgsJmp(self: *Self, op: OpCode, arg1: u32, line: usize, vm: *VM) usize {
     // jmp_inst, arg1, dummy_offset
     //   [6]      [8]     [18]
-    const offset = 0x40000;
-    self.write2ArgsInst(op, arg1, offset, line, vm);
+    self.write2ArgsInst(op, arg1, 0x40000, line, vm);
     // return instruction offset
     return self.words.len - 1;
   }
@@ -134,11 +157,37 @@ pub const Code = extern struct {
   pub fn patch2ArgsJmp(self: *Self, index: usize) void {
     const inst = self.words.items[index];
     // get jmp_inst, arg1
-    const first = inst & _6bits;
-    const second = (inst >> 6) & _8bits;
+    const first = inst & _6Bits;
+    const second = (inst >> 6) & _8Bits;
     const real_offset = self.words.len - index - 1;
-    checkOffset(real_offset, _18bits, "max jump offset exceeded");
+    checkOffset(real_offset, _18Bits, "max jump offset exceeded");
     const new = real_offset << 14 | (second << 6) | first;
+    self.words.items[index] = @intCast(new);
+  }
+
+  pub fn write2ArgsSJmp(self: *Self, op: OpCode, arg1: u32, signed: bool, line: usize, vm: *VM) usize {
+    // jmp_inst, arg1, dummy_offset
+    //   [6]      [8]     [18]
+    self.write2ArgsSignedInst(op, arg1, if (signed) -0x40000 else 0x40000, line, vm);
+    // return instruction offset
+    return self.words.len - 1;
+  }
+
+  pub fn patch2ArgsSJmp(self: *Self, index: usize) void {
+    const inst = self.words.items[index];
+    // get jmp_inst, arg1
+    const sign_bit = (inst >> 31) & 1;
+    const first = inst & _6Bits;
+    const second = (inst >> 6) & _8Bits;
+    const real_offset = self.words.len - index - 1;
+    checkOffset(real_offset, _17Bits, "max jump offset exceeded");
+    var _offset: u32 = 0;
+    if (sign_bit == 0) {
+      _offset = @intCast(real_offset);
+    } else {
+      _offset = @intCast((1 << 17) - real_offset);
+    }
+    const new = (sign_bit << 31) | (_offset << 14) | (second << 6) | first;
     self.words.items[index] = @intCast(new);
   }
 

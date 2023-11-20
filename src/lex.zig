@@ -364,10 +364,6 @@ pub const Token = struct {
     return self.ty == ty;
   }
 
-  pub fn isEof(self: @This()) bool {
-    return self.is(.TkEof);
-  }
-
   pub fn eql(self: @This(), other: @This()) bool {
     return self.offset == other.offset and self.ty == other.ty;
   }
@@ -429,15 +425,6 @@ pub const Token = struct {
     return src[start_col..end_col];
   }
 
-  fn printSquig(self: @This(), i: usize) void {
-    _ = self;
-    var y = i;
-    while (y > 0) {
-      std.debug.print("{s:^}", .{"^"});
-      y -= 1;
-    }
-  }
-
   pub fn getDefault() Token {
     return Token {
       .ty = TokenType.TkEof,
@@ -459,21 +446,6 @@ pub const Token = struct {
     new.value = val;
     new.ty = ty;
     return new;
-  }
-
-  pub fn showError(self: @This(), filename: []const u8, src: []const u8, comptime fmt: []const u8, args: anytype) void {
-    var loc = self.getLine(src);
-    var col = self.column(src);
-    std.debug.print(fmt ++ "\n", args);
-    std.debug.print("{s}.{}:{}:\n\t{s}\n", .{filename, self.line, col, loc});
-    std.debug.print("\t", .{});
-    var i = if (col >= self.value.len) col - self.value.len else self.value.len - col;
-    while (i > 0) {
-      std.debug.print(" ", .{});
-      i -= 1;
-    }
-    self.printSquig(if (self.value.len != 0) self.value.len else 1);
-    std.debug.print("\n", .{});
   }
 };
 

@@ -90,7 +90,7 @@ pub fn _Writer(
     pub fn writeAll(self: Self, bytes: []const u8) void {
       var index: usize = 0;
       while (index != bytes.len) {
-          index += self.write(bytes[index..], self.vm);
+        index += self.write(bytes[index..], self.vm);
       }
     }
 

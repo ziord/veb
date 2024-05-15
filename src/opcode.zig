@@ -46,6 +46,10 @@ pub const OpCode = enum (u8) {
   // [6]  [8]  [9]    [9]
   Istag, // type check
 
+  // istoc rx, rk(x), rk(y)
+  // [6]  [8]  [9]    [9]
+  Istoc, // type check
+
   // shr rx, rk(x), rk(y)
   // [6] [8]  [9]    [9]
   Shr, // bitwise right-shift

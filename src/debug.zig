@@ -65,6 +65,7 @@ pub const Disassembler = struct {
       .Is => _3ArgsInst("is", word),
       .Iscls => _3ArgsInst("iscls", word),
       .Istag => _3ArgsInst("istag", word),
+      .Istoc => _3ArgsInst("istoc", word),
       .Shl => _3ArgsInst("shl", word),
       .Shr => _3ArgsInst("shr", word),
       .Not => _3ArgsInst("not", word),
@@ -102,16 +103,16 @@ pub const Disassembler = struct {
       .Fcls => _2ArgsInst("fcls", word),
       .Bclo => {
         _2ArgsInst("bclo", word);
-        var bx = Code.readBX(word);
-        var tmp = if (bx >= value.MAX_REGISTERS) bx - value.MAX_REGISTERS 
+        const bx = Code.readBX(word);
+        const tmp = if (bx >= value.MAX_REGISTERS) bx - value.MAX_REGISTERS 
                   else Code.readBX(code.words.items[idx - 1]); // read the index off the prev inst
         var envlen = value.asFn(code.values.items[tmp]).envlen;
         if (envlen > 0) {
           var i = idx + 1;
           while (envlen > 0): (envlen -= 1) {
-            var inst = code.words.items[i];
-            var is_local = Code.readRX(inst);
-            var slot = Code.readBX(inst);
+            const inst = code.words.items[i];
+            const is_local = Code.readRX(inst);
+            const slot = Code.readBX(inst);
             i += 1;
             std.debug.print("   |\t{d:0>4}\tupvalue -> {{index: {}, is_local: {}}}\n", .{i, slot, is_local});
           }
@@ -134,14 +135,14 @@ pub const Disassembler = struct {
       },
       .Jmp => {
         // jmp is a 1-arg inst using a 2-arg format.
-        var rx = Code.readRX(word);
+        const rx = Code.readRX(word);
         std.debug.assert(rx == 0 or rx == 2);
         const n = Code.readSBX(word);
         std.debug.print("jmp {}\n", .{n});
       },
       .Load => {
         __2ArgsInst("load", word);
-        var bx = Code.readBX(word);
+        const bx = Code.readBX(word);
         std.debug.print("   ( ", .{});
         value.printValue(code.values.items[bx]);
         std.debug.print(" )\n", .{});

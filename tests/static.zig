@@ -161,7 +161,7 @@ test "simple-classes-1" {
 test "generic-classes-1" {
   var src =
   \\ let j = [1, 2, 3]
-  \\ let p = (j.pop().??) + 4
+  \\ let p = (j.pop().?) + 4
   \\ j.append(4)
   \\ let k = (j, p)
   \\ p += k.len()
@@ -169,9 +169,9 @@ test "generic-classes-1" {
   \\ let x = {'a': 5, 'b': 6}
   \\ x.keys().len()
   \\ x.values().len()
-  \\ x.get('a').?? + 12
+  \\ x.get('a').? + 12
   \\ let j = [1, 2, 3]
-  \\ let p = (j.pop().??) + 4
+  \\ let p = (j.pop().?) + 4
   ;
   try doStaticTest(src);
 }
@@ -195,7 +195,7 @@ test "generic-classes-2" {
   \\      return fun
   \\    end
   \\ end
-  \\ let x = Fox{num}(6, 7, 8)
+  \\ let x = Fox(6, 7, 8)
   \\ let t: Fox{num} = x
   \\ t.pulse().x[0] + 12
   \\ t.pulse().getGen()(('starters',))

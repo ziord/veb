@@ -3,3 +3,4 @@ zig-out
 .lang
 .vscode
 .DS_Store
+lib

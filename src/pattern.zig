@@ -1,19 +1,23 @@
 const std = @import("std");
-const types = @import("type.zig");
-const ast = @import("ast.zig");
+const tir = @import("tir.zig");
 const ks = @import("constants.zig");
 const ds = @import("ds.zig");
 const util = @import("util.zig");
 const check = @import("check.zig");
 const diagnostics = @import("diagnostics.zig");
 
-const Type = types.Type;
-const Token = @import("lex.zig").Token;
+const Allocator = tir.Allocator;
+const Type = tir.Type;
+const TokenType = tir.TokenType;
+const Token = tir.Token;
+const Node = tir.Node;
 const TypeChecker = check.TypeChecker;
 const Diagnostic = diagnostics.Diagnostic;
 const U8Writer = util.U8Writer;
 const addDepth = util.addDepth;
 const logger = check.logger;
+const PSlice = []*Pattern;
+pub const Patterns = ds.ArrayList(*Pattern);
 
 /// C(p1...pn)
 pub const Constructor = struct {
@@ -21,14 +25,24 @@ pub const Constructor = struct {
   builtin: bool,
   /// has rest pattern
   rested: bool,
+  /// from map pattern
+  from_map: bool = false,
+  /// token type corresponding to `name`
+  tktype: TokenType,
   tag: ConsTag,
-  args: ds.ArrayList(*Pattern),
+  args: PSlice,
   name: []const u8,
-  node: ?*ast.AstNode = null,
-  typ: ?*Type = null,
+  node: ?*Node = null,
 
-  pub fn init(name: []const u8, builtin: bool, tag: ConsTag, rested: bool, al: std.mem.Allocator) @This() {
-    return @This(){.name = name, .builtin = builtin, .tag = tag, .rested = rested, .args = ds.ArrayList(*Pattern).init(al)};
+  pub fn init(name: []const u8, tktype: TokenType, builtin: bool, tag: ConsTag, rested: bool) @This() {
+    return @This(){.name = name, .builtin = builtin, .tag = tag, .rested = rested, .args = &[_]*Pattern{}, .tktype = tktype};
+  }
+
+  pub fn append(self: *Constructor, pattern: *Pattern, al: Allocator) void {
+    const items = util.allocSlice(*Pattern, self.args.len + 1, al);
+    @memcpy(items[0..self.args.len], self.args);
+    items[self.args.len] = pattern;
+    self.args = items;
   }
 
   pub fn eql(self: *@This(), other: *@This()) bool {
@@ -36,7 +50,7 @@ pub const Constructor = struct {
   }
 
   pub fn hasField(self: *@This()) bool {
-    for (self.args.items()) |arg| {
+    for (self.args) |arg| {
       if (arg.alat.hasField()) {
         return true;
       }
@@ -44,38 +58,36 @@ pub const Constructor = struct {
     return false;
   }
 
-  pub fn newOrCons(al: std.mem.Allocator) @This() {
-    return @This().init("$OR", true, .Or, false, al);
+  pub fn newOrCons() @This() {
+    return @This().init("$OR", .TkIdent, true, .Or, false);
   }
 
-  pub fn newListCons(al: std.mem.Allocator) @This() {
-    return @This().init(ks.ListVar, true, .List, false, al);
+  pub fn newListCons() @This() {
+    return @This().init(ks.ListVar, .TkList, true, .List, false);
   }
 
-  pub fn newTupleCons(al: std.mem.Allocator) @This() {
-    return @This().init(ks.TupleVar, true, .Tuple, false, al);
+  pub fn newTupleCons() @This() {
+    return @This().init(ks.TupleVar, .TkTuple, true, .Tuple, false);
   }
 
-  pub fn newMapCons(al: std.mem.Allocator) @This() {
-    return @This().init(ks.MapVar, true, .Map, false, al);
+  pub fn newMapCons() @This() {
+    return @This().init(ks.MapVar, .TkMap, true, .Map, false);
   }
   
-  pub fn newClassCons(name: []const u8, node: *ast.AstNode, al: std.mem.Allocator) @This() {
-    var this = @This().init(name, false, .Other, false, al);
+  pub fn newClassCons(name: []const u8, tktype: TokenType, node: *Node) @This() {
+    var this = @This().init(name, tktype, false, .Other, false);
     this.node = node;
     return this;
   }
 
-  pub fn newLiteralCons(node: *ast.AstNode, al: std.mem.Allocator) @This() {
+  pub fn newLiteralCons(node: *Node, al: Allocator) @This() {
     var name = switch (node.*) {
-      .AstNil, .AstBool, .AstString => |*lit| lit.token.value,
-      .AstNumber => |*lit| blk: {
-        if (lit.value > 0) break :blk lit.token.value;
-        break :blk std.fmt.allocPrint(al, "lit.{d}", .{lit.value}) catch @panic("could not generate lit.cons.");
-      },
+      .NdBool => |*lit| lit.token.lexeme(),
+      .NdString => |*lit| lit.token.lexeme(),
+      .NdNumber => |*lit| lit.lexeme(al),
       else => unreachable
     };
-    var this = @This().init(name, true, .Literal, false, al);
+    var this = @This().init(name, .TkIdent, true, .Literal, false);
     this.node = node;
     return this;
   }
@@ -84,20 +96,20 @@ pub const Constructor = struct {
     return self.name;
   }
 
-  pub fn toVariant(self: @This(), al: std.mem.Allocator) *MatchVariant {
+  pub fn toVariant(self: @This(), al: Allocator) *MatchVariant {
     return util.box(MatchVariant, .{.cons = self}, al);
   }
 
-  pub fn clone(self: *@This(), al: std.mem.Allocator) @This() {
-    var new = @This().init(self.name, self.builtin, self.tag, self.rested, al);
-    for (self.args.items()) |arg| {
-      new.args.append(arg.clone(al));
+  pub fn clone(self: *@This(), al: Allocator) @This() {
+    var new = @This().init(self.name, self.tktype, self.builtin, self.tag, self.rested);
+    var args = Patterns.initCapacity(self.args.len, al);
+    for (self.args) |arg| {
+      args.appendAssumeCapacity(arg.clone(al));
     }
-    if (self.node) |node| {
-      new.node = node.clone(al);
-    }
-    if (self.typ) |typ| {
-      new.typ = typ.clone(al);
+    new.from_map = self.from_map;
+    new.args = args.items();
+    if (self.node) |nd| {
+      new.node = nd.clone(al);
     }
     return new;
   }
@@ -109,13 +121,13 @@ pub const Constructor = struct {
       _ = try writer.write("lit.");
     }
     _ = try writer.write(self.name);
-    if (self.args.isEmpty()) {
+    if (self.args.len == 0) {
       _ = try writer.write("()");
       return;
     }
     _ = try writer.write("(\n");
-    const len = self.args.len() -| 1;
-    for (self.args.items(), 0..) |itm, i| {
+    const len = self.args.len -| 1;
+    for (self.args, 0..) |itm, i| {
       try addDepth(&writer, depth + 2);
       try itm.render(depth + 2, u8w);
       if (i < len) _ = try writer.write(",\n");
@@ -128,17 +140,17 @@ pub const Constructor = struct {
 
 /// x => E
 pub const Variable = struct {
-  ident: *ast.AstNode,
+  ident: *Node,
 
-  pub fn init(ident: *ast.AstNode) @This() {
+  pub fn init(ident: *Node) @This() {
     return @This(){.ident = ident};
   }
 
-  pub fn toVariant(self: @This(), al: std.mem.Allocator) *MatchVariant {
+  pub fn toVariant(self: @This(), al: Allocator) *MatchVariant {
     return util.box(MatchVariant, .{.vari = self}, al);
   }
 
-  pub fn clone(self: @This(), al: std.mem.Allocator) @This() {
+  pub fn clone(self: @This(), al: Allocator) @This() {
     return @This(){.ident = self.ident.clone(al)};
   }
 
@@ -146,7 +158,7 @@ pub const Variable = struct {
     var writer = u8w.writer();
     try addDepth(&writer, depth + 1);
     _ = try writer.write("Variable(");
-    _ = try writer.write(self.ident.AstVar.token.value);
+    _ = try writer.write(self.ident.NdTVar.value());
     _ = try writer.write(")");
   }
 };
@@ -162,11 +174,11 @@ pub const Wildcard = struct {
     return @This(){.token = token, .generated = generated};
   }
 
-  pub fn toVariant(self: @This(), al: std.mem.Allocator) *MatchVariant {
+  pub fn toVariant(self: @This(), al: Allocator) *MatchVariant {
     return util.box(MatchVariant, .{.wildc = self}, al);
   }
 
-  pub fn clone(self: @This(), al: std.mem.Allocator) @This() {
+  pub fn clone(self: @This(), al: Allocator) @This() {
     _ = al;
     return self;
   }
@@ -181,22 +193,21 @@ pub const Wildcard = struct {
 
 /// idi is Ci
 pub const Relation = struct {
-  ident: *ast.AstNode,
+  ident: *Node, // TVarNode
   pattern: *Pattern,
 
-  pub fn varRelationToVarDecl(self: *const @This(), al: std.mem.Allocator) *ast.AstNode {
+  pub fn varRelationToVarDecl(self: *const @This(), al: Allocator) *Node {
     // a is y -> let y = a
-    var node = ast.AstNode.create(al);
-    const vr = self.pattern.variant.vari.ident.clone(al);
-    node.* = .{.AstVarDecl = ast.VarDeclNode.init(&vr.AstVar, self.ident.clone(al), false)};
-    return node;
+    return Node.new(.{
+      .NdVarDecl = tir.VarDeclNode.init(self.pattern.variant.vari.ident.NdTVar.token, self.ident, null)
+    }, al);
   }
 
-  pub fn clone(self: @This(), al: std.mem.Allocator) @This() {
-    return @This(){.ident = self.ident.clone(al), .pattern = self.pattern.clone(al)};
+  pub fn clone(self: @This(), al: Allocator) @This() {
+    return @This(){.ident = self.ident, .pattern = self.pattern.clone(al)};
   }
 
-  pub fn toVariant(self: @This(), al: std.mem.Allocator) *MatchVariant {
+  pub fn toVariant(self: @This(), al: Allocator) *MatchVariant {
     return util.box(MatchVariant, .{.rel = self}, al);
   }
 
@@ -212,18 +223,22 @@ pub const Relation = struct {
 pub const MultiRelation = struct {
   relations: RelationList,
 
-  pub const RelationList = ds.ArrayList(Relation);
+  pub const RelationList = ds.ArrayListUnmanaged(Relation);
 
-  pub fn init(al: std.mem.Allocator) @This() {
-    return @This(){.relations = RelationList.init(al)};
+  pub fn init() @This() {
+    return @This(){.relations = RelationList.init()};
   }
 
-  pub fn toVariant(self: @This(), al: std.mem.Allocator) *MatchVariant {
+  pub fn initCapacity(cap: usize, al: Allocator) @This() {
+    return @This(){.relations = RelationList.initCapacity(cap, al)};
+  }
+
+  pub fn toVariant(self: @This(), al: Allocator) *MatchVariant {
     return util.box(MatchVariant, .{.mrel = self}, al);
   }
 
-  pub fn clone(self: *@This(), al: std.mem.Allocator) @This() {
-    return @This(){.relations = RelationList.clone(&self.relations, al)};
+  pub fn clone(self: *@This(), al: Allocator) @This() {
+    return @This(){.relations = self.relations.clone(al)};
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
@@ -242,10 +257,10 @@ pub const Pattern = struct {
 
   /// attribute or alias
   pub const AliasOrAttr = struct {
-    alias: ?*ast.AstNode = null,
-    field: ?*ast.AstNode = null,
+    alias: ?*Node = null,
+    field: ?*Node = null,
 
-    pub fn init(alias: ?*ast.AstNode, field: ?*ast.AstNode) @This() {
+    pub fn init(alias: ?*Node, field: ?*Node) @This() {
       return .{.alias = alias, .field = field};
     }
 
@@ -257,9 +272,9 @@ pub const Pattern = struct {
       return self.field != null;
     }
 
-    pub fn clone(self: @This(), al: std.mem.Allocator) @This() {
-      const field = if (self.field) |node| node.clone(al) else self.field;
-      const alias = if (self.alias) |node| node.clone(al) else self.alias;
+    pub fn clone(self: @This(), al: Allocator) @This() {
+      const field = if (self.field) |field| field.clone(al) else self.field;
+      const alias = if (self.alias) |alias| alias.clone(al) else self.alias;
       return .{.alias = alias, .field = field};
     }
   };
@@ -310,27 +325,16 @@ pub const Pattern = struct {
     };
   }
 
-  pub fn setType(self: *@This(), ty: *Type) void {
-    switch (self.variant.*) {
-      .cons => |*cons| {
-        cons.typ = ty;
-      },
-      .vari => |*vari| {
-        vari.ident.AstVar.typ = ty;
-      },
-      .wildc => {},
-      else => unreachable,
-    }
-  }
-
-  pub inline fn box(self: @This(), al: std.mem.Allocator) *Pattern {
+  pub inline fn box(self: @This(), al: Allocator) *Pattern {
     return util.box(Pattern, self, al);
   }
 
-  pub fn clone(self: *@This(), al: std.mem.Allocator) *@This() {
-    const capture = self.alat.clone(al);
-    const pat = @This(){.variant = self.variant.clone(al), .alat = capture, .token = self.token};
-    return pat.box(al);
+  pub fn clone(self: *@This(), al: Allocator) *@This() {
+    return (@This(){
+        .variant = self.variant.clone(al),
+        .alat = self.alat.clone(al),
+        .token = self.token
+      }).box(al);
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
@@ -338,11 +342,11 @@ pub const Pattern = struct {
     var writer = u8w.writer();
     if (self.alat.hasField()) {
       _ = try writer.write(" as-field ");
-      _ = try writer.write(self.alat.field.?.AstVar.token.value);
+      _ = try writer.write(self.alat.field.?.NdTVar.value());
     }
     if (self.alat.hasAlias()) {
       _ = try writer.write(" as ");
-      _ = try writer.write(self.alat.alias.?.AstVar.token.value);
+      _ = try writer.write(self.alat.alias.?.NdTVar.value());
     }
   }
 };
@@ -350,46 +354,42 @@ pub const Pattern = struct {
 /// a body of actions
 pub const Body = struct {
   /// the main body - in reverse order if `reversed`
-  node: *ast.AstNode,
-  reversed: bool,
+  node: *Node,
+  decls: tir.NodeListU,
 
-  pub fn init(node: *ast.AstNode, rev: bool, al: std.mem.Allocator) @This() {
-    var block: *ast.AstNode = undefined;
-    var reversed = rev;
+  pub fn init(node: *Node, rev: bool, al: Allocator) @This() {
+    _ = rev;
+    var block: *Node = undefined;
     if (node.isBlock()) {
       block = node;
-      if (!rev) {
-        block.block().nodes.reverse();
-        reversed = true;
-      }
     } else {
-      block = ast.BlockNode.newBlockWithNodes(al, &[_]*ast.AstNode{node});
-      reversed = true;
+      block = tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{node}), al);
     }
-    return @This(){.node = block, .reversed = reversed};
+    return @This(){.node = block, .decls = tir.NodeListU.init()};
   }
 
-  pub fn addNode(self: *@This(), node: *ast.AstNode) void {
-    return self.node.block().nodes.append(node);
+  pub fn addNode(self: *@This(), node: *Node, al: Allocator) void {
+    return self.decls.append(node, al);
   }
 
-  pub fn clone(self: *@This(), al: std.mem.Allocator) @This() {
-    return @This(){.node = self.node.clone(al), .reversed = self.reversed};
+  pub fn clone(self: *@This(), al: Allocator) @This() {
+    return @This(){.node = self.node.clone(al), .decls = self.decls.clone(al)};
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
-    const len = self.node.block().nodes.len();
+    var block = self.node.block();
+    const len = block.nodes.len;
     var writer = u8w.writer();
     try addDepth(&writer, depth + 1);
     if (len > 0) {
       _ = try writer.write("body(\n");
       for (0..len) |i| {
-        const node = self.node.block().nodes.itemAt(len - i - 1);
+        const node = block.nodes[len - i - 1];
         try addDepth(&writer, (depth + 2) * 2 + 1);
         if (node.isVarDecl()) {
-          const vd = node.AstVarDecl;
-          const source = if (vd.value.isVariable()) vd.value.AstVar.token.value else "$expr";
-          const str = std.fmt.allocPrint(u8w.allocator(), "let {s} = {s}\n", .{vd.ident.token.value, source}) catch unreachable;
+          const vd = node.NdVarDecl;
+          const source = if (vd.value.isTVariable()) vd.value.NdTVar.value() else "$expr";
+          const str = std.fmt.allocPrint(u8w.allocator(), "let {s} = {s}\n", .{vd.name.lexeme(), source}) catch unreachable;
           _ = try writer.write(str);
         } else {
           _ = try writer.write("[node]\n");
@@ -402,17 +402,26 @@ pub const Body = struct {
     }
   }
 
-  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer, parent: ?*Constructor) !*ast.AstNode {
-    return t.tLeaf(self, parent);
+  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer, parent: ?*Constructor, skip_cons_test: bool) !*Node {
+    _ = parent;
+    _ = skip_cons_test;
+    return t.tLeaf(self, false);
   }
 };
 
-/// from Maranget's decision tree (with gaurds added)
+/// from Maranget's (with gaurds added from Yorick's)
 const Result = union(enum) {
   leaf: Leaf,
   fail: Fail,
   swch: Switch,
   gard: Guard,
+
+  pub fn isSwitch(self: *@This()) bool {
+    return switch (self.*) {
+      .swch => true,
+      else => false,
+    };
+  }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     switch (self.*) {
@@ -420,7 +429,7 @@ const Result = union(enum) {
     }
   }
 
-  pub fn clone(self: *@This(), al: std.mem.Allocator) *@This() {
+  pub fn clone(self: *@This(), al: Allocator) *@This() {
     return switch (self.*) {
       .leaf => |*nd| util.box(Result, .{.leaf = nd.clone(al)}, al),
       inline else => |*nd| nd.clone(al),
@@ -441,18 +450,20 @@ const Fail = struct {
     _ = try writer.write("Fail");
   }
 
-  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer, parent: ?*Constructor) !*ast.AstNode {
-    return t.tFail(self, parent);
+  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer, parent: ?*Constructor, skip_cons_test: bool) !*Node {
+    _ = parent;
+    _ = skip_cons_test;
+    return t.tFail(self);
   }
 
-  fn clone(self: *@This(), al: std.mem.Allocator) *Result {
+  fn clone(self: *@This(), al: Allocator) *Result {
     return util.box(Result, .{.fail = self.*}, al);
   }
 };
 
 /// Guard -> if cond => ..
 pub const Guard = struct {
-  cond: *ast.AstNode,
+  cond: *Node,
   body: Leaf,
   fallback: *Result,
 
@@ -476,26 +487,30 @@ pub const Guard = struct {
     _ = try writer.write(")\n");
   }
 
-  fn clone(self: *@This(), al: std.mem.Allocator) *Result {
-    const cln: Guard = .{.cond = self.cond.clone(al), .body = self.body.clone(al), .fallback = self.fallback.clone(al)};
+  fn clone(self: *@This(), al: Allocator) *Result {
+    const cln: Guard = .{
+      .cond = self.cond.clone(al),
+      .body = self.body.clone(al),
+      .fallback = self.fallback.clone(al)
+    };
     return util.box(Result, .{.gard = cln}, al);
   }
 
-  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer, parent: ?*Constructor) !*ast.AstNode {
-    return t.tGuard(self, parent);
+  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer, parent: ?*Constructor, skip_cons_test: bool) !*Node {
+    return t.tGuard(self, parent, skip_cons_test);
   }
 };
 
 /// Switch o (L) -> multiway test, o is an occurrence
 const Switch = struct {
   /// occurrence
-  occ: *ast.AstNode,
+  occ: *Node,
   /// branch
   branches: [2]Branch,
   /// error location token
   token: Token,
 
-  pub fn init(expr: *ast.AstNode, token: Token) @This() {
+  pub fn init(expr: *Node, token: Token) @This() {
     return @This(){.occ = expr, .branches = undefined, .token = token};
   }
 
@@ -503,7 +518,7 @@ const Switch = struct {
     var writer = u8w.writer();
     try addDepth(&writer, depth + 1);
     _ = try writer.write("Switch (");
-    _ = try writer.write(self.occ.AstVar.token.value);
+    _ = try writer.write(self.occ.NdTVar.value());
     _ = try writer.write(",\n");
     for (self.branches[0..]) |*branch| {
       try addDepth(&writer, depth + 2);
@@ -514,15 +529,15 @@ const Switch = struct {
     _ = try writer.write(")\n");
   }
 
-  fn clone(self: *@This(), al: std.mem.Allocator) *Result {
+  fn clone(self: *@This(), al: Allocator) *Result {
     var swch = @This().init(self.occ.clone(al), self.token);
     swch.branches[0] = self.branches[0].clone(al);
     swch.branches[1] = self.branches[1].clone(al);
     return util.box(Result, .{.swch = swch}, al);
   }
 
-  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer, parent: ?*Constructor) !*ast.AstNode {
-    return t.tSwitch(self, parent);
+  inline fn transform(self: *@This(), comptime Transformer: type, t: *Transformer, parent: ?*Constructor, skip_cons_test: bool) !*Node {
+    return t.tSwitch(self, parent, skip_cons_test);
   }
 };
 
@@ -561,7 +576,7 @@ const Branch = struct {
   /// Switch | Guard | Leaf | Fail
   rhs: *Result,
 
-  fn clone(self: *@This(), al: std.mem.Allocator) @This() {
+  fn clone(self: *@This(), al: Allocator) @This() {
     const lhs: Test = (
       if (self.lhs.isConstructor()) .{.cons = self.lhs.cons.clone(al)}
       else .{.wildc = self.lhs.wildc.clone(al)}
@@ -593,10 +608,10 @@ pub const MatchVariant = union (enum) {
   vari: Variable,
   wildc: Wildcard,
 
-  pub fn clone(self: *@This(), al: std.mem.Allocator) *@This() {
+  pub fn clone(self: *@This(), al: Allocator) *@This() {
     const variant: MatchVariant = switch (self.*) {
-      .cons => |*c| .{.cons = @constCast(c).clone(al)},
-      .mrel => |*m| .{.mrel = @constCast(m).clone(al)},
+      .cons => |*c| .{.cons = c.clone(al)},
+      .mrel => |*m| .{.mrel = m.clone(al)},
       .rel => |r| .{.rel = r.clone(al)},
       .vari => |v| .{.vari = v.clone(al)},
       .wildc => |w| .{.wildc = w.clone(al)},
@@ -624,25 +639,26 @@ pub const ConsTag = enum (u8) {
 /// case P1...Pn [guard] => E
 pub const Case = struct {
   pattern: *Pattern,
-  guard: ?*ast.AstNode,
+  guard: ?*Node,
   body: Body,
 
-  pub fn init(pattern: *Pattern, guard: ?*ast.AstNode, body: *ast.AstNode, rev: bool, al: std.mem.Allocator) @This() {
+  pub const CaseList = ds.ArrayList(*Case);
+
+  pub fn init(pattern: *Pattern, guard: ?*Node, body: *Node, rev: bool, al: Allocator) @This() {
     return @This(){.pattern = pattern, .guard = guard, .body = Body.init(body, rev, al)};
   }
 
-  pub fn  new(pattern: *Pattern, guard: ?*ast.AstNode, body: *ast.AstNode, rev: bool, al: std.mem.Allocator) *@This() {
+  pub fn new(pattern: *Pattern, guard: ?*Node, body: *Node, rev: bool, al: Allocator) *@This() {
     const case = @This().init(pattern, guard, body, rev, al);
     return util.box(Case, case, al);
   }
 
-  pub fn from(self: *@This(), pat: *Pattern, al: std.mem.Allocator) *@This() {
+  pub fn from(self: *@This(), pat: *Pattern, al: Allocator) *@This() {
     const guard = if (self.guard) |guard| guard.clone(al) else self.guard;
-    const case = @This(){.pattern = pat, .guard = guard, .body = self.body.clone(al)};
-    return util.box(Case, case, al);
+    return util.box(Case, @This(){.pattern = pat, .guard = guard, .body = self.body.clone(al)}, al);
   }
 
-  pub fn clone(self: *@This(), al: std.mem.Allocator) *@This() {
+  pub fn clone(self: *@This(), al: Allocator) *@This() {
     const guard = if (self.guard) |guard| guard.clone(al) else self.guard;
     const case = @This(){.pattern = self.pattern.clone(al), .guard = guard, .body = self.body.clone(al)};
     return util.box(Case, case, al);
@@ -661,23 +677,23 @@ pub const Case = struct {
 };
 
 pub const MatchCompiler = struct {
-  allocator: std.mem.Allocator,
+  allocator: Allocator,
   diag: *Diagnostic,
   namegen: util.NameGen,
   u8w: U8Writer,
-  /// store (body) nodes that may/may not have been included in the decision tree
-  failure: ds.ArrayHashMap(*Node, FailStatus),
+  /// store (body) nodes that may/may not have been included in the decision ir
+  failure: ds.ArrayHashMapUnmanaged(*Node, FailStatus),
   /// select a constructor to test based on some heuristic
   heuristic: SelectionHeuristic,
+  /// transform a decision ir into lowered form
   dtt: DecisionTreeTransformer,
 
   const Self = @This();
-  const Node = ast.AstNode;
-  const CaseList = ds.ArrayList(*Case);
+  pub const CaseList = Case.CaseList;
   pub const MatchError = error{MatchError};
 
-  /// determine if the body of this case was included in the decision tree or not.
-  /// every body included in the decision tree / result ends up being removed from
+  /// determine if the body of this case was included in the decision ir or not.
+  /// every Body included in the decision ir / result ends up being removed from
   /// `self.failure`, that is, `removed` here is set to false. 
   const FailStatus = struct {
     removed: bool,
@@ -714,7 +730,7 @@ pub const MatchCompiler = struct {
       }
     };
 
-    fn init(al: std.mem.Allocator) @This() {
+    fn init(al: Allocator) @This() {
       return @This(){
         .row = RowMap.init(al),
         .col = ColumnMap.init(al),
@@ -748,7 +764,6 @@ pub const MatchCompiler = struct {
     /// check along a given row, if there are multiple constructors that share the same
     /// name with the current best constructor - `best`
     fn isATiedConstructor(self: *@This(), mrel: *MultiRelation, best: []const u8) bool {
-      defer self.disamb.clearRetainingCapacity();
       for (mrel.relations.items()) |rel| {
         if (rel.pattern.isConstructor()) {
           const cons_name = rel.pattern.variant.cons.cname();
@@ -768,7 +783,6 @@ pub const MatchCompiler = struct {
     }
 
     fn selectTest(self: *@This(), cases: *CaseList) usize {
-      // TODO: Need to separate generic Constructors from non-generic ones
       // select a test in the first clause, that is present in the maximum number of other clauses
       // if the first case has a pattern that isn't a multirelation, there's no choice
       if (!cases.itemAt(0).pattern.isMultiRelation()) return 0;
@@ -851,20 +865,16 @@ pub const MatchCompiler = struct {
     }
   };
 
-  pub fn init(diag: *Diagnostic, tc: *TypeChecker, al: std.mem.Allocator) @This() {
+  pub fn init(diag: *Diagnostic, al: Allocator) @This() {
     return @This() {
       .allocator = al,
       .diag = diag,
-      .failure = ds.ArrayHashMap(*Node, FailStatus).init(al),
+      .failure = ds.ArrayHashMapUnmanaged(*Node, FailStatus).init(),
       .heuristic = SelectionHeuristic.init(al),
       .namegen = util.NameGen.init(al),
-      .dtt = DecisionTreeTransformer.init(al, tc),
+      .dtt = DecisionTreeTransformer.init(al),
       .u8w = U8Writer.init(al),
     };
-  }
-
-  inline fn newNode(self: *Self) *Node {
-    return Node.create(self.allocator);
   }
 
   fn softError(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
@@ -886,7 +896,7 @@ pub const MatchCompiler = struct {
 
   fn varEql(self: *Self, v1: *Node, v2: *Node) bool {
     _ = self;
-    return v1.AstVar.token.valueEql(v2.AstVar.token.value);
+    return v1.NdTVar.valueEql(v2);
   }
 
   inline fn isExpandedPattern(self: *Self, variant: *MatchVariant) bool {
@@ -898,11 +908,14 @@ pub const MatchCompiler = struct {
     };
   }
 
-  fn reportRedundantCases(self: *Self, node: *ast.MatchNode) void {
+  fn reportRedundantCases(self: *Self, node: *tir.MatchNode) void {
     // TODO: Refine this. For cases where the redundancy occurs from a pattern expansion,
     //  we may need to report the redundant pattern from the expansion.
     // NOTE: we do not handle redundancy checks for Ranges!
     _ = node;
+    // If there are previous errors, then this error may be a false positive arising
+    // from those errors. So don't cascade errors.
+    if (self.diag.hasErrors()) return;
     var itr = self.failure.iterator();
     var msg: []const u8 = undefined;
     while (itr.next()) |entry| {
@@ -921,45 +934,55 @@ pub const MatchCompiler = struct {
     }
   }
 
-  fn genWildcardToken(self: *Self, tok: ?Token) Token {
-    _ = self;
-    var token = if (tok) |token| Token.from(&token) else Token.getDefault();
-    token.value = "_";
-    token.ty = .TkIdent;
-    return token;
+  inline fn genWildcardToken(tok: ?Token) Token {
+    return if (tok) |token| token.tkFrom("_", .TkIdent) else Token.getDefaultToken();
   }
 
   fn genFreshVarToken(self: *Self, tok: ?Token, start: []const u8) Token {
     std.debug.assert(start.len != 0);
     var slice = if (start[0] == ks.GeneratedVarMarker) start[1..] else start;
     var id = self.namegen.generate("${s}", .{slice});
-    var token = if (tok) |token| Token.from(&token) else Token.getDefault();
-    token.value = id;
-    token.ty = .TkIdent;
-    return token;
+    return if (tok) |token| token.tkFrom(id, .TkIdent) else Token.getDefaultToken();
   }
 
-  fn genFreshVarNode(self: *Self, token: ?Token, start: []const u8) *Node {
-    var node = Node.create(self.allocator);
-    node.* = .{.AstVar = ast.VarNode.init(self.genFreshVarToken(token, start))};
-    return node;
+  inline fn genFreshVarNode(self: *Self, token: ?Token, start: []const u8) *Node {
+    return Node.new(
+      .{.NdTVar = tir.TVarNode.init(self.genFreshVarToken(token, start))},
+      self.allocator,
+    );
   }
 
   /// save this case as a default fail. If its body gets included in the
-  /// decision tree, this is updated to a 'removed' state indicating success.
+  /// decision ir, this is updated to a 'removed' state indicating success.
   inline fn addFailure(self: *Self, case: *Case) void {
     if (self.failure.get(case.body.node) == null) {
-      self.failure.set(case.body.node, FailStatus.init(false, case));
+      self.failure.set(case.body.node, FailStatus.init(false, case), self.allocator);
     }
   }
 
   inline fn removeFailure(self: *Self, case: *Case) void {
-    self.failure.set(case.body.node, FailStatus.init(true, case));
+    self.failure.set(case.body.node, FailStatus.init(true, case), self.allocator);
+  }
+
+  inline fn hasFailure(self: *Self, case: *Case) bool {
+    return self.failure.get(case.body.node) != null;
+  }
+
+  inline fn hasRedunMarker(case: *Case) bool {
+    if (case.body.node.isBlock()) {
+      var block = case.body.node.block();
+      for (block.nodes) |node| {
+        if (node.isRedunMarker()) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /// convert the pattern in each case to relation patterns
-  fn convertPtnToRelationPtn(self: *Self, m_expr: *Node, cases: *CaseList) void {
-    for (cases.items()) |case| {
+  fn convertPtnToRelationPtn(self: *Self, m_expr: *Node, cases: []*Case) void {
+    for (cases) |case| {
       if (!case.pattern.isRelation() and !case.pattern.isMultiRelation()) {
         self.capturePatternIfAliased(case, case.pattern, m_expr);
         const pattern = self.boxPattern(
@@ -978,12 +1001,12 @@ pub const MatchCompiler = struct {
   fn convertOrConsToCases(self: *Self, m_expr: *Node, cons: *Constructor, case: *Case) CaseList {
     // remove this case, since it's being expanded and will not be referenced after here
     self.removeFailure(case);
-    var cases = CaseList.init(self.allocator);
-    for (cons.args.items()) |pat| {
-      cases.append(Case.from(case, pat, self.allocator));
+    var cases = CaseList.initCapacity(cons.args.len, self.allocator);
+    for (cons.args) |pat| {
+      cases.appendAssumeCapacity(Case.from(case, pat, self.allocator));
     }
-    self.convertPtnToRelationPtn(m_expr, &cases);
-    return self.filterCases(&cases);
+    self.convertPtnToRelationPtn(m_expr, cases.items());
+    return self.filterCases(cases.items());
   }
 
   /// flatten or patterns; converting its subpatterns to cases 
@@ -1001,30 +1024,31 @@ pub const MatchCompiler = struct {
     if (_rel == null) return null;
     // remove this case, since it's being expanded and will not be referenced after here
     self.removeFailure(case);
-    var cases = CaseList.init(self.allocator);
     var rel = _rel.?;
     var cons = &rel.pattern.variant.cons;
-    for (cons.args.items()) |ptn| {
-      var new_mrel = MultiRelation.init(self.allocator);
+    var cases = CaseList.initCapacity(cons.args.len, self.allocator);
+    for (cons.args) |ptn| {
+      var new_mrel = MultiRelation.initCapacity(cons.args.len, self.allocator);
       for (mrel.relations.items()) |rl| {
         if (rl.pattern != rel.pattern) {
-          new_mrel.relations.append(rl.clone(self.allocator));
+          new_mrel.relations.appendAssumeCapacity(rl.clone(self.allocator));
         } else {
-          new_mrel.relations.append(.{.ident = rel.ident, .pattern = ptn});
+          new_mrel.relations.appendAssumeCapacity(.{.ident = rel.ident, .pattern = ptn});
         }
       }
-      var pat = self.boxPattern(Pattern.init(new_mrel.toVariant(self.allocator), ptn.token, ptn.alat));
-      cases.append(Case.from(case, pat, self.allocator));
+      const pat = self.boxPattern(Pattern.init(new_mrel.toVariant(self.allocator), ptn.token, ptn.alat));
+      cases.appendAssumeCapacity(Case.from(case, pat, self.allocator));
     }
-    return self.filterCases(&cases);
+    return self.filterCases(cases.items());
   }
 
   /// convert a capture to a variable declaration
-  fn convertCaptureToVarDecl(self: *const @This(), expr: *Node, capture: *Node) *ast.AstNode {
+  fn convertCaptureToVarDecl(self: *const @This(), expr: *Node, capture: *Node) *Node {
     // ptn as y -> let y = ptn(a)
-    var node = ast.AstNode.create(self.allocator);
-    node.* = .{.AstVarDecl = ast.VarDeclNode.init(&capture.AstVar, expr, false)};
-    return node;
+    return Node.new(
+      .{.NdVarDecl = tir.VarDeclNode.init(capture.NdTVar.token, expr, null)},
+      self.allocator,
+    );
   }
 
   /// convert a case's pattern to a relation pattern
@@ -1038,12 +1062,14 @@ pub const MatchCompiler = struct {
   inline fn capturePatternIfAliased(self: *Self, case: *Case, pattern: *Pattern, expr: *Node) void {
     // convert to a var decl and save to the case's body
     if (pattern.alat.hasAlias()) {
-      if (pattern.isVariable() and pattern.variant.vari.ident.AstVar.isGeneratedVar()) {
+      if (pattern.isVariable() and pattern.variant.vari.ident.NdTVar.isGeneratedVar()) {
         // capture the pattern's variable if it's generated
-        case.body.addNode(self.convertCaptureToVarDecl(pattern.variant.vari.ident, pattern.alat.alias.?));
+        case.body.addNode(self.convertCaptureToVarDecl(pattern.variant.vari.ident, pattern.alat.alias.?), self.allocator);
+        pattern.alat.alias = null;
       } else {
-        std.debug.assert(expr.isVariable());
-        case.body.addNode(self.convertCaptureToVarDecl(expr, pattern.alat.alias.?));
+        std.debug.assert(expr.isTVariable());
+        case.body.addNode(self.convertCaptureToVarDecl(expr, pattern.alat.alias.?), self.allocator);
+        pattern.alat.alias = null;
       }
     }
   }
@@ -1070,28 +1096,70 @@ pub const MatchCompiler = struct {
   }
 
   /// transform a constructor to a new one with args replaced with Variables()
-  fn transformConstructor(self: *Self, cons: *Constructor, ident: *ast.VarNode) Constructor {
-    // TODO: move `node` & `typ` to init
-    var new = Constructor.init(cons.cname(), cons.builtin, cons.tag, cons.rested, self.allocator);
+  fn transformConstructor(self: *Self, cons: *Constructor, ident: *tir.TVarNode) Constructor {
+    // TODO: move `node` to init
+    var new = Constructor.init(cons.cname(), cons.tktype, cons.builtin, cons.tag, cons.rested);
     new.node = cons.node;
-    new.typ = cons.typ;
+    new.from_map = cons.from_map;
     self.resetIdCount();
+    var args = Patterns.init(self.allocator);
     if (cons.tag != .Literal) {
-      for (cons.args.items()) |arg| {
-        var id = self.genFreshVarNode(ident.token, ident.token.value);
-        new.args.append(self.boxPattern(Pattern.init(Variable.init(id).toVariant(self.allocator), arg.token, arg.alat)));
+      for (cons.args) |arg| {
+        var id = self.genFreshVarNode(ident.token, ident.token.lexeme());
+        args.append(self.boxPattern(Pattern.init(Variable.init(id).toVariant(self.allocator), arg.token, arg.alat)));
       }
     }
+    new.args = args.items();
     return new;
   }
 
-  const SubProblem = struct {cases_a: CaseList, cases_b: CaseList};
+  fn equalizeConstructorSizes(self: *Self, tcons: *Constructor, cons: *Constructor, case: *Case) !void {
+    var big: *Constructor = undefined;
+    var small: *Constructor = undefined;
+    if (tcons.args.len > cons.args.len) {
+      big = tcons;
+      small = cons;
+    } else {
+      big = cons;
+      small = tcons;
+    }
+    if (!cons.rested and !tcons.rested) {
+      std.debug.assert(cons.tag == .Tuple or cons.tag == .Other);
+      self.softError(
+        case.pattern.token,
+        "pattern of unequal number of argument(s): {} and {}",
+        .{small.args.len, big.args.len}
+      );
+    } else if (!small.rested) {
+      return self.hardError(
+        case.pattern.token,
+        "pattern of unequal number of argument(s): {} and {}",
+        .{small.args.len, big.args.len}
+      );
+    }
+    if (cons.tag == .Tuple or cons.tag == .Other) {
+      const id = self.genFreshVarNode(genWildcardToken(case.pattern.token), "_");
+      var ptns = Patterns.initCapacity(big.args.len, self.allocator);
+      ptns.appendSliceAssumeCapacity(small.args);
+      const wc = self.boxPattern(Pattern.init(
+        Variable.init(id).toVariant(self.allocator),
+        case.pattern.token,
+        .{},
+      ));
+      for (small.args.len..big.args.len) |_| {
+        ptns.appendAssumeCapacity(wc);
+      }
+      small.args = ptns.items();
+    }
+  }
+
+  const SubProblem = struct {cases_a: []*Case, cases_b: []*Case};
 
   fn generateSubProblems(self: *Self, occ: *Node, tcons: *Constructor, cases: *CaseList) !SubProblem {
     // 4. Create the two sub problems [A] and [B] as follows by iterating over all the clauses.
     // .   One of three cases can happen:
-    var cases_a = CaseList.init(cases.allocator());
-    var cases_b = CaseList.init(cases.allocator());
+    var cases_a = CaseList.init(self.allocator);
+    var cases_b = CaseList.init(self.allocator);
     for (cases.items()) |case| {
       // (a). The clause contains a test a is C(P1, ... , Pn), ... REST ... for a.
       if (case.pattern.isRelation() or case.pattern.isMultiRelation()) {
@@ -1117,31 +1185,33 @@ pub const MatchCompiler = struct {
             if (tcons.eql(&rel.pattern.variant.cons)) {
               // Add the expanded clause a1 is P1, .. , an is Pn, .. REST .. to A.
               var cons = rel.pattern.variant.cons;
-              // If tcons.args > cons.args, treat `cons` as a different constructor.
-              // This leads to a bad effect of repeating test on constructor types, but is the best we can manage for now.
-              if (tcons.args.len() != cons.args.len()) {
-                logger.debug("unequal constructor sizes: tcons {} and cons {}", .{tcons.args.len(), cons.args.len()});
-                if (tcons.args.len() > cons.args.len()) {
-                  cases_a.append(case);
-                  cases_b.append(case);
+              if (tcons.args.len != cons.args.len) {
+                logger.debug(
+                  "unequal constructor sizes: tcons {}-{} and cons {}-{}",
+                  .{tcons.tag, tcons.args.len, cons.tag, cons.args.len}
+                );
+                if (cons.tag == .List) {
+                  if (!tcons.rested or tcons.args.len != 0) {
+                    cases_a.append(case);
+                    cases_b.append(case);
+                  }
                   continue;
                 }
-              }
-              // FIXME: this is a hack. Needs a proper fix.
-              else if (cons.tag != .Other and tcons.rested != cons.rested and cons.rested) {
+                try self.equalizeConstructorSizes(tcons, &cons, case);
+              } else if (cons.tag == .List and tcons.rested != cons.rested and cons.rested) {
                 cases_b.append(case);
               }
-              var mrel = MultiRelation.init(self.allocator);
-              for (tcons.args.items(), cons.args.items()[0..tcons.args.len()]) |vr, pat| {
+              var mrel = MultiRelation.init();
+              for (tcons.args, cons.args[0..tcons.args.len]) |vr, pat| {
                 self.capturePatternIfAliased(case, pat, vr.variant.vari.ident);
-                mrel.relations.append(.{.ident = vr.variant.vari.ident, .pattern = pat});
+                mrel.relations.append(.{.ident = vr.variant.vari.ident, .pattern = pat}, self.allocator);
               }
               var newp: ?Pattern = null;
               // if we're in a multirelation, select all relations /= ai is Pi since this is a multirelation
               if (_mrel) |mr| {
                 for (mr.relations.items()) |rl| {
                   if (!self.varEql(rl.ident, rel.ident)) {
-                    mrel.relations.append(rl);
+                    mrel.relations.append(rl, self.allocator);
                   }
                 }
               }
@@ -1170,7 +1240,7 @@ pub const MatchCompiler = struct {
               cases_a.append(Case.from(case, self.boxPattern(newp.?), self.allocator));
               self.removeFailure(case);
             } else {
-              // (b). The clause contains a test a is D(P1, .. , Pn), .. REST .. where D ̸= C
+              // (b). The clause contains a test a is D(P1, .. , Pn), .. REST .. where D  ̸= C
               // Add this clause to B unchanged.
               cases_b.append(case);
             }
@@ -1182,23 +1252,23 @@ pub const MatchCompiler = struct {
       cases_a.append(case);
       cases_b.append(case);
     }
-    return .{.cases_a = cases_a, .cases_b = cases_b};
+    return .{.cases_a = cases_a.items(), .cases_b = cases_b.items()};
   }
 
-  fn filterCases(self: *Self, cases: *CaseList) CaseList {
-    // 1. Push tests against bare variables a is y into the right hand sides using let y = a, so that all the remaining tests are against constructors.
+  fn filterCases(self: *Self, cases: []*Case) CaseList {
+    // 1. Push tests against bare variables a is y into the right hand side using let y = a, so that all the remaining tests are against constructors.
     // `-> convert cases to relations, then promote variable relations to rhs of body
     var ncases = CaseList.init(self.allocator);
-    start: for (0..cases.len()) |idx| {
-      var case = cases.itemAt(idx);
+    start: for (0..cases.len) |idx| {
+      var case = cases[idx];
       self.addFailure(case);
       if (case.pattern.isRelation()) {
         var rel = case.pattern.variant.rel;
         if (rel.pattern.isVariable()) {
-          case.body.addNode(rel.varRelationToVarDecl(self.allocator));
+          case.body.addNode(rel.varRelationToVarDecl(self.allocator), self.allocator);
           const pattern = self.boxPattern(
             Pattern.init(
-              Wildcard.init(self.genWildcardToken(case.pattern.token), true).toVariant(self.allocator),
+              Wildcard.init(genWildcardToken(case.pattern.token), true).toVariant(self.allocator),
               case.pattern.token,
               case.pattern.alat
             )
@@ -1212,21 +1282,21 @@ pub const MatchCompiler = struct {
         }
       } else if (case.pattern.isMultiRelation()) {
         var mrel = case.pattern.variant.mrel;
-        var rels = ds.ArrayList(Relation).init(self.allocator);
+        var rels = ds.ArrayListUnmanaged(Relation).init();
         // a is Some(..), b is y,
         // exclude all tests m_expr is var (bare variables)
         for (mrel.relations.items()) |rel| {
           if (rel.pattern.isVariable()) {
-            case.body.addNode(rel.varRelationToVarDecl(self.allocator));
+            case.body.addNode(rel.varRelationToVarDecl(self.allocator), self.allocator);
           } else if (rel.pattern.isOrConstructor()) {
             // flatten or patterns
             if (self.convertOrConsToCasesFromMultiRelation(rel.ident, case)) |*flattened| {
               ncases.extend(flattened);
               continue :start;
             }
-            rels.append(rel);
+            rels.append(rel, self.allocator);
           } else {
-            rels.append(rel);
+            rels.append(rel, self.allocator);
           }
         }
         if (mrel.relations.len() != rels.len()) {
@@ -1248,7 +1318,7 @@ pub const MatchCompiler = struct {
             // so generate a wildcard for the entire multi-relation pattern
             const pattern = self.boxPattern(
               Pattern.init(Wildcard.init(
-                self.genWildcardToken(case.pattern.token), true).toVariant(self.allocator),
+                genWildcardToken(case.pattern.token), true).toVariant(self.allocator),
                 case.pattern.token,
                 case.pattern.alat
               )
@@ -1262,7 +1332,7 @@ pub const MatchCompiler = struct {
     return ncases;
   }
 
-  fn compileCase(self: *Self, _m_expr: *Node, _cases: *CaseList) !*Result {
+  fn compileCase(self: *Self, _m_expr: *Node, _cases: []*Case) !*Result {
     // 1. Push tests against bare variables a is y into the right hand sides using let y = a,
     // .  so that all the remaining tests are against constructors.
     var cases = self.filterCases(_cases);
@@ -1274,12 +1344,16 @@ pub const MatchCompiler = struct {
     if (bst == null) {
       var case = cases.itemAt(0);
       self.removeFailure(case);
+      const body = case.body.clone(self.allocator);
       if (case.guard) |cond| {
         _ = cases.list.orderedRemove(0);
-        var guard: Guard = .{.cond = cond, .body = case.body, .fallback = try self.compileCase(_m_expr, &cases)};
+        const guard: Guard = .{
+          .cond = cond, .body = body,
+          .fallback = try self.compileCase(_m_expr, cases.items())
+        };
         return util.box(Result, .{.gard = guard}, self.allocator);
       } else {
-        return util.box(Result, .{.leaf = case.body.clone(self.allocator)}, self.allocator);
+        return util.box(Result, .{.leaf = body}, self.allocator);
       }
     }
     // a is C(P1, . . . , Pn)
@@ -1290,13 +1364,13 @@ pub const MatchCompiler = struct {
     // .   | _                 => [B]
     var m_expr = rel.ident;
     var swch = Switch.init(m_expr, rel.pattern.token);
-    var tcons = self.transformConstructor(&rel.pattern.variant.cons, &m_expr.AstVar);
-    const wildc = Wildcard.init(self.genWildcardToken(m_expr.getToken()), true);
+    var tcons = self.transformConstructor(&rel.pattern.variant.cons, &m_expr.NdTVar);
+    const wildc = Wildcard.init(genWildcardToken(m_expr.getToken()), true);
     // 4. Create the two sub problems [A] and [B] as follows by iterating over all the clauses.
-    var subp = try self.generateSubProblems(m_expr, &tcons, &cases);
+    const subp = try self.generateSubProblems(m_expr, &tcons, &cases);
     // 5. Recursively generate code for [A] and [B].
-    var res_a = try self.compileCase(m_expr, &subp.cases_a);
-    var res_b = try self.compileCase(m_expr, &subp.cases_b);
+    const res_a = try self.compileCase(m_expr, subp.cases_a);
+    const res_b = try self.compileCase(m_expr, subp.cases_b);
     swch.branches[0] = (.{.lhs = .{.cons = tcons}, .rhs = res_a});
     swch.branches[1] = (.{.lhs = .{.wildc = wildc}, .rhs = res_b});
     return util.box(Result, .{.swch = swch}, self.allocator);
@@ -1304,15 +1378,15 @@ pub const MatchCompiler = struct {
 
   /// This implements pattern matching as described by Jules Jacobs, with modifications & extensions.
   /// Some inspiration from Maranget is also utilized.
-  pub fn compile(self: *Self, node: *ast.MatchNode) !*DecisionTree {
+  pub fn compile(self: *Self, node: *tir.MatchNode) !*DecisionTree {
     // we match on m_expr
     if (util.getMode() == .Debug) {
       node.render(0, &self.u8w) catch {};
       logger.debug("match ast dump:\n{s}\n", .{self.u8w.items()});
     }
     var m_expr = node.expr;
-    self.convertPtnToRelationPtn(m_expr, &node.cases);
-    const tree = try self.compileCase(m_expr, &node.cases);
+    self.convertPtnToRelationPtn(m_expr, node.cases);
+    const tree = try self.compileCase(m_expr, node.cases);
     if (util.getMode() == .Debug) {
       tree.render(0, &self.u8w) catch {};
       logger.debug("decision tree dump:\n{s}\n", .{self.u8w.items()});
@@ -1324,355 +1398,356 @@ pub const MatchCompiler = struct {
   pub fn lowerDecisionTree(self: *Self, tree: *DecisionTree, fail_token: Token) !*Node {
     const node = try self.dtt.transform(tree, fail_token);
     if (!node.isBlock()) {
-      return ast.BlockNode.newBlockWithNodes(self.allocator, &[_]*Node{node});
+      return tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{node}), self.allocator);
     }
     return node;
   }
 };
 
-/// transform/lower a decision tree to if-else statements
+/// transform/lower a decision ir to if-else statements
 pub const DecisionTreeTransformer = struct {
-  allocator: std.mem.Allocator,
+  allocator: Allocator,
   fail_token: Token = undefined,
   cached_pairs: ds.ArrayList(MapPair),
-  tc: *TypeChecker,
 
   const Self = @This();
-  const Node = ast.AstNode;
-  const NodeList = ds.ArrayList(*Node);
   const MapPair = struct {key: *Node, val: *Node, parent: ?*Constructor};
 
-  pub fn init(allocator: std.mem.Allocator, tc: *TypeChecker) Self {
-    return Self {.allocator = allocator, .tc = tc, .cached_pairs = ds.ArrayList(MapPair).init(allocator)};
+  pub fn init(allocator: Allocator) Self {
+    return Self {
+      .allocator = allocator,
+      .cached_pairs = ds.ArrayList(MapPair).init(allocator)
+    };
   }
 
-  inline fn _token(self: *Self, token: Token, ty: ast.lex.TokenType) Token {
-    _ = self;
-    return Token.fromWithValue(&token, ty.str(), ty);
+  inline fn andToken(token: Token) Token {
+    return token.dupTk(tir.TokenType.TkAnd);
   }
 
-  inline fn andToken(self: *Self, token: Token) Token {
-    return self._token(token, ast.lex.TokenType.TkAnd);
+  inline fn isToken(token: Token) Token {
+    return token.dupTk(tir.TokenType.TkIs);
   }
 
-  inline fn isToken(self: *Self, token: Token) Token {
-    return self._token(token, ast.lex.TokenType.TkIs);
+  inline fn eqeqToken(token: Token) Token {
+    return token.dupTk(tir.TokenType.Tk2Eq);
   }
 
-  inline fn eqeqToken(self: *Self, token: Token) Token {
-    return self._token(token, ast.lex.TokenType.Tk2Eq);
-  }
-
-  inline fn leqToken(self: *Self, token: Token) Token {
-    return self._token(token, ast.lex.TokenType.TkLeq);
-  }
-
-  inline fn geqToken(self: *Self, token: Token) Token {
-    return self._token(token, ast.lex.TokenType.TkGeq);
+  inline fn geqToken(token: Token) Token {
+    return token.dupTk(tir.TokenType.TkGeq);
   }
 
   fn newNumberNode(self: *Self, token: Token, val: f64) *Node {
-    var node = Node.create(self.allocator);
-    var ntoken = token;
-    ntoken.ty = .TkNumber;
-    node.* = .{.AstNumber = ast.LiteralNode.init(ntoken)};
-    node.AstNumber.value = val;
-    return node;
+    return Node.new(.{.NdNumber = tir.NumberNode.init(token.dupTk(.TkNumber), val)}, self.allocator);
   }
 
   fn newTypeNode(self: *Self, ty: *Type, token: Token) *Node {
-    var node = Node.create(self.allocator);
-    node.* = .{.AstNType = ast.TypeNode.init(ty, token)};
+    return Node.new(.{.NdType = tir.TypeNode.init(ty, token)}, self.allocator);
+  }
+
+  fn newTypeNodeWithSkip(self: *Self, ty: *Type, token: Token) *Node {
+    var node = Node.new(.{.NdType = tir.TypeNode.init(ty, token)}, self.allocator);
+    // don't resolve this type because it is incomplete 
+    node.NdType.skip_type_resolution = true;
     return node;
   }
 
   fn newIfElseNode(self: *Self, cond: *Node, then: *Node, els: *Node) *Node {
-    var node = Node.create(self.allocator);
-    node.* = .{.AstSimpleIf = ast.SimpleIfNode.init(cond, then, els)};
-    return node;
+    return Node.new(.{.NdSimpleIf = tir.SimpleIfNode.init(cond, then, els)}, self.allocator);
   }
 
   /// ident -> ident[index]
   fn newSubscript(self: *Self, ident: *Node, idx: usize) *Node {
     // create index
-    const tok = Token.fromWithValue(&ident.AstVar.token, "<num>", .TkNumber);
-    const index = self.newNumberNode(tok, @floatFromInt(idx));
+    const token = ident.NdTVar.token.tkFrom("<num>", .TkNumber);
+    const index = self.newNumberNode(token, @floatFromInt(idx));
     // create ident[index]
-    var sub_expr = Node.create(self.allocator);
-    sub_expr.* = .{.AstSubscript = ast.SubscriptNode.init(ident.clone(self.allocator), index)};
-    return sub_expr;
+    return Node.new(.{.NdSubscript = tir.SubscriptNode.init(ident, index)}, self.allocator);
   }
 
   /// ident -> ident.field
   fn newFieldAccess(self: *Self, ident: *Node, field_name: []const u8) *Node {
     // create field
-    var rhs = Node.create(self.allocator);
-    const tok = Token.fromWithValue(&ident.AstVar.token, field_name, .TkIdent);
-    rhs.* = .{.AstVar = ast.VarNode.init(tok)};
+    const token = ident.NdTVar.token.tkFrom(field_name, .TkIdent);
+    const rhs = Node.new(.{.NdTVar = tir.TVarNode.init(token)}, self.allocator);
     // create ident.field
-    var dot_expr = Node.create(self.allocator);
-    dot_expr.* = .{.AstDotAccess = ast.DotAccessNode.init(ident.clone(self.allocator), rhs, false)};
-    return dot_expr;
+    return Node.new(.{.NdDotAccess = tir.DotAccessNode.init(ident, rhs)}, self.allocator);
+  }
+
+  /// ident -> ident.method_name(...args)
+  fn newMethodCallWithArgs(self: *Self, ident: *Node, method_name: []const u8, args: tir.NodeItems) *Node {
+    const dot_expr = self.newFieldAccess(ident, method_name);
+    return Node.new(.{.NdBasicCall = tir.BasicCallNode.init(dot_expr, args)}, self.allocator);
   }
 
   /// ident -> ident.method_name()
-  fn newMethodCall(self: *Self, ident: *Node, method_name: []const u8) *Node {
-    const dot_expr = self.newFieldAccess(ident, method_name);
-    var call = Node.create(self.allocator);
-    call.* = .{.AstCall = ast.CallNode.init(dot_expr, NodeList.init(self.allocator), null, 0, false, false)};
-    return call;
+  inline fn newMethodCall(self: *Self, ident: *Node, method_name: []const u8) *Node {
+    return self.newMethodCallWithArgs(ident, method_name, &[_]*Node{});
   }
 
   /// creates a regular block with an 'entry' scope node
   inline fn newBlock(self: *Self) *Node {
-    return ast.BlockNode.newEmptyBlock(self.allocator);
-  }
-
-  /// add an 'exit' scope node to this block
-  fn addExitScopeToBlock(self: *Self, node: *Node) void {
-    var scope = Node.create(self.allocator);
-    scope.* = .{.AstScope = ast.ScopeNode.init(false, true)};
-    node.block().nodes.append(scope);
+    return Node.new(.{.NdBlock = tir.BlockNode.init(&[_]*Node{})}, self.allocator);
   }
 
   /// transform constructor `C(var)` into `var = expr()`
   fn constructorMethodToVarDecl(self: *Self, cons: *Constructor, ident: *Node, method_name: []const u8) *Node {
-    var decl = Node.create(self.allocator);
-    std.debug.assert(cons.args.len() == 1);
+    std.debug.assert(cons.args.len == 1);
     const call = self.newMethodCall(ident, method_name);
-    decl.* = .{.AstVarDecl = ast.VarDeclNode.init(&cons.args.itemAt(0).variant.vari.ident.AstVar, call, false)};
-    return decl;
+    return Node.new(
+      .{.NdVarDecl = tir.VarDeclNode.init(cons.args[0].variant.vari.ident.NdTVar.token, call, null)},
+      self.allocator,
+    );
   }
 
   /// transform a map constructor `C(var)` into `var = keys() ; var = values()`
   fn mapConstructorMethodToVarDecl(self: *Self, cons: *Constructor, ident: *Node, parent: ?*Constructor) struct{*Node, *Node} {
-    std.debug.assert(cons.args.len() == 1);
+    std.debug.assert(cons.args.len == 1);
     const call_1 = self.newMethodCall(ident, "keys");
     const call_2 = self.newMethodCall(ident, "values");
-    var keys_id = cons.args.itemAt(0).variant.vari.ident.clone(self.allocator);
-    keys_id.AstVar.token.value = std.fmt.allocPrint(self.allocator, "{s}_keys", .{keys_id.AstVar.token.value}) catch unreachable;
-    keys_id.AstVar.typ = null;
-    var vals_id = cons.args.itemAt(0).variant.vari.ident.clone(self.allocator);
-    vals_id.AstVar.token.value = std.fmt.allocPrint(self.allocator, "{s}_vals", .{vals_id.AstVar.token.value}) catch unreachable;
-    var decl_1 = Node.create(self.allocator);
-    decl_1.* = .{.AstVarDecl = ast.VarDeclNode.init(&keys_id.AstVar, call_1, false)};
-    var decl_2 = Node.create(self.allocator);
-    decl_2.* = .{.AstVarDecl = ast.VarDeclNode.init(&vals_id.AstVar, call_2, false)};
+    const cons_ident = cons.args[0].variant.vari.ident.NdTVar.token;
+    const id = cons_ident.lexeme();
+    var value = std.fmt.allocPrint(self.allocator, "{s}_keys", .{id}) catch unreachable;
+    const keys_id = Node.new(.{.NdTVar = tir.TVarNode.init(cons_ident.tkFrom(value, .TkIdent))}, self.allocator);
+    value = std.fmt.allocPrint(self.allocator, "{s}_vals", .{id}) catch unreachable;
+    const vals_id =  Node.new(.{.NdTVar = tir.TVarNode.init(cons_ident.tkFrom(value, .TkIdent))}, self.allocator);
+    // decls
+    const decl_1 = Node.new(.{.NdVarDecl = tir.VarDeclNode.init(keys_id.NdTVar.token, call_1, null)}, self.allocator);
+    const decl_2 = Node.new(.{.NdVarDecl = tir.VarDeclNode.init(vals_id.NdTVar.token, call_2, null)}, self.allocator);
     self.cached_pairs.append(.{.key = keys_id, .val = vals_id, .parent = parent});
     return .{decl_1, decl_2};
   }
 
   /// transform constructor `C(var)` into `var = id[expr]`
   fn constructorSubscriptToVarDecl(self: *Self, arg: *Pattern, ident: *Node, index: usize) *Node {
-    var decl = Node.create(self.allocator);
-    const subsc = self.newSubscript(ident.clone(self.allocator), index);
-    decl.* = .{.AstVarDecl = ast.VarDeclNode.init(&arg.variant.vari.ident.AstVar, subsc, false)};
-    return decl;
+    const subsc = self.newSubscript(ident, index);
+    return Node.new(.{.NdVarDecl = tir.VarDeclNode.init(arg.variant.vari.ident.NdTVar.token, subsc, null)}, self.allocator);
   }
 
   /// transform field access in a constructor to a var decl, for ex:
   /// Cons(id) => id = occ.field
-  fn fieldAccessToVarDecl(self: *Self, source: *Node, field: *ast.VarNode, target: *Node) *Node {
-    var decl = Node.create(self.allocator);
-    const access = self.newFieldAccess(source, field.token.value);
-    decl.* = .{.AstVarDecl = ast.VarDeclNode.init(&target.AstVar, access, false)};
-    return decl;
+  fn fieldAccessToVarDecl(self: *Self, source: *Node, field: []const u8, target: *Node) *Node {
+    const access = self.newFieldAccess(source, field);
+    access.NdDotAccess.is_desugared = true;
+    return Node.new(.{.NdVarDecl = tir.VarDeclNode.init(target.NdTVar.token, access, null)}, self.allocator);
   }
 
   /// transform field access in a tag constructor to a var decl, for ex:
   /// Cons(id) => id = occ.field_index
   fn tagFieldAccessToVarDecl(self: *Self, source: *Node, field: usize, target: *Node) *Node {
     // create field
-    var rhs = Node.create(self.allocator);
-    const tok = Token.fromWithValue(&source.AstVar.token, ks.GeneratedTypeVar, .TkNumber);
-    rhs.* = .{.AstNumber = ast.LiteralNode.init(tok)};
-    rhs.AstNumber.value = @floatFromInt(field);
+    const token = source.NdTVar.token.tkFrom(ks.GeneratedTypeVar, .TkNumber);
+    const rhs = self.newNumberNode(token, @floatFromInt(field));
     // create ident.field
-    var dot_expr = Node.create(self.allocator);
-    dot_expr.* = .{.AstDotAccess = ast.DotAccessNode.init(source.clone(self.allocator), rhs, true)};
-    dot_expr.AstDotAccess.allow_tag = true;
+    const dot_expr = Node.new(.{.NdDotAccess = tir.DotAccessNode.init(source, rhs)}, self.allocator);
+    dot_expr.NdDotAccess.allow_tag_access = true;
     // create var decl
-    var decl = Node.create(self.allocator);
-    decl.* = .{.AstVarDecl = ast.VarDeclNode.init(&target.AstVar, dot_expr, false)};
-    return decl;
+    return Node.new(.{.NdVarDecl = tir.VarDeclNode.init(target.NdTVar.token, dot_expr, null)}, self.allocator);
   }
 
-  fn elsOrToBlock(self: *Self, els: *Node) *Node {
-    if (!els.isBlock()) {
-      const els_body = self.newBlock();
-      els_body.block().nodes.append(els);
-      return els_body;
+  fn blockOrToBlock(self: *Self, node: *Node) *Node {
+    if (!node.isBlock()) {
+      return tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{node}), self.allocator);
     }
-    return els;
+    return node;
+  }
+
+  fn tListOfSwitch(self: *Self, swch: *Switch, parent: ?*Constructor, skip_cons_test: bool) !*Node {
+    // transpile if condition
+    var if_branch = swch.branches[0];
+    var els_branch = swch.branches[1];
+    const skip = els_branch.rhs.isSwitch() and els_branch.rhs.swch.branches[0].lhs.cons.tag == .List;
+    const id = swch.occ.clone(self.allocator);
+    var cons = &if_branch.lhs.cons;
+    const from_map = cons.from_map;
+    var nodes = tir.NodeListU.init();
+    if (!from_map) {
+      const then = self.newBlock();
+      const len = self.newNumberNode(swch.token, @floatFromInt(cons.args.len));
+      const op = if (cons.rested) geqToken(swch.token) else eqeqToken(swch.token);
+      const cond = Node.new(.{.NdBinary = tir.BinaryNode.init(self.newMethodCall(id, ks.LenVar), len, op)}, self.allocator);
+      cond.NdBinary.allow_rested = cons.rested;
+      nodes.ensureTotalCapacity(cons.args.len, self.allocator);
+      for (cons.args, 0..) |arg, index| {
+        // don't capture wildcard patterns
+        if (arg.isWildcard()) continue;
+        // transform vars to var decl
+        nodes.appendAssumeCapacity(self.constructorSubscriptToVarDecl(arg, id, index));
+      }
+      if (cons.rested and cons.node != null) {
+        // tail = id.slice(cons.args.len, id.len())
+        var args = tir.NodeList.initCapacity(2, self.allocator);
+        args.appendSliceAssumeCapacity(@constCast(&[_]*Node{len, self.newMethodCall(id, ks.LenVar)}));
+        const slice = self.newMethodCallWithArgs(id, "slice", args.items());
+        const decl = Node.new(.{.NdVarDecl = tir.VarDeclNode.init(cons.node.?.NdTVar.token, slice, null)}, self.allocator);
+        nodes.append(decl, self.allocator);
+      }
+      const _then = try self.tDecision(if_branch.rhs, parent, false);
+      if (_then.isBlock()) {
+        nodes.appendSlice(_then.block().nodes, self.allocator);
+      } else {
+        nodes.append(_then, self.allocator);
+      }
+      then.block().nodes = nodes.items();
+      std.debug.assert(els_branch.lhs.isWildcard());
+      const ife = self.newIfElseNode(
+        Node.toMatchCondition(cond, self.allocator),
+        then,
+        self.blockOrToBlock(try self.tDecision(els_branch.rhs, parent, skip))
+      );
+      if (skip_cons_test) return ife;
+      const tyn = self.newTypeNodeWithSkip(Type.newBuiltinGenericClass(ks.ListVar, .TkList, self.allocator), swch.token);
+      const t_cond = Node.new(.{.NdBinary = tir.BinaryNode.init(id, tyn, isToken(swch.token))}, self.allocator);
+      const t_then = tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{ife}), self.allocator);
+      return self.newIfElseNode(Node.toMatchCondition(t_cond, self.allocator), t_then, self.newBlock());
+    } else {
+      const then = self.newBlock();
+      const pair = self.cached_pairs.getLast();
+      // len becomes cons.args.len / 2 because we're using the .keys() (or .values()) list here instead of the .listItems()
+      const len = self.newNumberNode(swch.token, @floatFromInt(cons.args.len / 2));
+      const op = if (cons.rested) geqToken(swch.token) else eqeqToken(swch.token);
+      const cond = Node.new(.{.NdBinary = tir.BinaryNode.initRested(self.newMethodCall(pair.key, ks.LenVar), len, op)}, self.allocator);
+      nodes.ensureTotalCapacity(cons.args.len, self.allocator);
+      for (cons.args, 0..) |arg, i| {
+        // don't capture wildcard patterns
+        if (arg.isWildcard()) continue;
+        // transform vars to var decl
+        if ((i + 1) & 1 == 1) {
+          // key. Position/slot is at i / 2 in .keys()
+          nodes.appendAssumeCapacity(self.constructorSubscriptToVarDecl(arg, pair.key, (i / 2)));
+        } else {
+          // value. Position/slot is at i / 2 in .values()
+          nodes.appendAssumeCapacity(self.constructorSubscriptToVarDecl(arg, pair.val, (i / 2)));
+        }
+      }
+      const _then = try self.tDecision(if_branch.rhs, parent, false);
+      if (_then.isBlock()) {
+        nodes.appendSlice(_then.block().nodes, self.allocator);
+      } else {
+        nodes.append(_then, self.allocator);
+      }
+      then.block().nodes = nodes.items();
+      std.debug.assert(els_branch.lhs.isWildcard());
+      return self.newIfElseNode(
+        Node.toMatchCondition(cond, self.allocator),
+        then,
+        self.blockOrToBlock(try self.tDecision(els_branch.rhs, parent, skip))
+      );
+    }
+  }
+
+  fn tTupleOfSwitch(self: *Self, swch: *Switch, parent: ?*Constructor, skip_cons_test: bool) !*Node {
+    // transpile if condition
+    var if_branch = swch.branches[0];
+    var els_branch = swch.branches[1];
+    const skip = els_branch.rhs.isSwitch() and els_branch.rhs.swch.branches[0].lhs.cons.tag == .Tuple;
+    const id = swch.occ.clone(self.allocator);
+    var cons = &if_branch.lhs.cons;
+    var nodes = tir.NodeListU.init();
+    const then = self.newBlock();
+    const len = self.newNumberNode(swch.token, @floatFromInt(cons.args.len));
+    const op = if (cons.rested) geqToken(swch.token) else eqeqToken(swch.token);
+    const cond = Node.new(.{.NdBinary = tir.BinaryNode.init(self.newMethodCall(id, ks.LenVar), len, op)}, self.allocator);
+    cond.NdBinary.allow_rested = cons.rested;
+    nodes.ensureTotalCapacity(cons.args.len, self.allocator);
+    for (cons.args, 0..) |arg, index| {
+      // don't capture wildcard patterns
+      if (arg.isWildcard()) continue;
+      // transform vars to var decl
+      nodes.appendAssumeCapacity(self.constructorSubscriptToVarDecl(arg, id, index));
+    }
+    const _then = try self.tDecision(if_branch.rhs, parent, false);
+    if (_then.isBlock()) {
+      nodes.appendSlice(_then.block().nodes, self.allocator);
+    } else {
+      nodes.append(_then, self.allocator);
+    }
+    then.block().nodes = nodes.items();
+    std.debug.assert(els_branch.lhs.isWildcard());
+    const ife = self.newIfElseNode(
+      Node.toMatchCondition(cond, self.allocator),
+      then,
+      self.blockOrToBlock(try self.tDecision(els_branch.rhs, parent, skip))
+    );
+    if (skip_cons_test) return ife;
+    const tyn = self.newTypeNodeWithSkip(Type.newBuiltinGenericClass(ks.TupleVar, .TkTuple, self.allocator), swch.token);
+    const t_cond = Node.new(.{.NdBinary = tir.BinaryNode.init(id, tyn, isToken(swch.token))}, self.allocator);
+    const t_then = tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{ife}), self.allocator);
+    return self.newIfElseNode(Node.toMatchCondition(t_cond, self.allocator), t_then, self.newBlock());
   }
 
   /// Switch (occ) test (..., body(..)) test (Wildcard(_) body(..)) ->
   /// if (occ op test(..)) body(..) else ...
-  fn tSwitch(self: *Self, swch: *Switch, parent: ?*Constructor) !*Node {
+  fn tSwitch(self: *Self, swch: *Switch, parent: ?*Constructor, skip_cons_test: bool) !*Node {
     // transpile if condition
     var if_branch = swch.branches[0];
     var els_branch = swch.branches[1];
-    // make occ is test(..)
-    const ty = if_branch.lhs.cons.typ.?.classOrInstanceClass();
-    if (ty.isUnion()) {
-      return self.tc.error_(
-        true, swch.token,
-        "cannot match on constructor with ambiguous multiple types.\n\t" ++
-        "Consider narrowing one of this type: '{s}'",
-        .{ty.typename(&self.tc.u8w)}
-      );
+    if (if_branch.lhs.cons.tag == .List) {
+      return self.tListOfSwitch(swch, parent, skip_cons_test);
+    } else if (if_branch.lhs.cons.tag == .Tuple) {
+      return self.tTupleOfSwitch(swch, parent, skip_cons_test);
     }
-    var node = self.newBlock();
+    // make occ is test(..)
+    const node = self.newBlock();
     var if_cond: *Node = undefined;
-    var if_body = self.newBlock();
-    var id = swch.occ.clone(self.allocator);
+    const if_body = self.newBlock();
+    const id = swch.occ.clone(self.allocator);
     var cons = &if_branch.lhs.cons;
     var _parent: ?*Constructor = null;
-    const from_map = blk: {
-      const from_map = parent != null and parent.?.tag == .Map;
-      if (from_map) {
-        // check if id is same as the map test - that way we properly disambiguate
-        // between list tests from maps and regular list tests
-        const pair = self.cached_pairs.getLast();
-        const key = pair.key.AstVar.token.value;
-        // -5 for '_keys'.len. See mapConstructorMethodToVarDecl()
-        break :blk (id.AstVar.token.valueEql(key[0..key.len - 5]));
-      }
-      break :blk from_map;
-    };
+    var _if_body = if_body.block();
     switch (cons.tag) {
-      .List, .Tuple, .Map, .Other => {
-        var lhs: *Node = undefined;
-        if (!(cons.tag == .List and from_map)) {
-          lhs = Node.create(self.allocator);
-          const tyn = self.newTypeNode(ty, swch.token);
-          lhs.* = .{.AstBinary = ast.BinaryNode.init(id, tyn, self.isToken(swch.token))};
-        }
-        // list/tuple
-        if (cons.tag == .List and from_map) {
-          const pair = self.cached_pairs.getLast();
-          // len becomes cons.args.len / 2 because we're using the .keys() (or .values()) list here instead of the .listItems()
-          const len = self.newNumberNode(swch.token, @floatFromInt(cons.args.len() / 2));
-          const op = if (cons.rested) self.geqToken(swch.token) else self.eqeqToken(swch.token);
-          if_cond = Node.create(self.allocator);
-          if_cond.* = .{.AstBinary = ast.BinaryNode.init(self.newMethodCall(pair.key, "len"), len, op)};
-          if_cond.AstBinary.allow_rested = cons.rested;
-          for (cons.args.items(), 0..) |arg, i| {
-            // don't capture wildcard patterns
-            if (arg.isWildcard()) continue;
-            // transform vars to var decl
-             if ((i + 1) & 1 == 1) {
-              // key. Position/slot is at i / 2 in .keys()
-              if_body.block().nodes.append(self.constructorSubscriptToVarDecl(arg, pair.key, (i / 2)));
-            } else {
-              // value. Position/slot is at i / 2 in .values()
-              if_body.block().nodes.append(self.constructorSubscriptToVarDecl(arg, pair.val, (i / 2)));
-            }
-          }
-        } else if (cons.tag == .List or cons.tag == .Tuple) {
-          if (!(cons.tag == .Tuple and cons.args.isEmpty())) {
-            // length check & rested: id.len() (>= || ==) cons.args.len
-            var rhs = Node.create(self.allocator);
-            const len = self.newNumberNode(swch.token, @floatFromInt(cons.args.len()));
-            const op = if (cons.rested) self.geqToken(swch.token) else self.eqeqToken(swch.token);
-            rhs.* = .{.AstBinary = ast.BinaryNode.init(self.newMethodCall(id, "len"), len, op)};
-            if_cond = Node.create(self.allocator);
-            if_cond.* = .{.AstBinary = ast.BinaryNode.init(lhs, rhs, self.andToken(swch.token))};
-            lhs.AstBinary.allow_rested = cons.rested;
-            for (cons.args.items(), 0..) |arg, index| {
-              // don't capture wildcard patterns
-              if (arg.isWildcard()) continue;
-              // transform vars to var decl
-              if_body.block().nodes.append(self.constructorSubscriptToVarDecl(arg, id, index));
-            }
-          } else {
-            if_cond = lhs;
-          }
-        } else if (cons.tag == .Map) {
+      .Map, .Other => {
+        var nodes = tir.NodeListU.init();
+        if (cons.tag == .Map) {
           // transform constructor `C(var)` into `var = keys() ; var = values()`
           _parent = cons;
           const pair = self.mapConstructorMethodToVarDecl(cons, id, _parent);
-          if_body.block().nodes.appendSlice(&[_]*Node{pair.@"0", pair.@"1"});
-          if_cond = lhs;
-        } else if (ty.isClass()) {
-          // .Other -> validate fields
-          // C(a, b, ..)
-          var cls = ty.klass();
-          if (cons.args.isNotEmpty()) {
-            // verify class fields.
-            const tyname = ty.typename(&self.tc.u8w);
-            for (cons.args.items(), cls.fields.items()) |arg, field| {
-              // don't capture wildcard patterns
-              if (arg.isWildcard()) continue;
-              if (arg.alat.hasField()) {
-                var fd = &arg.alat.field.?.AstVar;
-                if (cls.getField(fd.token.value) == null) {
-                  self.tc.softError(fd.token, "type '{s}' has no field '{s}'", .{tyname, fd.token.value});
-                  continue;
-                } else {
-                  // transform field access to a var decl
-                  if_body.block().nodes.append(self.fieldAccessToVarDecl(id, fd, arg.variant.vari.ident));
-                  continue;
-                }
-              }
-              // transform field access - by position, to a var decl
-              if_body.block().nodes.append(self.fieldAccessToVarDecl(id, field.AstVarDecl.ident, arg.variant.vari.ident));
-            }
-            if (self.tc.diag.hasErrors()) {
-              return error.CheckError;
-            }
-          }
-          if_cond = lhs;
+          _if_body.appendSlice(@constCast(&[_]*Node{pair.@"0", pair.@"1"}), self.allocator);
+          const tyn = self.newTypeNodeWithSkip(Type.newBuiltinGenericClass(ks.MapVar, .TkMap, self.allocator), swch.token);
+          if_cond = Node.new(.{.NdBinary = tir.BinaryNode.init(id, tyn, isToken(swch.token))}, self.allocator);
         } else {
-          std.debug.assert(ty.isTag());
-          var tag = ty.tag();
-          if (cons.args.isNotEmpty()) {
-            // verify class fields.
-            const tyname = ty.typename(&self.tc.u8w);
-            for (cons.args.items(), 0..) |arg, i| {
+          // tag or class type
+          if (cons.args.len > 0) {
+            nodes.ensureTotalCapacity(cons.args.len, self.allocator);
+            for (cons.args, 0..) |arg, idx| {
               // don't capture wildcard patterns
-              if (arg.isWildcard()) continue;
-              if (arg.alat.hasField()) {
-                var fd = &arg.alat.field.?.AstVar;
-                if (tag.getParamWithId(fd.token.value)) |idx| {
-                  // transform field access to a var decl
-                  if_body.block().nodes.append(self.tagFieldAccessToVarDecl(id, idx, arg.variant.vari.ident));
-                  continue;
-                } else {
-                  self.tc.softError(fd.token, "type '{s}' has no field '{s}'", .{tyname, fd.token.value});
-                  continue;
-                }
+              if (arg.isWildcard()) {
+                continue;
               }
-              // transform field access - by position, to a var decl
-              if_body.block().nodes.append(self.tagFieldAccessToVarDecl(id, i, arg.variant.vari.ident));
+              if (arg.alat.hasField()) {
+                // transform field access to a var decl
+                nodes.appendAssumeCapacity(self.fieldAccessToVarDecl(id, arg.alat.field.?.NdTVar.token.lexeme(), arg.variant.vari.ident));
+              } else {
+                // transform field access - by position, to a var decl
+                nodes.appendAssumeCapacity(self.tagFieldAccessToVarDecl(id, idx, arg.variant.vari.ident));
+              }
             }
-            if (self.tc.diag.hasErrors()) {
-              return error.CheckError;
-            }
+            _if_body.nodes = nodes.items();
           }
-          if_cond = lhs;
+          const tyn = self.newTypeNode(Type.newTagOrClass(cons.cname(), cons.tktype, self.allocator), swch.token);
+          if_cond = Node.new(.{.NdBinary = tir.BinaryNode.init(id, tyn, isToken(swch.token))}, self.allocator);
         }
       },
       .Literal => {
-        if_cond = Node.create(self.allocator);
-        if_cond.* = .{.AstBinary = ast.BinaryNode.init(id, cons.node.?, self.eqeqToken(swch.token))};
+        if_cond = Node.new(.{
+          .NdBinary = tir.BinaryNode.init(id, cons.node.?, eqeqToken(swch.token))
+        }, self.allocator);
       },
       else => unreachable,
     }
     // make if body
-    var body = try self.tDecision(if_branch.rhs, _parent orelse parent);
+    const body = try self.tDecision(if_branch.rhs, _parent orelse parent, skip_cons_test);
     if (body.isBlock()) {
-      if_body.block().nodes.extend(&body.block().nodes);
+      _if_body.appendSlice(body.block().nodes, self.allocator);
     } else {
-      if_body.block().nodes.append(body);
+      _if_body.append(body, self.allocator);
     }
     // make else:
     // for else, test is always a wildcard, so transpile the rhs directly
     std.debug.assert(els_branch.lhs.isWildcard());
     const ife = self.newIfElseNode(
-      if_cond.toMatchCondition(self.allocator),
+      Node.toMatchCondition(if_cond, self.allocator),
       if_body,
-      self.elsOrToBlock(try self.tDecision(els_branch.rhs, _parent orelse parent))
+      self.blockOrToBlock(try self.tDecision(els_branch.rhs, _parent orelse parent, skip_cons_test))
     );
     if (self.cached_pairs.isNotEmpty()) {
       const last = self.cached_pairs.getLast();
@@ -1681,64 +1756,54 @@ pub const DecisionTreeTransformer = struct {
         _ = self.cached_pairs.pop();
       }
     }
-    node.block().nodes.append(ife);
-    return if (node.block().nodes.len() == 1) node.block().nodes.getLast() else node;
+    var block = node.block();
+    block.append(ife, self.allocator);
+    return if (block.nodes.len == 1) block.nodes[0] else node;
   }
 
-  fn tLeaf(self: *Self, leaf: *Leaf, parent: ?*Constructor) !*Node {
-    _ = parent;
-    _ = self;
-    if (leaf.reversed) {
-      leaf.node.block().nodes.reverse();
-      leaf.reversed = false;
+  fn tLeaf(self: *Self, leaf: *Leaf, exclude_decls: bool) !*Node {
+    leaf.decls.reverse();
+    if (!exclude_decls and leaf.decls.isNotEmpty()) {
+      if (leaf.node.isBlock()) {
+        leaf.node.block().prependSlice(leaf.decls.items(), self.allocator);
+      } else {
+        var node = self.newBlock();
+        var stmts = tir.NodeListU.initCapacity(leaf.decls.len() + 1, self.allocator);
+        stmts.appendSliceAssumeCapacity(leaf.decls.items());
+        stmts.appendAssumeCapacity(leaf.node);
+        node.block().nodes = stmts.items();
+        return node;
+      }
     }
     return leaf.node;
   }
 
-  fn tFail(self: *Self, fail: *Fail, parent: ?*Constructor) !*Node {
-    _ = parent;
+  fn tFail(self: *Self, fail: *Fail) !*Node {
     _ = fail;
-    var node = Node.create(self.allocator);
-    node.* = .{.AstFailMarker = ast.MarkerNode.init(self.fail_token)};
-    return node;
+    return Node.new(.{.NdFailMarker = tir.MarkerNode.init(self.fail_token)}, self.allocator);
   }
 
-  fn tGuard(self: *Self, gard: *Guard, parent: ?*Constructor) !*Node {
-    // create a block node to house the entire guard clause
-    var block = ast.BlockNode.newEmptyBlock(self.allocator);
-    // lift all declarations prior to liftmarker node into the new block
-    var nodes = &(try self.tLeaf(&gard.body, parent)).block().nodes;
-    if (nodes.isNotEmpty()) {
-      var delto: usize = 0;
-      for (nodes.items(), 0..) |node, i| {
-        delto = i;
-        if (!node.isLiftMarker()) {
-          block.block().nodes.append(node);
-        } else {
-          break;
-        }
-      }
-      // remove all declarations up to liftmarker
-      nodes.replaceRange(0, delto + 1, &[_]*Node{});
-    }
-    block.block().nodes.append(
-      self.newIfElseNode(
-        gard.cond.toMatchCondition(self.allocator),
-        gard.body.node,
-        self.elsOrToBlock(try self.tDecision(gard.fallback, parent))
+  fn tGuard(self: *Self, gard: *Guard, parent: ?*Constructor, skip_cons_test: bool) !*Node {
+    const then = self.blockOrToBlock(try self.tLeaf(&gard.body, true));
+    var _nodes = tir.NodeListU.initCapacity(gard.body.decls.len() + 1, self.allocator);
+    _nodes.appendSliceAssumeCapacity(gard.body.decls.items());
+    _nodes.appendAssumeCapacity(self.newIfElseNode(
+        Node.toMatchCondition(gard.cond, self.allocator),
+        then,
+        self.blockOrToBlock(try self.tDecision(gard.fallback, parent, skip_cons_test))
       )
     );
-    return block;
+    return tir.BlockNode.newBlockWithOwnedNodes(_nodes.items(), self.allocator);
   }
 
-  fn tDecision(self: *Self, dt: *DecisionTree, parent: ?*Constructor) anyerror!*Node {
+  fn tDecision(self: *Self, dt: *DecisionTree, parent: ?*Constructor, skip_cons_test: bool) anyerror!*Node {
     return switch (dt.*) {
-      inline else => |*node| @call(.always_inline, @TypeOf(node.*).transform, .{node, @This(), self, parent}),
+      inline else => |*node| @call(.always_inline, @TypeOf(node.*).transform, .{node, @This(), self, parent, skip_cons_test}),
     };
   }
 
   pub fn transform(self: *Self, tree: *DecisionTree, fail_token: Token) !*Node {
     self.fail_token = fail_token;
-    return @call(.always_inline, Self.tDecision, .{self, tree, null});
+    return @call(.always_inline, Self.tDecision, .{self, tree, null, false});
   }
 };

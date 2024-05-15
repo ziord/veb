@@ -28,6 +28,7 @@ pub const NativeFns = [_][]const u8 {
   "delete",
   "remove",
   "println",
+  "slice",
 };
 
 
@@ -77,7 +78,7 @@ pub fn fnAssert(vm: *VM, argc: u32, args: u32) Value {
 /// exit(code: num): noreturn
 pub fn fnExit(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
-  var code = vl.asIntNumber(u8, getArg(vm, args));
+  const code = vl.asIntNumber(u8, getArg(vm, args));
   vm.deinit();
   std.os.exit(code);
 }
@@ -127,7 +128,7 @@ pub fn fnPrintln(vm: *VM, argc: u32, args: u32) Value {
 // len(): num
 fn stringLen(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
-  var str = vl.asString(getArg(vm, args));
+  const str = vl.asString(getArg(vm, args));
   return vl.numberVal(@floatFromInt(str.len));
 }
 
@@ -150,7 +151,6 @@ fn createStringClass(vm: *VM) *vl.ObjClass {
 
 //******** list ********//
 
-
 // append(item: T): void
 fn listAppend(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
@@ -161,7 +161,7 @@ fn listAppend(vm: *VM, argc: u32, args: u32) Value {
 // len(): num
 fn listLen(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
-  var list = vl.asList(getArg(vm, args));
+  const list = vl.asList(getArg(vm, args));
   return vl.numberVal(@floatFromInt(list.len));
 }
 
@@ -172,7 +172,7 @@ fn listPop(vm: *VM, argc: u32, args: u32) Value {
   if (list.len == 0) {
     return vl.noneVal();
   }
-  var val = list.items[list.len - 1];
+  const val = list.items[list.len - 1];
   list.len -= 1;
   return vl.justVal(vm, val);
 }
@@ -180,22 +180,40 @@ fn listPop(vm: *VM, argc: u32, args: u32) Value {
 // get(index: num): Maybe{T}
 fn listGet(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
-  var list = vl.asList(getArg(vm, args));
+  const list = vl.asList(getArg(vm, args));
   if (list.len == 0) return vl.noneVal();
   var idx = vl.asIntNumber(i64, getArg(vm, args + 1));
   if (idx < 0) idx += @intCast(list.len);
-  if (idx >= list.len) return vl.noneVal();
+  if (idx >= list.len or idx < 0) return vl.noneVal();
   return vl.justVal(vm, list.items[@intCast(idx)]);
+}
+
+// slice(start: num, end: num): List{T}
+fn listSlice(vm: *VM, argc: u32, args: u32) Value {
+  _ = argc;
+  const list = vl.asList(getArg(vm, args));
+  if (list.len == 0) return vl.noneVal();
+  var s_idx = vl.asIntNumber(i64, getArg(vm, args + 1));
+  if (s_idx < 0) s_idx += @intCast(list.len);
+  var e_idx = vl.asIntNumber(i64, getArg(vm, args + 2));
+  if (e_idx < 0) e_idx += @intCast(list.len);
+  if (e_idx <= s_idx or s_idx < 0 or e_idx < 0) {
+    return vl.objVal(vl.createList(vm, 0));
+  }
+  const len: usize = @intCast(e_idx - s_idx);
+  var res = vl.createList(vm, len);
+  @memcpy(res.items[0..len], list.items[@intCast(s_idx)..@intCast(e_idx)]);
+  return vl.objVal(res);
 }
 
 fn createListClass(vm: *VM) *vl.ObjClass {
   //*** method executable ***//
   // NOTE: Methods are set according to the order in prelude
-  const methods = [_]NativeFn {listAppend, listLen, listPop, listGet};
+  const methods = [_]NativeFn {listAppend, listLen, listPop, listGet, listSlice};
   //*** arity of each method ***//
-  const arities = [_]u32 {1, 0, 0, 1};
+  const arities = [_]u32 {1, 0, 0, 1, 2};
   //*** index into NativeFns array ***//
-  const names = [_]usize{4, 5, 8, 10};
+  const names = [_]usize{4, 5, 8, 10, 18};
   var cls = vl.createClass(vm, methods.len);
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
     cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
@@ -207,11 +225,10 @@ fn createListClass(vm: *VM) *vl.ObjClass {
 
 //******** tuple ********//
 
-
 // len(): num
 fn tupleLen(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
-  var tuple = vl.asTuple(getArg(vm, args));
+  const tuple = vl.asTuple(getArg(vm, args));
   return vl.numberVal(@floatFromInt(tuple.len));
 }
 
@@ -236,7 +253,7 @@ fn createTupleClass(vm: *VM) *vl.ObjClass {
 // len(): num
 fn mapLen(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
-  var map = vl.asMap(getArg(vm, args));
+  const map = vl.asMap(getArg(vm, args));
   return vl.numberVal(@floatFromInt(map.meta.len));
 }
 
@@ -244,7 +261,7 @@ fn mapLen(vm: *VM, argc: u32, args: u32) Value {
 fn mapSet(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var map = vl.asMap(getArg(vm, args));
-  var res = map.meta.set(getArg(vm, args + 1), getArg(vm, args + 2), vm);
+  const res = map.meta.set(getArg(vm, args + 1), getArg(vm, args + 2), vm);
   return vl.boolVal(res);
 }
 

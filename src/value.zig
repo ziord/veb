@@ -204,6 +204,7 @@ pub const Code = extern struct {
 pub const MAX_REGISTERS = 250;
 pub const LOAD_FACTOR = 80;
 pub const MAX_STR_HASHING_LEN = 0x7ff;
+pub const MAX_STR_LEN = ks.MAX_STR_LEN;
 
 const QNAN = @as(u64, 0x7ffc000000000000);
 const SIGN_BIT = @as(u64, 0x8000000000000000);
@@ -429,7 +430,7 @@ pub const ObjFiber = extern struct {
 
   pub fn popFrame(self: *ObjFiber) CallFrame {
     self.frame_len -= 1;
-    var frame = self.frames[self.frame_len];
+    const frame = self.frames[self.frame_len];
     if (self.frame_len > 0) {
       self.fp = &self.frames[self.frame_len - 1];
     }
@@ -789,8 +790,8 @@ pub fn printObject(val: Value) void {
     },
     .objlist => {
       var list = asList(val);
-      var add_comma = list.len > 1;
-      var comma_end = if (add_comma) list.len - 1 else 0;
+      const add_comma = list.len > 1;
+      const comma_end = if (add_comma) list.len - 1 else 0;
       util.print("[", .{});
       for (list.items[0..list.len], 0..) |item, i| {
         @call(.always_inline, display, .{item});
@@ -802,8 +803,8 @@ pub fn printObject(val: Value) void {
     },
     .objtuple => {
       var tuple = asTuple(val);
-      var add_comma = tuple.len > 1;
-      var comma_end = if (add_comma) tuple.len - 1 else 0;
+      const add_comma = tuple.len > 1;
+      const comma_end = if (add_comma) tuple.len - 1 else 0;
       util.print("(", .{});
       for (tuple.items[0..tuple.len], 0..) |item, i| {
         @call(.always_inline, display, .{item});
@@ -818,7 +819,7 @@ pub fn printObject(val: Value) void {
       }
     },
     .objerror => {
-      var err = asError(val);
+      const err = asError(val);
       util.print(ks.ErrorVar ++ "(", .{});
       @call(.always_inline, display, .{err.val});
       util.print(")", .{});
@@ -972,7 +973,7 @@ fn _valToString(val: Value, vm: *VM, uw: *ValueStringWriter.Writer) void {
   if (isObj(val)) {
     _objToString(val, vm, uw);
   } else if (isNumber(val)) {
-    var num = asNumber(val);
+    const num = asNumber(val);
     if (std.math.isNan(num)) {
       uw.write("nan");
     } else if (std.math.isInf(num)) {
@@ -1099,7 +1100,7 @@ pub fn createObject(vm: *VM, id: ObjId, cls: ?*ObjClass, comptime T: type) *T {
 
 pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: bool) *const ObjString {
   const hash = hashString(str);
-  var string = map.findInterned(str, hash);
+  const string = map.findInterned(str, hash);
   if (string == null) {
     var tmp = @call(.always_inline, createObject, .{vm, .objstring, vm.classes.string, ObjString});
     tmp.len = str.len;
@@ -1167,7 +1168,7 @@ pub fn createNativeFn(vm: *VM, zfun: NativeFn, arity: u32, name: usize) *ObjNati
 }
 
 pub fn createClosure(vm: *VM, fun: *ObjFn) *ObjClosure {
-  var env = vm.mem.allocBuf(*ObjUpvalue, fun.envlen, vm);
+  const env = vm.mem.allocBuf(*ObjUpvalue, fun.envlen, vm);
   var clos = @call(.always_inline, createObject, .{vm, .objclosure, null, ObjClosure});
   clos.env = env.ptr;
   clos.fun = fun;
@@ -1188,7 +1189,7 @@ pub fn createError(vm: *VM, val: Value) *ObjError {
 }
 
 pub fn createClass(vm: *VM, mlen: usize) *ObjClass {
-  var methods = vm.mem.allocBuf(Value, mlen, vm);
+  const methods = vm.mem.allocBuf(Value, mlen, vm);
   var cls = @call(.always_inline, createObject, .{vm, .objclass, null, ObjClass});
   cls.mlen = mlen;
   cls.methods = methods.ptr;
@@ -1214,7 +1215,7 @@ pub fn createTag(vm: *VM, name: []const u8) Value {
 }
 
 pub fn createInstance(vm: *VM, cls: *ObjClass, flen: usize) *ObjInstance {
-  var fields = vm.mem.allocBuf(Value, flen, vm);
+  const fields = vm.mem.allocBuf(Value, flen, vm);
   var inst = @call(.always_inline, createObject, .{vm, .objinstance, cls, ObjInstance});
   inst.fields = fields.ptr;
   inst.flen = flen;
@@ -1236,9 +1237,9 @@ pub fn createBoundUserMethod(vm: *VM, instance: Value, closure: *ObjClosure) *Ob
 }
 
 pub fn createFiber(vm: *VM, clo: ?*ObjClosure, origin: FiberOrigin, caller: ?*ObjFiber) *ObjFiber {
-  var arity = if (clo != null) clo.?.fun.arity else 1;  // heuristic
+  const arity = if (clo != null) clo.?.fun.arity else 1;  // heuristic
   const cap = Mem.alignTo(arity + 0xff, Mem.BUFFER_INIT_SIZE);
-  var frames = vm.mem.allocBuf(CallFrame, Mem.BUFFER_INIT_SIZE, vm);
+  const frames = vm.mem.allocBuf(CallFrame, Mem.BUFFER_INIT_SIZE, vm);
   var stack = vm.mem.allocBuf(Value, cap, vm);
   var fiber = @call(.always_inline, createObject, .{vm, .objfiber, null, ObjFiber});
   fiber.errval = NOTHING_VAL;

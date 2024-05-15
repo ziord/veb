@@ -166,19 +166,17 @@ test "vars" {
 test "types" {
   const src = 
   \\ type VOrC{V, C} = Vee(V) | Cee(C)
-  \\ alias P{K, V} = VOrC{VOrC{K, V}?, K?}
-  \\ alias A{K, V} = Map{K?, Map{K, P{K, V}}?}?
-  \\ let x: A{str, num} = Just(
+  \\ alias P{K, V} = VOrC{VOrC{K, V}, V}
+  \\ alias A{K, V} = Map{K, Map{K, P{K, V}}}
+  \\ let x: A{str, num} = (
   \\  {
-  \\    Just('a') as Maybe{str}: Just(
-  \\      (
+  \\    'a': (
   \\        {
   \\          'x': Vee(
-  \\                  Just(Cee(5) as VOrC{str, num}) as Maybe{VOrC{str, num}}
+  \\                  (Cee(5) as VOrC{str, num})
   \\                ) as P{str, num}
   \\        }
   \\      ) as Map{str, P{str, num}}
-  \\    ) as Map{str, P{str, num}}?, 
   \\  }
   \\ )
   \\ println(x)
@@ -194,7 +192,7 @@ test "types" {
   \\ let x = None
   \\ let y: str? = x
   \\ let z: (num)? = Just(5)
-  \\ let z2: num = z.?? + 5
+  \\ let z2: num = z.? + 5
   \\ z2 += z2
   \\ let j: Tuple{true, false} = (true, false)
   \\ let q = (1, 2, 'abc', 0xff, 1, 'foo', 'bar')
@@ -258,9 +256,9 @@ test "linking" {
   \\ alias D{K} = C{K, B}
   \\ alias HashMap{K, V} = C{K, V}
   \\ alias StringHashMap{V} = HashMap{str, V}
-  \\ alias BadList = List{StringHashMap{HashMap{A, D{B}?}}}
-  \\ alias X = BadList? #(D{BadList}? | D{B}? | BadList?)
-  \\ let x: X = Just([{'fox': {'fin': Just({0x12: 0xbee}) as Map{num, num}?}}])
+  \\ alias BadList = List{StringHashMap{HashMap{A, D{B}}}}
+  \\ alias X = BadList #(D{BadList}? | D{B}? | BadList?)
+  \\ let x: X = ([{'fox': {'fin': ({0x12: 0xbee}) as Map{num, num}}}])
   \\ x
   \\ let y: D{B}? = Just({10: 5}) as Map{num, num}?
   \\ y
@@ -295,7 +293,7 @@ test "recursive types" {
   \\      Str('ok')
   \\    ]) as R,
   \\    Col([ Col([ Col([Str('duh') as R]) as R ]) as R ]),
-  \\    Col([Num(4)])
+  \\    Col([R.Num(4)])
   \\ ])
   \\ x = Str('ok')
   \\ x
@@ -323,6 +321,33 @@ test "circularity" {
   try doRuntimeTest(src);
 }
 
+test "circularity-2" {
+  const src =
+  \\ type T{P} = A1(str) | B1(S{P})
+  \\ type S{K} = A2(K) | B2(T{num})
+  \\ let p: T{str} = A1('fox')
+  \\ println(p)
+  \\ p = B1(A2('5') as S{str})
+  \\ println(p)
+  ;
+  try doRuntimeTest(src);
+}
+
+test "circularity-3" {
+  const src =
+  \\ type T{P} = A1(P) | B1(S{P})
+  \\ type S{K} = A2(K) | B2(T{K})
+  \\ let p: T{str} = A1('fox')
+  \\ p = B1(A2('5') as S{str})
+  \\
+  \\ type T{P} = A1(P) | B1(S{P})
+  \\ type S{K} = A2(K) | B2(T{K})
+  \\ let p: T{num} = A1('fox'.len())
+  \\ p = B1(A2(5) as S{num})
+  ;
+  try doRuntimeTest(src);
+}
+
 test "cast-typecheck" {
   const src =
   \\ let x = 5 as bool
@@ -336,8 +361,8 @@ test "cast-typecheck" {
   \\  case Num(t) => q = Num(t + 5)
   \\  case _ => assert(false, '')
   \\ end
-  \\ alias X = NumStr?
-  \\ let y: X = Just(Str('food') as NumStr)
+  \\ alias X = NumStr
+  \\ let y: X = (Str('food') as NumStr)
   \\ y
   \\
   \\ type Cat = A(str) | B(str)
@@ -345,11 +370,8 @@ test "cast-typecheck" {
   \\ let x: Cat = Cat.A('fox')
   \\ let y: Dog = Dog.A(12)
   \\ println(x, y)
-  \\ # okay, because Dog.B is exactly same as Cat.B, the namespace (Dog or Cat) doesn't matter, they're just aliases
-  \\ x = Dog.B('foo')
+  \\ x = Cat.B('foo')
   \\ y = Dog.A(56)
-  \\ # this wouldn't be okay however:
-  \\ # x = Dog.A(5)
   \\ type Cat = A(str)
   \\ type Dog = A(num)
   \\ let x: Cat = Cat.A('fox')
@@ -438,9 +460,9 @@ test "type summation" {
 test "nil access" {
   const src =
   \\ let x: num? = Just(5)
-  \\ let p = x.?? + 10
+  \\ let p = x.? + 10
   \\ let f = {'foo': Just(5) as num?}
-  \\ let j = f['foo'].?? + 5
+  \\ let j = f['foo'].? + 5
   \\ assert(j == 10, 'should be 10')
   ;
   try doRuntimeTest(src);
@@ -452,7 +474,7 @@ test "if statement" {
   \\ let x: num = 5
   \\ let t: num? = Just(15)
   \\ let p = 0
-  \\ if x == t.?? / 3 -1
+  \\ if x == t.? / 3 -1
   \\   p = x + 10
   \\ elif t == None
   \\    p = 29
@@ -482,7 +504,7 @@ test "if statement" {
   \\ let x: num = 5
   \\ let t: num? = Just(15)
   \\ let p = 0
-  \\ if x == t.?? / 3
+  \\ if x == t.? / 3
   \\   p = x + 10
   \\   p *= 3
   \\ else
@@ -516,7 +538,7 @@ test "if statement" {
   \\    let x: num = 5
   \\    let t: num? = Just(15)
   \\    let p = 0
-  \\    if x == t.?? / 3
+  \\    if x == t.? / 3
   \\      p = x + 10
   \\      p *= 3
   \\      p += x - 10
@@ -533,7 +555,7 @@ test "if statement" {
   \\ let x: num = 5
   \\ let t: num? = Just(15)
   \\ let p = 0
-  \\ if x == t.?? / 3
+  \\ if x == t.? / 3
   \\   p = x + 10
   \\   p *= 3
   \\   p = x - 10
@@ -548,7 +570,7 @@ test "if statement" {
   \\ let x: num = 5
   \\ let t: num? = Just(15)
   \\ let p = 0
-  \\ if 0xf == x - t.??
+  \\ if 0xf == x - t.?
   \\   p = x + 10
   \\ else
   \\   p = x - 10
@@ -573,6 +595,7 @@ test "if statement" {
   \\  case Str(t) => if t == 'fox'
   \\    w /= 2
   \\  end
+  \\  case _ => panic('bad')
   \\ end
   \\ assert(w == 61.5, 'should be 61.5')
   ;
@@ -854,7 +877,7 @@ test "narrowing-14" {
   const src =
   \\ type T = L(List{num}) | S(str)
   \\ let x: T? = Just(L([5]) as T)
-  \\ match x.??
+  \\ match x.?
   \\  case L([1]) => assert(false, 'no')
   \\  case L([5]) => assert(true, 'yes')
   \\  case L([..]) => assert(false, 'no')
@@ -868,8 +891,8 @@ test "narrowing-14" {
 test "narrowing-15" {
   const src =
   \\ let x: Tuple{List{num}, str?} = ([5], Just('foo') as Maybe{str})
-  \\ if x[0] is List{num} and x[1].?? is str
-  \\    x[0][0] += x[1].??.len()
+  \\ if x[0] is List{num} and x[1].? is str
+  \\    x[0][0] += x[1].?.len()
   \\ else
   \\    assert(false, '')
   \\ end
@@ -910,11 +933,18 @@ test "narrowing-18" {
   \\ do
   \\   let x: List{num?} = [Just(5) as num?]
   \\   let p = x as List{num?}
-  \\   if p[0].?? is num # redundant but okay
-  \\      p[0].?? += 12
+  \\   if p[0].? is num # redundant but okay
+  \\      p[0].?? += 12 # type checks because x is a list with one type
   \\   end
-  \\   assert(p[0].?? == 17, 'should be 17')
+  \\   assert(p[0].? == 17, 'should be 17')
   \\ end
+  \\ ()
+  \\ let x: List{num?} = [Just(5) as num?]
+  \\ let p = x as List{num?}
+  \\ if p[0].?? is num # redundant but okay
+  \\    p[0].?? += 12
+  \\ end
+  \\ assert(p[0].?? == 17, 'should be 17')
   \\ ()
   \\ let t: num = 0
   \\ let v: Tuple{Map{num, num}, Tuple{num, str}} = ({1: 4}, (15, 'abc'))
@@ -1050,7 +1080,7 @@ test "narrowing-24" {
   \\ type NumStr = N(num) | S(str)
   \\ let x: Maybe{NumStr} = Just(N(4) as NumStr) as NumStr?
   \\ let z = 0
-  \\ match x.??
+  \\ match x.?
   \\  case N(t) => z = t + 5
   \\  case S(_) => assert(false, 'oops')
   \\ end
@@ -1451,6 +1481,16 @@ test "functions-7" {
   \\  read(fun)
   \\ end
   \\ fun()
+  ;
+  try doRuntimeTest(src);
+}
+
+test "functions-7.b" {
+  const src =
+  \\ def apply{T, K}(a: num, param: T, x*: fn(T):K): T
+  \\  return x[0](param) + param + a
+  \\ end
+  \\ assert(apply(12, 5, def (x: num) => x * x) == 42, 'should be 42')
   ;
   try doRuntimeTest(src);
 }
@@ -1984,11 +2024,6 @@ test "builtin-functions" {
 
 test "builtin-functions-override" {
   const src =
-  \\ def panic{T}(x: T)
-  \\  return [x]
-  \\ end
-  \\ assert(panic('nice')[0] == 'nice', 'okay')
-  \\
   \\ def exit(x: num)
   \\  return x - 2
   \\ end
@@ -2093,8 +2128,8 @@ test "errors-2b" {
   \\ end
   \\
   \\ def test()
-  \\  let k = fun(12) orelse |e| Ok(15)
-  \\  return k
+  \\  let k = fun(12) orelse |e| 15
+  \\  return Ok(k)
   \\ end
   \\ match test()
   \\   case Ok(p) => assert(p == 12, 'p should be 12')
@@ -2115,8 +2150,8 @@ test "errors-3" {
   \\  end
   \\  
   \\  def fancy()
-  \\   let j = fun(2) orelse Ok(4)
-  \\   return Just(j)
+  \\   let j = fun(2) orelse 4
+  \\   return Just(Ok(j))
   \\  end
   \\  let k = fancy()
   \\  match k
@@ -2135,8 +2170,8 @@ test "errors-3" {
   \\  end
   \\  
   \\  def fancy()
-  \\   let j = fun(2) orelse Ok(4)
-  \\   return Just(j)
+  \\   let j = fun(2) orelse 4
+  \\   return Just(Ok(j))
   \\  end
   \\  let k = fancy()
   \\  match k
@@ -2158,9 +2193,9 @@ test "errors-5" {
   \\  end
   \\  
   \\  def fancy{T}(x: T)
-  \\   let j = fun(x) orelse Ok(5)
+  \\   let j = fun(x) orelse 5
   \\   match j
-  \\    case Ok(n) => return n + 5
+  \\    case n => return n + 5
   \\   end
   \\  end
   \\  let k = fancy(12)
@@ -2177,7 +2212,7 @@ test "errors-5" {
   \\ end
   \\ 
   \\ def fancy{T}(x: T)
-  \\  let j = fun(x) orelse Ok(5)
+  \\  let j = Ok(fun(x) orelse 5)
   \\  match j
   \\   case Ok(n) => return n + 5
   \\  end
@@ -2199,10 +2234,10 @@ test "errors-6" {
   \\  end
   \\ end
   \\ let e = 3
-  \\ let j = fancy(22) orelse |e| Ok(3)
+  \\ let j = fancy(22) orelse |e| 3
   \\ let k = 0
   \\ match j
-  \\  case Ok(n) => k += n + 5
+  \\  case n => k += n + 5
   \\ end
   \\ # println(e, j)
   \\ assert(e == 3 and k == 8, 'e should not change')
@@ -2386,7 +2421,7 @@ test "simple-classes-1.<call & dot access mutation>" {
   \\
   \\ let k = Foxy()
   \\ fun(k).x = [1, 2, 3]
-  \\ assert(k.x.len() == 3 and k.x.get(2).?? == 3, 'should be')
+  \\ assert(k.x.len() == 3 and k.x.get(2).? == 3, 'should be')
   ;
   try doRuntimeTest(src);
 }
@@ -2440,7 +2475,7 @@ test "generic-classes-1" {
 test "generic-classes-2" {
   const src =
   \\ let j = [1, 2, 3]
-  \\ let p = j.pop().?? + 4
+  \\ let p = j.pop().? + 4
   \\ j.append(4)
   \\ let k = (j, p)
   \\ p += k.len()
@@ -2450,7 +2485,7 @@ test "generic-classes-2" {
   \\ assert(x.keys().len() == 2, 'length of keys should be 2')
   \\ assert(x.values().len() == 2, 'length of values should be 2')
   \\ assert(x.items().len() == 2, 'length of items should be 2')
-  \\ assert(x.get('a').?? + 12 == 17, 'sum should be 17')
+  \\ assert(x.get('a').? + 12 == 17, 'sum should be 17')
   ;
   try doRuntimeTest(src);
 }
@@ -2462,9 +2497,9 @@ test "generic-classes-3" {
   \\ j.append(5)
   \\ _(1)
   \\ assert(j.len() == 2, 'len should be 2')
-  \\ let x = j.pop().??
+  \\ let x = j.pop().?
   \\ assert(x == 1, 'x should be 1')
-  \\ assert(j.pop().?? == 5, 'should be 5')
+  \\ assert(j.pop().? == 5, 'should be 5')
   \\ assert(j.len() == 0, 'len should be 0 now')
   \\ let t = {'a': 1, 'b': 5, 'c': 12}
   \\ println(t, t.get('d'))
@@ -2526,7 +2561,7 @@ test "generic-classes-4" {
 
 test "generic-classes-5" {
   const src =
-\\ class Fox{T}
+  \\ class Fox{T}
   \\    pub x: List{T}
   \\    def init(x*: T): void
   \\      self.x = x
@@ -2564,22 +2599,22 @@ test "labeled-argument" {
   \\  assert(x == 'oo', 'x should not be changed')
   \\  println('x is', x, 'y is', y, 'a is', a, 'b is', b)
   \\ end
-  \\ fun(y: 5, a: [2, 3], x: 'oo', ('oops')!)
-  \\ fun(y: 5, a: [2, 3], b: ('oops')!, x: 'oo')
+  \\ fun(y=5, a=[2, 3], x='oo', b=('oops')!)
+  \\ fun(y=5, a=[2, 3], b=('oops')!, x='oo')
   \\ 
   \\ def fun(x: str, y: num, a*: List{num})
   \\  assert(x == 'oo', 'x should not be changed')
   \\  println('x is', x, 'y is', y, 'a is', a)
   \\ end
-  \\ fun(y: 5, a: [2, 3], x: 'oo', a: [1, 2], a: [5, 6, 7])
-  \\ fun(y: 5, a: [2, 3], x: 'oo', a: [1, 2], a: [5, 6, 7])
-  \\ fun(y: 5, a: [2, 3], x: 'oo', [1, 2], [5, 6, 7])
+  \\ fun(y=5, a=[2, 3], x='oo', a=[1, 2], a=[5, 6, 7])
+  \\ fun(y=5, a=[2, 3], x='oo', a=[1, 2], a=[5, 6, 7])
+  \\ fun(y=5, a=[2, 3], x='oo', a=[1, 2], a=[5, 6, 7])
   \\
   \\ def fun(x: str, y: num, a*: List{num})
   \\  assert(y == 5, 'y should not change')
   \\  println('x is', x, 'y is', y, 'a is', a)
   \\ end
-  \\ fun(a: [0x1, 0x2], y: 5, 'a', a: [2, 3])
+  \\ fun(a=[0x1, 0x2], y=5, x='a', a=[2, 3])
   ;
   try doRuntimeTest(src);
 }
@@ -2601,9 +2636,9 @@ test "labeled-argument-2" {
   \\    end
   \\  end
   \\ end
-  \\ let f = Fun(b: 'oops', a: 12)
+  \\ let f = Fun(b='oops', a=12)
   \\ println(f.a, f.b)
-  \\ f.send(data: ['a' as any, 1, f])
+  \\ f.send(data=['a' as any, 1, f])
   ;
   try doRuntimeTest(src);
 }
@@ -2703,10 +2738,10 @@ test "tagged unions" {
   \\ j = Nil
   \\ # -- #
   \\ type Tree{T} = Branch(Tree{T}, Tree{T}) | Node(T)
-  \\ let tree: Tree{num} = Branch(Node(1), Node(2))
+  \\ let tree: Tree{num} = Branch(Node(1) as Tree{num}, Node(2) as Tree{num})
   \\ # -- #
   \\ type Many{T} = More(Many{T}) | One(T)
-  \\ let x: Many{num} = More(One(45))
+  \\ let x: Many{num} = More(One(45) as Many{num})
   \\ # -- #
   \\ alias T = num
   \\ type Tree = Branch(Tree, Tree) | Node(T)
@@ -2717,8 +2752,8 @@ test "tagged unions" {
   \\ tree2 = Leaf
   \\ let tree2 = Node(5, Node(1, Leaf, Leaf), Node(3, Leaf, Node(4, Leaf, Leaf)))
   \\ type Tree{T} = Node(val:T, lhs:Tree{T}, rhs:Tree{T}) | Leaf
-  \\ let tree2 = Node(val:4, lhs:Leaf, Node(val:3, Leaf, Leaf))
-  \\ let j: Tree{num} = Node(Leaf, Leaf, val:2)
+  \\ let tree2 = Node(val=4, lhs=Leaf, Node(val=3, lhs=Leaf, rhs=Leaf))
+  \\ let j: Tree{num} = Node(2, Leaf, Leaf)
   \\ j = tree2
   \\ # -- #
   \\ type Pair{K, V} = Pair(K, V)
@@ -2757,7 +2792,7 @@ test "patterns-1.<ordinary match>" {
   \\ end
   \\ assert(e1 == 'a', 'should be a')
   \\ assert(e2 == 'b', 'should be b')
-  \\ 
+  \\
   ;
   try doRuntimeTest(src);
 }
@@ -2842,8 +2877,8 @@ test "patterns-5.<match on classes>" {
   \\  case A(Ant(a)) if a > 2 => println(12)
   \\  case A(Ant(5)) => println(13)
   \\  case A(Ant(_)) => println(40)
-  \\  case R(Rat(x, z='ok.', ..)) if x == 'yes' => println(9)
-  \\  case R(Rat(x='ok', z='12', ..)) => println(15)
+  \\  case R(Rat(x=x, y='no.', ..)) if x == 'yes' => println(9)
+  \\  case R(Rat(x='ok', y='12', ..)) => println(15)
   \\  case R(Rat(x='yes' as a, y='no' as p, ..)) as t => do
   \\    println(19, t, a, p)
   \\    z = true
@@ -3262,9 +3297,9 @@ test "patterns-26.<match on rested>" {
   \\ let z = false
   \\ let j = ('a', true, 'b', 2, 'c', 3)
   \\ match j
-  \\  case ('x', _) => println('yay')
+  \\  case ('x', _, ..) => println('yay')
   \\  case ('a', _ as t, ..) => z = t
-  \\  case (a, b) => println('nay')
+  \\  case (a, b, ..) => println('nay')
   \\  case _ => println('default')
   \\ end
   \\ assert(z, 'should be matched')
@@ -3783,7 +3818,7 @@ test "patterns-55.<unused tag params>" {
   \\ type T{K, V} = K
   \\ let x: T{str, num} = K
   \\ println(x)
-  \\ let x: T{str, num} = T.K
+  \\ let x: T{str, num} = K
   \\ match x
   \\  case K => assert(true, 'okay')
   \\  case _ => assert(false, 'bad')
@@ -3797,7 +3832,7 @@ test "patterns-56.<generic qualified tag access>" {
   \\ type T{K, V} = K
   \\ let x: T{str, num} = K
   \\ println(x)
-  \\ let x: T{str, num} = T.K
+  \\ let x: T{str, num} = K
   \\ match x
   \\  case K => assert(true, 'okay')
   \\  case _ => assert(false, 'bad')
@@ -3851,7 +3886,7 @@ test "patterns-56.<shadowing via aliased capture>" {
 test "patterns-56.<annotated tags>" {
   const src =
   \\ type T = Tag(a: num, b: str, c: bool)
-  \\  match Tag(a: 5, b: 'oops', c: false)
+  \\  match Tag(a=5, b='oops', c=false)
   \\    case Tag(a=5, b='oopsy', c=false) => assert(false, 'oops')
   \\    case Tag(a=_, b=_, c=_) => assert(true, 'yes!')
   \\  end
@@ -3862,7 +3897,7 @@ test "patterns-56.<annotated tags>" {
 test "patterns-56.<annotated tags - exhaustiveness>" {
   const src =
   \\ type T = Tag(a: num, b: str, c: bool)
-  \\  match Tag(a: 5, b: 'oops', c: false)
+  \\  match Tag(a=5, b='oops', c=false)
   \\    case Tag(a=_, b=_, c=false) => assert(true, 'good')
   \\    case Tag(a=_, b=_, c=true) => assert(false, 'bad')
   \\  end
@@ -4000,6 +4035,62 @@ test "match expressions .3" {
   try doRuntimeTest(src);
 }
 
+test "match expressions .4" {
+  const src =
+  \\ let x = [1, 2, 3, 4, 5, 6, 7]
+  \\ let t = match x
+  \\  case [1, 2, 3, ..k] if k.len() > 2 => k
+  \\  case _ => [5]
+  \\ end
+  \\ assert(t[0] == 4, 'should be 4')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "match expressions .5 <captured rest pattern>" {
+  const src =
+  \\ let x = [1, 2, 3, 4, 5, 6, 7]
+  \\ def sum_list(l: List{num})
+  \\  return match l
+  \\   case [] => 0
+  \\   case [h, ..t] => h + sum_list(t)
+  \\  end
+  \\ end
+  \\ assert(sum_list(x) == 28, 'should be 28')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "match expressions .6 <captured rest pattern>" {
+  const src =
+  \\ let x = [1, 2, 3, 4, 5, 6, 7]
+  \\ let add = def (a: num, b: num) => a + b
+  \\ def reduce(l: List{num}, func: fn(num, num):num, init: num)
+  \\  return match l
+  \\   case [] => init
+  \\   case [h, ..t] => func(reduce(t, func, init), h)
+  \\  end
+  \\ end
+  \\ assert(reduce(x, add, 0) == 28, 'should be 28')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "match expressions .7 <captured rest pattern>" {
+  const src =
+  \\ let x = [1, 2, 3, 4, 5, 6, 7]
+  \\ let add = def (a: num, b: num) => a + b
+  \\ def reduce{T}(l: List{T}, func: fn(T, T):T, init: T)
+  \\  return match l
+  \\   case [] => init
+  \\   case [h, ..t] => func(reduce(t, func, init), h)
+  \\  end
+  \\ end
+  \\ assert(reduce(x, add, 0) == 28, 'should be 28')
+  ;
+  try doRuntimeTest(src);
+}
+
 test "aspec.<methods 1>" {
   const src =
   \\ class Fish
@@ -4071,6 +4162,71 @@ test "aspec.<methods 3>" {
   \\  end
   \\ end
   \\ assert(Fish().fox() == 7, 'should be 7')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "unused generic tparams" {
+  const src =
+  \\ type T{K} = B(K)
+  \\ alias F{P} = num
+  \\ let j = B(5) as T{F{str}}
+  \\ match j
+  \\  case B(t) => assert(t == 5, 'should be 5')
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
+test "unused generic tparams.2" {
+  const src =
+  \\ type T{K} = B(F{K})
+  \\ alias F{P} = num
+  \\ let j = B(5) as T{F{str}}
+  \\ match j
+  \\  case B(t) => assert(t == 5, 'should be 5')
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
+test "tags with function types" {
+  const src =
+  \\ type Fun{T} = OneArg(fn(T):T) | TwoArg(fn(T, T): T)
+  \\ let one = def (a: num) => a * a
+  \\ let two = def (a: num, b: num) => a * b
+  \\ let j: Fun{num} = OneArg(one)
+  \\ j = TwoArg(two)
+  \\ let k = match j
+  \\  case OneArg(f) => f(6)
+  \\  case TwoArg(f) => f(6, 7)
+  \\ end
+  \\ assert(k == 42, 'should be 42')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "non-boolean conditions" {
+  const src =
+  \\ type T = A | B
+  \\ let j = T.A
+  \\ if j as bool
+  \\   assert(true, 'should be true')
+  \\ else
+  \\   assert(false, 'should not be false')
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
+test "nullable assertions" {
+  const src =
+  \\ let x: Tuple{List{num}, str?} = ([5], Just('foo') as Maybe{str})
+  \\ if x[0] is List{num} and x[1].?? is str
+  \\    x[0][0] += x[1].??.len()
+  \\ else
+  \\    assert(false, '')
+  \\ end
   ;
   try doRuntimeTest(src);
 }

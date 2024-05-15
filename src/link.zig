@@ -1,20 +1,21 @@
 const std = @import("std");
-const ast = @import("ast.zig");
 const util = @import("util.zig");
 const diagnostics = @import("diagnostics.zig");
 const ds = @import("ds.zig");
-pub const types = @import("type.zig");
-pub const Token = @import("lex.zig").Token;
+const FlowNode = @import("fir.zig").FlowNode;
+pub const tir = @import("tir.zig");
 
-pub const Type = types.Type;
-pub const TypeList = types.TypeList;
-pub const Union = types.Union;
-pub const TypeKind = types.TypeKind;
-pub const TypeInfo = types.TypeInfo;
-pub const Generic = types.Generic;
-pub const Variable = types.Variable;
-pub const Recursive = types.Recursive;
-pub const Node = ast.AstNode;
+const Allocator = tir.Allocator;
+const Token = tir.lex.Token;
+const Type = tir.Type;
+const TypeList = tir.TypeList;
+const Union = tir.Union;
+const TypeKind = tir.TypeKind;
+const TypeInfo = tir.TypeInfo;
+const Generic = tir.Generic;
+const Variable = tir.Variable;
+const Recursive = tir.Recursive;
+const Node = tir.Node;
 const Diagnostic = diagnostics.Diagnostic;
 const U8Writer = util.U8Writer;
 
@@ -24,7 +25,7 @@ fn CreateMap(comptime K: type, comptime V: type) type {
 
     const Map = std.StringHashMap(V);
 
-    pub fn init(allocator: std.mem.Allocator) @This() {
+    pub fn init(allocator: Allocator) @This() {
       return @This() {.map = Map.init(allocator)};
     }
 
@@ -47,13 +48,13 @@ fn CreateMap(comptime K: type, comptime V: type) type {
 pub fn GenScope(comptime K: type, comptime V: type) type {
   return struct {
     decls: ds.ArrayList(ScopeMap),
-    const ScopeMap = CreateMap(K, V);
+    pub const ScopeMap = CreateMap(K, V);
 
-    pub fn init(al: std.mem.Allocator) @This(){
+    pub fn init(al: Allocator) @This(){
       return @This() {.decls = ds.ArrayList(ScopeMap).init(al)};
     }
 
-    pub inline fn allocator(self: *@This()) std.mem.Allocator {
+    pub inline fn allocator(self: *@This()) Allocator {
       return self.decls.allocator();
     }
 
@@ -111,6 +112,19 @@ pub fn GenScope(comptime K: type, comptime V: type) type {
       return null;
     }
 
+    pub fn update(self: *@This(), name: K, new: V) ?V {
+      if (self.len() == 0) return null;
+      var i: usize = self.len();
+      while (i > 0): (i -= 1) {
+        var map = &self.decls.items()[i - 1];
+        if (map.get(name)) |ty| {
+          map.put(name, new);
+          return ty;
+        }
+      }
+      return null;
+    }
+
     pub fn remove(self: *@This(), name: K) void {
       if (self.len() == 0) return;
       var i: usize = self.len();
@@ -122,11 +136,11 @@ pub fn GenScope(comptime K: type, comptime V: type) type {
       }
     }
 
-    pub fn insert(self: *@This(), name: K, ty: V) void {
+    pub fn insert(self: *@This(), name: K, val: V) void {
       if (self.len() == 0) {
         util.error_("insert into empty scope-list", .{});
       }
-      self.decls.items()[self.len() - 1].put(name, ty);
+      self.decls.items()[self.len() - 1].put(name, val);
     }
 
     pub fn clear(self: *@This()) void {
@@ -144,11 +158,11 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
     /// scope for other declarations, e.g. variables, functions, etc.
     varScope: VarScope,
     /// data
-    data: Data,
+    data: ContextData,
 
     const Self = @This();
 
-    pub fn init(al: std.mem.Allocator) Self {
+    pub fn init(al: Allocator) Self {
       return Self {
         .typScope = TypScope.init(al), 
         .varScope = VarScope.init(al),
@@ -156,7 +170,7 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
       };
     }
 
-    pub inline fn allocator(self: *Self) std.mem.Allocator {
+    pub inline fn allocator(self: *Self) Allocator {
       return @call(.always_inline, TypScope.allocator, .{&self.typScope});
     }
 
@@ -177,9 +191,12 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
   };
 }
 
-pub const Data = struct {parent: ?*Node = null};
 pub const Scope = GenScope([]const u8, *Type);
 pub const TContext = CreateTContext(Scope, Scope);
+pub const ContextData = struct {
+  parent: ?*Node = null,
+  flo_node: ?FlowNode =  null,
+};
 
 pub const TypeLinker = struct {
   ctx: *TContext,
@@ -194,13 +211,13 @@ pub const TypeLinker = struct {
   diag: *Diagnostic,
   u8w: *U8Writer,
   /// types that shouldn't be used as aliases
-  ban_alias: ?*TypeList = null,
+  ban_alias: ?tir.TypeItems = null,
 
   const MultiPair = struct {setter: *Type, key: *Type, value: *Type};
   const PairScope = GenScope([]const u8, MultiPair);
   const MAX_DEPTH = 0x64;
   pub const TypeLinkError = error{TypeLinkError};
-  pub const MAX_SUB_STEPS = types.MAX_RECURSIVE_DEPTH;
+  pub const MAX_SUB_STEPS = tir.MAX_RECURSIVE_DEPTH;
 
   const Self = @This();
 
@@ -222,10 +239,10 @@ pub const TypeLinker = struct {
     self.diag.addDiagnosticsWithLevel(.DiagError, token, "Error: " ++ fmt, args);
   }
 
-  fn getConcatName(self: *Self, tvar: *types.Variable) []const u8 {
+  fn getConcatName(self: *Self, tvar: *tir.Variable) []const u8 {
     const end = tvar.tokens.len() - 1;
     for (tvar.tokens.items(), 0..) |tk, i| {
-      _ = self.u8w.writer().write(tk.value) catch 0;
+      _ = self.u8w.writer().write(tk.lexeme()) catch 0;
       if (i < end) {
         _ = self.u8w.writer().write(".") catch 0;
       }
@@ -235,7 +252,7 @@ pub const TypeLinker = struct {
 
   inline fn getVarName(self: *Self, typ: *Type) []const u8 {
     var tvar = typ.variable();
-    return if (tvar.tokens.len() == 1) tvar.tokens.itemAt(0).value else self.getConcatName(tvar);
+    return if (tvar.len() == 1) tvar.getFirstLexeme() else self.getConcatName(tvar);
   }
 
   fn insertTVar(self: *Self, typ: *Type, data: MultiPair) void {
@@ -270,7 +287,7 @@ pub const TypeLinker = struct {
     return self.ctx.typScope.lookup(name);
   }
 
-  inline fn lookupVarType(self: *Self, typ: *Type) ?*Type {
+  pub inline fn lookupTypeVariable(self: *Self, typ: *Type) ?*Type {
     var tokens = typ.variable().tokens.items();
     if (tokens.len > 1) {
       // TODO: context type
@@ -278,7 +295,7 @@ pub const TypeLinker = struct {
       defer self.ctx.leaveScope();
       const end = tokens.len - 1;
       for (tokens, 0..) |tk, i| {
-        if (self.lookup(tk.value)) |ty| {
+        if (self.lookup(tk.lexeme())) |ty| {
           if (ty.isTaggedUnion()) {
             // bring the variants into scope
             for (ty.taggedUnion().variants.items()) |_ty| {
@@ -291,13 +308,13 @@ pub const TypeLinker = struct {
       }
       return null;
     } else {
-      return self.lookup(tokens[0].value);
+      return self.lookup(tokens[0].lexeme());
     }
   }
 
   fn findType(self: *Self, typ: *Type, from_gen: bool) ?*Type {
     // TODO: augment to return failing name token
-    if (self.lookupVarType(typ)) |ty| {
+    if (self.lookupTypeVariable(typ)) |ty| {
       // if this variable occurs in the pair stack before we push it,
       // then it's cyclic/recursive
       if (self.checkTVar(typ, ty)) |rec| {
@@ -308,7 +325,7 @@ pub const TypeLinker = struct {
           return Type.newRecursive(rec).box(self.ctx.allocator());
         }
       }
-      var result = switch (ty.kind) {
+      const result = switch (ty.info) {
         .Concrete, .Variable, .Constant => ty,
         else => self.ctx.copyType(ty),
       };
@@ -418,7 +435,7 @@ pub const TypeLinker = struct {
       return false;
     }
     if (typ.isTag()) {
-      if (typ.tag().params) |params| {
+      if (typ.tag().fields) |params| {
         for (params.items()) |param| {
           if (try self.resolveTypeAbs(param.typ, debug)) {
             return true;
@@ -447,7 +464,7 @@ pub const TypeLinker = struct {
     return false;
   }
 
-  fn resolveType(self: *Self, typ: *Type, debug: Token) TypeLinkError!*Type {
+  fn resolveType(self: *Self, typ: *Type, debug: Token, al: Allocator) TypeLinkError!*Type {
     try self.assertMaxSubStepsNotExceeded(false, debug);
     if (typ.isSimple() or typ.isConstant() or typ.isRecursive()) {
       return typ;
@@ -469,19 +486,38 @@ pub const TypeLinker = struct {
         // A generic recursive type's tparams will never be resolved and substituted for, so
         // just ensure that the tparam is actually valid.
         for (gen.tparams.items()) |tparam| {
-          _ = try self.resolveType(tparam, debug);
+          _ = try self.resolveType(tparam, debug, al);
         }
         // complete the ouroboros
         typ.* = eqn.*;
         return eqn;
       } else if (eqn.isClass()) {
         // create a temp generic type and validate if this generic substitution matches
-        var tmp = Type.init(.{.Generic = .{.tparams = eqn.klass().tparams.?.*, .base = eqn}});
+        var tparams = TypeList.init();
+        tparams.appendSlice(eqn.klass().tparams.?, al);
+        var tmp = Type.init(.{.Generic = .{.tparams = tparams, .base = eqn}});
         try self.assertGenericAliasSubMatches(&tmp, typ, debug);
-        var len = eqn.klass().getSlice().len;
-        for (0..len) |i| {
-          eqn.klass().tparams.?.items()[i] = try self.resolveType(gen.tparams.itemAt(i), debug);
+        var alias = eqn.alias orelse &tmp;
+        try self.assertGenericAliasSubMatches(alias, typ, debug);
+        self.ctx.typScope.pushScope();
+        self.using_tvar += 1;
+        var alias_gen = alias.generic();
+        var resolved_params = TypeList.init();
+        for (alias_gen.getSlice(), 0..) |tvar, i| {
+          std.debug.assert(tvar.variable().len() == 1);
+          var tsub = gen.tparams.itemAt(i);
+          const r_tsub = try self.resolveType(tsub, debug, al);
+          resolved_params.append(r_tsub, al);
         }
+        for (alias_gen.getSlice(), resolved_params.items()) |tvar, tsub| {
+          self.insert(tvar.variable().getFirstLexeme(), tsub);
+        }
+        var slice = eqn.klass().getSlice();
+        for (0..slice.len) |i| {
+          slice[i] = try self.resolveType(tparams.itemAt(i), debug, al);
+        }
+        self.using_tvar -= 1;
+        self.ctx.typScope.popScope();
         return eqn;
       } else if (eqn.alias == null or !eqn.alias.?.isGeneric()) {
         // only instantiate generic type variables when the alias type is guaranteed to be generic
@@ -492,26 +528,26 @@ pub const TypeLinker = struct {
       self.ctx.typScope.pushScope();
       self.using_tvar += 1;
       var alias_gen = alias.generic();
-      var resolved_params = TypeList.init(self.ctx.allocator());
+      var resolved_params = TypeList.init();
       for (alias_gen.getSlice(), 0..) |tvar, i| {
-        std.debug.assert(tvar.variable().tokens.len() == 1);
+        std.debug.assert(tvar.variable().len() == 1);
         var tsub = gen.tparams.itemAt(i);
-        const r_tsub = try self.resolveType(tsub, debug);
-        resolved_params.append(r_tsub);
+        const r_tsub = try self.resolveType(tsub, debug, al);
+        resolved_params.append(r_tsub, al);
       }
       for (alias_gen.getSlice(), resolved_params.items()) |tvar, tsub| {
-        self.insert(tvar.variable().tokens.itemAt(0).value, tsub);
+        self.insert(tvar.variable().getFirstLexeme(), tsub);
       }
       // `eqn` is the type alias' aliasee, and may not be generic, so we add an extra guard.
       // for ex: type Foo{T} = T  # <-- aliasee/eqn 'T' is not generic here.
       if (eqn.isGeneric()) {
         var eqn_gen = eqn.generic();
         for (eqn_gen.getSlice(), 0..) |param, i| {
-          eqn_gen.tparams.items()[i] = try self.resolveType(param, debug);
+          eqn_gen.tparams.items()[i] = try self.resolveType(param, debug, al);
         }
       }
       // resolving eqn resolves typ
-      var sol = try self.resolveType(eqn, debug);
+      const sol = try self.resolveType(eqn, debug, al);
       self.using_tvar -= 1;
       self.ctx.typScope.popScope();
       self.delTVar(gen.base);
@@ -519,17 +555,17 @@ pub const TypeLinker = struct {
     }
     if (typ.isClass()) {
       for (typ.klass().getSlice(), 0..) |param, i| {
-        typ.klass().tparams.?.items()[i] = try self.resolveType(param, debug);
+        typ.klass().tparams.?[i] = try self.resolveType(param, debug, al);
       }
       return typ;
     }
-    if (typ.isFunction() and !typ.function().isGeneric()) {
+    if (typ.isFunction() and !typ.function().isParameterized()) {
       var fun = typ.function();
-      for (fun.params.items(), 0..) |param, i| {
-        fun.params.items()[i] = try self.resolveType(param, debug);
+      for (fun.data.params, 0..) |param, i| {
+        fun.data.params[i] = try self.resolveType(param, debug, al);
       }
       var count = self.diag.count();
-      fun.ret = self.resolveType(fun.ret, debug) catch {
+      fun.data.ret = self.resolveType(fun.data.ret, debug, al) catch {
         self.diag.popUntil(count);
         return typ;
       };
@@ -538,23 +574,23 @@ pub const TypeLinker = struct {
       // TODO: need to figure out how to do this in-place
       var uni = typ.union_();
       var old_variants = uni.variants;
-      uni.variants = types.TypeHashSet.init(self.ctx.allocator());
+      uni.variants = tir.TypeHashSet.init();
       for (old_variants.values()) |variant| {
-        uni.set(try self.resolveType(variant, debug));
+        uni.set(try self.resolveType(variant, debug, al), al);
       }
-      return Type.compressTypes(&uni.variants, typ);
+      return Type.compressTypes(&uni.variants, typ, al);
     }
     if (typ.isTaggedUnion()) {
       var variants = &typ.taggedUnion().variants;
       for (variants.items(), 0..) |variant, i| {
-        variants.items()[i] = try self.resolveType(variant, debug);
+        variants.items()[i] = try self.resolveType(variant, debug, al);
       }
       return typ;
     }
     if (typ.isTag()) {
-      if (typ.tag().params) |params| {
+      if (typ.tag().fields) |params| {
         for (params.items(), 0..) |prm, i| {
-          params.items()[i].typ = try self.resolveType(prm.typ, debug);
+          params.items()[i].typ = try self.resolveType(prm.typ, debug, al);
         }
       }
       self.insert(typ.tag().name, typ);
@@ -578,7 +614,7 @@ pub const TypeLinker = struct {
           }
         }
       }
-      var sol = try self.resolveType(eqn, debug);
+      const sol = try self.resolveType(eqn, debug, al);
       // when we finish resolving the variable - we pop it off the pair stack
       self.delTVar(typ);
       return sol;
@@ -589,24 +625,24 @@ pub const TypeLinker = struct {
   fn tryResolveType(self: *Self, typ: *Type, debug: Token) TypeLinkError!*Type {
     self.sub_steps = 0;
     self.in_inf = false;
-    if (typ.isLikeGeneric()) {
+    if (typ.isLikeParameterized()) {
       self.cyc_scope.pushScope();
+      defer self.cyc_scope.popScope();
       self.in_inf = try self.resolveTypeAbs(typ, debug);
-      self.cyc_scope.popScope();
     }
     self.cyc_scope.pushScope();
-    var sol = try self.resolveType(typ, debug);
+    defer self.cyc_scope.popScope();
+    var sol = try self.resolveType(typ, debug, self.ctx.allocator());
     if (sol.isTaggedUnion()) {
-      sol = Type.compressTaggedTypes(&sol.taggedUnion().variants, sol);
-    }
-    if (sol.isTaggedUnion()) {
-      for (sol.taggedUnion().variants.items()) |ty| {
-        self.insert(ty.tag().name, ty);
+      sol = Type.compressTaggedTypes(&sol.taggedUnion().variants, sol, self.ctx.allocator());
+      if (sol.isTaggedUnion()) {
+        for (sol.taggedUnion().variants.items()) |ty| {
+          self.insert(ty.tag().name, ty);
+        }
       }
     } else if (sol.isTag()) {
       self.insert(sol.tag().name, sol);
     }
-    self.cyc_scope.popScope();
     return sol;
   }
 
@@ -617,8 +653,11 @@ pub const TypeLinker = struct {
     // set alias info for debugging
     if (typ.alias == null) {
       if (self.ban_alias) |banned_types| {
-        if (!banned_types.contains(typ, Type.typeidEql)) {
-          ty.alias = typ;
+        for (banned_types) |_ty| {
+          if (!_ty.typeidEql(typ)) {
+            ty.alias = typ;
+            break;
+          }
         }
       } else ty.alias = typ;
     }
@@ -628,7 +667,7 @@ pub const TypeLinker = struct {
         var new_alias = self.ctx.copyType(alias);
         for (alias.generic().getSlice(), 0..) |_ty, i| {
           if (_ty.isVariable()) {
-            if (self.lookup(_ty.variable().tokens.getLast().value)) |_typ| {
+            if (self.lookup(_ty.variable().tokens.getLast().lexeme())) |_typ| {
               new_alias.generic().getSlice()[i] = _typ;
             }
           }
@@ -639,226 +678,167 @@ pub const TypeLinker = struct {
     return ty;
   }
 
-  fn linkNumber(self: *Self, node: *ast.LiteralNode) !void {
-    _ = self;
-    _ = node;
-  }
-
-  fn linkString(self: *Self, node: *ast.LiteralNode) !void {
-    _ = self;
-    _ = node;
-  }
-
-  fn linkBool(self: *Self, node: *ast.LiteralNode) !void {
-    _ = self;
-    _ = node;
-  }
-
-  fn linkUnary(self: *Self, node: *ast.UnaryNode) !void {
-    try self.link(node.expr);
-  }
-
-  fn linkBinary(self: *Self, node: *ast.BinaryNode) !void {
-    try self.link(node.left);
-    try self.link(node.right);
-  }
-
-  fn linkList(self: *Self, node: *ast.ListNode) !void {
-    for (node.elems.items()) |elem| {
+  inline fn linkList(self: *Self, node: *tir.ListNode) !void {
+    for (node.elems) |elem| {
       try self.link(elem);
     }
   }
 
-  fn linkMap(self: *Self, node: *ast.MapNode) !void {
-    for (node.pairs.items()) |pair| {
+  inline fn linkMap(self: *Self, node: *tir.MapNode) !void {
+    for (node.pairs) |pair| {
       try self.link(pair.key);
       try self.link(pair.value);
     }
   }
-
-  fn linkNil(self: *Self, node: *ast.LiteralNode) !void {
-    _ = self;
-    _ = node;
-  }
-
-  fn linkExprStmt(self: *Self, node: *ast.ExprStmtNode) !void {
-    try self.link(node.expr);
-  }
-
-  fn linkVar(self: *Self, node: *ast.VarNode) !void {
-    var typ = self.ctx.varScope.lookup(node.token.value);
-    if (typ != null) {
-      node.typ = typ;
-    }
-  }
-
-  fn linkAssign(self: *Self, node: *ast.BinaryNode) !void {
-    try self.linkBinary(node);
-  }
   
-  fn linkBlock(self: *Self, node: *ast.BlockNode) !void {
+  fn linkBlock(self: *Self, node: *tir.BlockNode) !void {
     self.ctx.enterScope();
-    for (node.nodes.items()) |item| {
+    for (node.nodes) |item| {
       try self.link(item);
     }
     self.ctx.leaveScope();
   }
 
-  pub fn linkNType(self: *Self, node: *ast.TypeNode) !void {
-    node.typ = try self.resolve(node.typ, node.token);
+  pub inline fn linkType(self: *Self, node: *tir.TypeNode) !void {
+    node.typ = try self.resolve(node.typ, node.tkbit.toToken());
   }
 
-  pub fn linkCast(self: *Self, node: *ast.CastNode) !void {
+  pub fn _linkType(self: *Self, typ: *Type, token: Token) !*Type {
+    return try self.resolve(typ, token);
+  }
+
+  pub fn linkCast(self: *Self, node: *tir.CastNode) !void {
     try self.link(node.expr);
-    try self.linkNType(node.typn);
+    try self.linkType(node.typn);
   }
 
-  pub fn linkVarDecl(self: *Self, node: *ast.VarDeclNode) !void {
-    if (node.ident.typ) |ty| {
-      node.ident.typ = try self.resolve(ty, node.ident.token);
-      self.ctx.varScope.insert(node.ident.token.value, node.ident.typ.?);
-    }
-    if (!(node.is_field or node.is_param)) {
-      try self.link(node.value);
+  pub inline fn linkVarDecl(self: *Self, node: *tir.VarDeclNode) !void {
+    try self.link(node.value);
+    if (node.typ) |typ| {
+      node.typ = try self.resolve(typ, node.name.toToken());
     }
   }
 
-  pub fn linkFieldOrParamDecl(self: *Self, node: *ast.VarDeclNode) !void {
-    node.ident.typ = try self.resolve(node.ident.typ.?, node.ident.token);
-    self.ctx.varScope.insert(node.ident.token.value, node.ident.typ.?);
-  }
 
-  pub fn linkAlias(self: *Self, node: *ast.AliasNode) !void {
+  pub fn linkAlias(self: *Self, node: *tir.AliasNode) !void {
+    var aliasee = node.aliasee.typ;
     var typ = node.alias.typ;
-    var tokens = if (typ.isGeneric()) typ.generic().base.variable().tokens else typ.variable().tokens;
-    self.ctx.typScope.insert(tokens.itemAt(0).value, node.aliasee.typ);
+    const lexeme = if (typ.isGeneric()) typ.generic().base.variable().getFirstLexeme()
+      else typ.variable().getFirstLexeme();
+    self.ctx.typScope.insert(lexeme, aliasee);
     // set tags
-    typ = node.aliasee.typ;
+    typ = aliasee;
     if (typ.isTaggedUnion()) {
       for (typ.taggedUnion().variants.items()) |ty| {
         self.insert(ty.tag().name, ty);
+        if (node.alias.typ.isGeneric()) {
+          ty.tag().alias_is_parameterized = true;
+          if (ty.tag().fieldsLen() > 0) {
+            ty.tag().fields.?.items()[0].tdecl = node.alias.typ;
+          }
+        }
       }
     } else if (typ.isTag()) {
       self.insert(typ.tag().name, typ);
-    }
-  }
-
-  fn linkSubscript(self: *Self, node: *ast.SubscriptNode) !void {
-    try self.link(node.expr);
-    try self.link(node.index);
-  }
-
-  fn linkDeref(self: *Self, node: *ast.DerefNode) !void {
-    try self.link(node.expr);
-  }
-
-  fn linkIf(self: *Self, node: *ast.IfNode) !void {
-    try self.link(node.cond);
-    try self.linkBlock(node.then.block());
-    for (node.elifs.items()) |elif| {
-      try self.linkElif(&elif.AstElif);
-    }
-    try self.linkBlock(node.els.block());
-  }
-
-  fn linkElif(self: *Self, node: *ast.ElifNode) !void {
-    try self.link(node.cond);
-    try self.linkBlock(node.then.block());
-  }
-
-  fn linkWhile(self: *Self, node: *ast.WhileNode) !void {
-    try self.link(node.cond);
-    try self.linkBlock(node.then.block());
-  }
-
-  fn linkCall(self: *Self, node: *ast.CallNode) !void {
-    try self.link(node.expr);
-    if (node.targs) |targs| {
-      for (targs.items()) |typn| {
-        try self.linkNType(&typn.AstNType);
+      if (node.alias.typ.isGeneric()) {
+        typ.tag().alias_is_parameterized = true;
+        if (typ.tag().fieldsLen() > 0) {
+          typ.tag().fields.?.items()[0].tdecl = node.alias.typ;
+        }
       }
     }
-    for (node.args.items()) |arg| {
+  }
+
+  pub inline fn linkParam(self: *Self, node: *tir.ParamNode) !void {
+    node.typ = try self.resolve(node.typ, node.name);
+  }
+
+  pub inline fn linkField(self: *Self, node: *tir.FieldNode) !void {
+    if (node.value) |val| try self.link(val);
+    if (node.typ) |typ| {
+      node.typ = try self.resolve(typ, node.name.toToken());
+    }
+  }
+
+  pub inline fn linkPubField(self: *Self, node: *tir.PubFieldNode) !void {
+    if (node.value) |val| try self.link(val);
+    if (node.typ) |typ| {
+      node.typ = try self.resolve(typ, node.name.toToken());
+    }
+  }
+
+  fn linkWhile(self: *Self, node: *tir.WhileNode) !void {
+    try self.link(node.cond);
+    try self.linkBlock(node.then.block());
+  }
+
+  fn linkBasicCall(self: *Self, node: *tir.BasicCallNode) !void {
+    try self.link(node.expr);
+    for (node.args()) |arg| {
       try self.link(arg);
     }
-    if (node.typ) |typ| {
-      node.typ = try self.resolve(typ, node.expr.getToken());
-    }
   }
 
-  pub fn linkFun(self: *Self, node: *ast.FunNode, allow_generic: bool) !void {
-    if (node.isGeneric()) {
-      if (!allow_generic) return;
-      self.ban_alias = node.tparams;
+  fn linkGenericCall(self: *Self, node: *tir.GenericCallNode) !void {
+    for (node.targs) |typ| {
+      typ.* = (try self._linkType(typ, node.call.getToken())).*;
     }
-    for (node.params.items()) |*vd| {
-      try self.linkFieldOrParamDecl(vd);
-    }
-    if (node.ret) |ret| {
-      try self.link(ret);
-    }
-    try self.link(node.body);
+    try self.link(node.call);
   }
 
-  pub fn linkClass(self: *Self, node: *ast.ClassNode, allow_generic: bool) !void {
-    if (!node.is_builtin) {
-      var typ = Type.newClass(node.name.token.value, self.ctx.allocator()).box(self.ctx.allocator());
+  pub fn linkBasicFun(self: *Self, node: *tir.BasicFunNode, tparams: ?tir.TypeItems) !void {
+    if (tparams) |tp| self.ban_alias = tp;
+    for (node.params) |nd| {
+      try self.linkParam(nd);
+    }
+    if (node.data.ret) |ret| {
+      const token = if (node.data.name) |name| name else node.data.body.getToken();
+      node.data.ret = try self._linkType(ret, token);
+    }
+    try self.link(node.data.body);
+  }
+
+  pub fn linkGenericFun(self: *Self, node: *tir.GenericFunNode, allow_generic: bool) !void {
+    if (!allow_generic) return;
+    self.ban_alias = node.params;
+    try self.link(node.fun);
+  }
+
+  pub fn linkClass(self: *Self, node: *tir.ClassNode, token: Token, allow_generic: bool) !void {
+    if (!node.data.builtin) {
+      var typ = Type.newClass(node.name.lexeme(), .TkIdent, self.ctx.allocator()).box(self.ctx.allocator());
       // use tparams. fields and methods are resolved by the type checker
-      typ.klass().tparams = node.tparams;
-      self.insert(node.name.token.value, typ);
+      typ.klass().tparams = node.data.params;
+      self.insert(node.name.lexeme(), typ);
     }
-    if (node.isGeneric()) {
+    if (node.isParameterized()) {
       if (!allow_generic) return;
-      self.ban_alias = node.tparams;
+      self.ban_alias = node.data.params;
     }
-    if (node.trait) |trait| {
-      node.trait = try self.resolveType(trait, node.name.token);
+    if (node.protos) |protos| {
+      node.protos = try self.resolveType(protos, token, self.ctx.allocator());
     }
-    for (node.fields.items()) |field| {
-      if (field.AstVarDecl.has_default) {
-        try self.linkVarDecl(&field.AstVarDecl);
+    for (node.data.fields) |field| {
+      if (field.isField()) {
+        try self.linkField(&field.NdField);
       } else {
-        try self.linkFieldOrParamDecl(&field.AstVarDecl);
+        try self.linkPubField(&field.NdPubField);
       }
     }
-    for (node.methods.items()) |method| {
-      try self.linkFun(&method.AstFun, false);
+    for (node.data.methods) |method| {
+      try self.linkBasicFun(&method.NdBasicFun, null);
     }
   }
 
-  fn linkDotAccess(self: *Self, node: *ast.DotAccessNode) !void {
-    try self.link(node.lhs);
-    try self.link(node.rhs);
-  }
-
-  fn linkRet(self: *Self, node: *ast.RetNode) !void {
+  inline fn linkRet(self: *Self, node: *tir.RetNode) !void {
     if (node.expr) |expr| {
       try self.link(expr); 
     }
   }
 
-  fn linkError(self: *Self, node: *ast.ErrorNode) !void {
-    try self.link(node.expr);
-  }
-
-  fn linkOrElse(self: *Self, node: *ast.OrElseNode) !void {
-    try self.link(node.ok);
-    try self.link(node.err);
-  }
-
-  fn linkSimpleIf(self: *Self, node: *ast.SimpleIfNode) !void {
-    try self.link(node.cond);
-    try self.link(node.then);
-    try self.link(node.els);
-  }
-
-  fn linkLblArg(self: *Self, node: *ast.LblArgNode) !void {
-    try self.link(node.value);
-  }
-
-  fn linkProgram(self: *Self, node: *ast.ProgramNode) !void {
+  fn linkProgram(self: *Self, node: *tir.ProgramNode) !void {
     self.ctx.enterScope();
-    for (node.decls.items()) |item| {
+    for (node.decls) |item| {
       self.link(item) catch {};
     }
     // only pop off varScope, since typScope needs to be 
@@ -866,38 +846,61 @@ pub const TypeLinker = struct {
     self.ctx.varScope.popScope();
   }
 
-  pub fn link(self: *Self, node: *Node) TypeLinkError!void {
-    switch (node.*) {
-      .AstNumber, .AstString, .AstBool, .AstControl, .AstNil, .AstScope => {},
-      .AstUnary => |*nd| try self.linkUnary(nd),
-      .AstBinary => |*nd| try self.linkBinary(nd),
-      .AstList, .AstTuple => |*nd| try self.linkList(nd),
-      .AstMap => |*nd| try self.linkMap(nd),
-      .AstExprStmt => |*nd| try self.linkExprStmt(nd),
-      .AstVar => |*nd| try self.linkVar(nd),
-      .AstVarDecl => |*nd| try self.linkVarDecl(nd),
-      .AstAssign => |*nd| try self.linkAssign(nd),
-      .AstBlock => |*nd| try self.linkBlock(nd),
-      .AstNType => |*nd| try self.linkNType(nd),
-      .AstAlias => |*nd| try self.linkAlias(nd),
-      .AstCast => |*nd| try self.linkCast(nd),
-      .AstSubscript => |*nd| try self.linkSubscript(nd),
-      .AstDeref => |*nd| try self.linkDeref(nd),
-      .AstIf => |*nd| try self.linkIf(nd),
-      .AstElif => |*nd| try self.linkElif(nd),
-      .AstWhile => |*nd| try self.linkWhile(nd),
-      .AstClass => |*nd| try self.linkClass(nd, false),
-      .AstDotAccess => |*nd| try self.linkDotAccess(nd),
-      .AstCall => |*nd| try self.linkCall(nd),
-      .AstFun => |*nd| try self.linkFun(nd, false),
-      .AstRet => |*nd| try self.linkRet(nd),
-      .AstError => |*nd| try self.linkError(nd),
-      .AstOrElse => |*nd| try self.linkOrElse(nd),
-      .AstSimpleIf => |*nd| try self.linkSimpleIf(nd),
-      .AstLblArg => |*nd| try self.linkLblArg(nd),
-      .AstProgram => |*nd| try self.linkProgram(nd),
-      .AstCondition, .AstMCondition, .AstEmpty, .AstMatch,
-      .AstFailMarker, .AstLiftMarker, .AstRedundantMarker => {},
-    }
+  pub fn link(self: *Self, node: *tir.Node) TypeLinkError!void {
+    return switch (node.*) {
+      .NdUnary => |*nd| self.link(nd.expr),
+      .NdBinary, .NdAssign => |*nd| {
+        try self.link(nd.left);
+        try self.link(nd.right);
+      },
+      .NdTVar => |*nd| {
+        var typ = self.ctx.varScope.lookup(nd.value());
+        if (nd.typ == null) {
+          nd.typ = typ;
+        }
+      },
+      .NdSubscript => |*nd| {
+        try self.link(nd.expr);
+        try self.link(nd.index);
+      },
+      .NdDotAccess => |*nd| {
+        try self.link(nd.lhs);
+        try self.link(nd.rhs);
+      },
+      .NdOrElse => |*nd| {
+        try self.link(nd.ok);
+        try self.link(nd.err);
+      },
+      .NdSimpleIf => |*nd| {
+        try self.link(nd.cond);
+        try self.link(nd.then);
+        try self.link(nd.els);
+      },
+      .NdParam => |*nd| self.linkParam(nd),
+      .NdField => |*nd| self.linkField(nd),
+      .NdPubField => |*nd| self.linkPubField(nd),
+      .NdDeref => |*nd| self.link(nd.expr),
+      .NdExprStmt => |*nd| self.link(nd.expr),
+      .NdBasicCall => |*nd| self.linkBasicCall(nd),
+      .NdGenericCall => |*nd| self.linkGenericCall(nd),
+      .NdError => |*nd| self.link(nd.expr),
+      .NdLblArg => |*nd| self.link(nd.value),
+      .NdList, .NdTuple => |*nd| self.linkList(nd),
+      .NdMap => |*nd| self.linkMap(nd),
+      .NdVarDecl => |*nd| self.linkVarDecl(nd),
+      .NdBlock => |*nd| self.linkBlock(nd),
+      .NdType => |*nd| self.linkType(nd),
+      .NdAlias => |*nd| self.linkAlias(nd),
+      .NdCast => |*nd| self.linkCast(nd),
+      .NdWhile => |*nd| self.linkWhile(nd),
+      .NdBasicFun => |*nd| self.linkBasicFun(nd, null),
+      .NdGenericFun => |*nd| self.linkGenericFun(nd, false),
+      .NdClass => |*nd| self.linkClass(nd, node.getToken(), false),
+      .NdRet => |*nd| self.linkRet(nd),
+      .NdProgram => |*nd| self.linkProgram(nd),
+      .NdNumber, .NdString, .NdBool, .NdControl, .NdScope,
+      .NdCondition, .NdMCondition, .NdEmpty, .NdMatch,
+      .NdFailMarker, .NdRedunMarker, .NdDiagStartMarker, => {},
+    };
   }
 };

@@ -1,11 +1,11 @@
 const std = @import("std");
-const flow = @import("flow.zig");
+const fir = @import("fir.zig");
 const diagnostics = @import("diagnostics.zig");
 
-const FlowNode = flow.FlowNode;
-const FlowList = flow.FlowList;
-const FlowMeta = flow.FlowMeta;
-const CFG = flow.CFG;
+const FlowNode = fir.FlowNode;
+const FlowList = fir.FlowList;
+const FlowGraph = fir.FlowGraph;
+const CompUnit = fir.CompUnit;
 const Diagnostic = diagnostics.Diagnostic;
 
 pub const Analysis = struct {
@@ -17,21 +17,20 @@ pub const Analysis = struct {
     return Self {.diag = diag};
   }
 
-  /// node is .CfgDead
-  pub fn analyzeDeadCode(self: *Self, node: *FlowNode) !void {
-    std.debug.assert(node.isDeadNode());
-    var start = self.diag.count();
-    for (node.prev_next.items()) |itm| {
-      if (itm.next and !itm.flo.isExitNode()) {
+  pub fn analyzeDeadCode(self: *Self, graph: *FlowGraph) !void {
+    const start = self.diag.count();
+    for (graph.dead().getNextNeighbours().items()) |itm| {
+      if (!itm.node.isExitNode()) {
         // last item may be an exit Scope node, which doesn't count as dead code
-        if (itm.flo.bb.len() == 1) {
-          if (itm.flo.bb.getLast()) |lst| {
-            if (lst.isExitScope()) continue;
+        var bb = &itm.node.get().bb;
+        if (bb.getLast()) |lst| {
+          if (lst.isScope()) {
+            continue;
           }
         }
         self.diag.addDiagnosticsWithLevel(
           .DiagError,
-          itm.flo.bb.nodes.itemAt(0).getToken(),
+          bb.nodes.itemAt(0).getToken(),
           "Dead code: control flow never reaches this code", .{}
         );
       }
@@ -41,17 +40,15 @@ pub const Analysis = struct {
     }
   }
 
-  fn hasAtLeastOneIncomingEdgeWithTypeNotNoreturn(self: *Self, flo: *FlowNode) bool {
-    // check if this flow node has at least one incoming/prev edge with type that isn't noreturn
+  fn hasAtLeastOneIncomingEdgeWithTypeNotNoreturn(self: *Self, flo: FlowNode) bool {
     _ = self;
-    for (flo.prev_next.items()) |fd| {
-      if (fd.prev) {
-        if (fd.flo.bb.getLast()) |node| {
-          if (node.getType()) |typ| {
-            if (!typ.isNoreturnTy()) return true;
-          } else {
-            return true;
-          }
+    // check if this flow node has at least one incoming/prev edge with type that isn't noreturn
+    for (flo.getPrevNeighbours().items()) |ngh| {
+      if (ngh.node.get().bb.getLast()) |lst| {
+        if (lst.getTypeE()) |typ| {
+          if (!typ.isNoreturnTy()) return true;
+        } else {
+          return true;
         }
       }
     }
@@ -60,24 +57,25 @@ pub const Analysis = struct {
 
   fn checkDeadCodeWithTypes(self: *Self, flo_nodes: *FlowList, start: usize) !void {
     for (flo_nodes.items()) |flo_node| {
-      for (flo_node.bb.items(), 0..) |node, i| {
+      var dt = flo_node.get();
+      for (dt.bb.items(), 0..) |node, i| {
         if (node.isEmpty()) continue;
-        if (node.getType()) |typ| {
+        if (node.getTypeE()) |typ| {
           if (typ.isNoreturnTy() and !node.isFun()) { // skip func decls
-            if (node != flo_node.bb.getLast().?) {
-              var next = flo_node.bb.nodes.itemAt(i + 1);
+            if (node != dt.bb.getLast().?) {
+              var next = dt.bb.nodes.itemAt(i + 1);
               self.diag.addDiagnosticsWithLevel(
                 .DiagError,
                 next.getToken(),
                 "Dead code: control flow never reaches this code", .{}
               );
             } else {
-              for (flo_node.prev_next.items()) |fln| {
+              for (flo_node.getNextNeighbours().items()) |fln| {
                 // hasAtLeastOneIncomingEdgeWithTypeNotNoreturn() <- ensure the code is not reachable from other parts
-                if (fln.next and !fln.flo.isExitNode() and !self.hasAtLeastOneIncomingEdgeWithTypeNotNoreturn(fln.flo)) {
+                if (!fln.node.isExitNode() and !self.hasAtLeastOneIncomingEdgeWithTypeNotNoreturn(fln.node)) {
                   self.diag.addDiagnosticsWithLevel(
                     .DiagError,
-                    fln.flo.bb.nodes.itemAt(0).getToken(),
+                    fln.node.get().bb.nodes.itemAt(0).getToken(),
                     "Dead code: control flow never reaches this code", .{}
                   );
                   break;
@@ -99,7 +97,7 @@ pub const Analysis = struct {
     }
   }
 
-  pub fn analyzeDeadCodeWithTypes(self: *Self, node: *FlowNode) !void {
+  pub fn analyzeDeadCodeWithTypes(self: *Self, node: FlowNode) !void {
     var nodes = node.getOutgoingNodes(.ESequential, self.diag.data.allocator);
     return try self.checkDeadCodeWithTypes(&nodes, self.diag.count());
   }

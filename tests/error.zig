@@ -18,19 +18,19 @@ test "binary operators" {
   \\ let q = List{num} + str
   ;
   try doErrorTest(src, 13, [_][]const u8{
-    "Expected type 'num' + 'num', but got 'str' + 'num'",
-    "Expected type 'num' - 'num', but got 'bool' - 'str'",
-    "Expected type 'num' * 'num', but got 'List{any}' * 'Tuple{}'",
-    "Expected type 'num' / 'num', but got 'None' / 'Map{str, num}'",
-    "Expected type ~ 'num', but got ~ 'bool'",
-    "Expected type 'num' ^ 'num', but got 'None' ^ 'bool'",
-    "Expected type 'num' > 'num', but got 'str' > 'bool'",
-    "Expected type 'num' < 'num', but got 'List{Tuple{str, num, str}}' < 'Error(str)'",
-    "Expected type 'num' <= 'num', but got 'Error(List{num})' <= 'Error(str)'",
-    "Expected type 'num' >= 'num', but got 'bool' >= 'None'",
-    "Types must be related for comparison. 'List{Tuple{str, num, str}}' is not related to 'Error(str)'",
-    "Types must be related for comparison. 'str' is not related to 'num'",
-    "Expected type 'num' + 'num', but got 'Type' + 'Type'",
+    "Expected type 'num' + 'num' but found 'str' + 'num'",
+    "Expected type 'num' - 'num' but found 'bool' - 'str'",
+    "Expected type 'num' * 'num' but found 'List{any}' * 'Tuple{}'",
+    "Expected type 'num' / 'num' but found 'None' / 'Map{str, num}'",
+    "Expected type ~ 'num' but found ~ 'bool'",
+    "Expected type 'num' ^ 'num' but found 'None' ^ 'bool'",
+    "Expected type 'num' > 'num' but found 'str' > 'bool'",
+    "Expected type 'num' < 'num' but found 'List{Tuple{str, num, str}}' < 'Error(str)'",
+    "Expected type 'num' <= 'num' but found 'Error(List{num})' <= 'Error(str)'",
+    "Expected type 'num' >= 'num' but found 'bool' >= 'None'",
+    "Types must be related for this operation. 'List{Tuple{str, num, str}}' is not related to 'Error(str)'",
+    "Types must be related for this operation. 'str' is not related to 'num'",
+    "Expected type 'num' + 'num' but found 'Type' + 'Type'",
   });
 }
 
@@ -47,7 +47,7 @@ test "builtin properties .1" {
   ;
   try doErrorTest(src, 3, [_][]const u8{
     "Cannot modify immutable type 'Tuple{num, num}'",
-    "Expected type 'num' | 'num', but got 'num' | 'Type'",
+    "Expected type 'num' | 'num' but found 'num' | 'Type'",
     "Cannot index 'List{any}' type with type 'str'",
   });
 }
@@ -82,11 +82,11 @@ test "builtin generics" {
   ;
   try doErrorTest(src, 6, [_][]const u8{
     "empty type parameters are not supported",
-    "generic type instantiated with wrong number of paramters. Expected 1 but got 0",
-    "generic type instantiated with wrong number of paramters. Expected 2 but got 1",
+    "generic type instantiated with wrong number of paramters. Expected 1 but found 0",
+    "generic type instantiated with wrong number of paramters. Expected 2 but found 1",
     "type variable in generic parameter cannot be generic",
-    "expected token '<identifier>', but found 'List'",
-    "expected token '<identifier>', but found 'num'",
+    "expected token '<ident>' but found 'List'",
+    "expected token '<ident>' but found 'num'",
   });
 }
 
@@ -151,6 +151,18 @@ test "never & noreturn" {
   });
 }
 
+test "never & noreturn .2" {
+  const src =
+  \\ def noret: noreturn
+  \\  noret()
+  \\ end
+  \\ noret()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Control flow reaches exit; function declared type 'noreturn' returns",
+  });
+}
+
 test "never & void .1" {
   const src =
   \\ def foo(): never
@@ -171,7 +183,7 @@ test "never & void .2" {
   \\ let j: void = foo()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected return type 'never', but got 'void'",
+    "Expected return type 'never' but found 'void'",
   });
 }
 
@@ -204,9 +216,9 @@ test "type linking" {
   \\ t.?
   ;
   try doErrorTest(src2, 3, [_][]const u8{
-    "Expected type 'num' + 'num', but got 'Q' + 'Q'",
-    "Expected type 'num' * 'num', but got 'List{Just(Just(num) | None) | None}' * 'List{Just(Just(num) | None) | None}'",
-    "Cannot dereference non-nullable type: 'List{Just(Just(num) | None) | None}'",
+    "Expected type 'num' + 'num' but found 'Q' + 'Q'",
+    "Expected type 'num' * 'num' but found 'List{Just(Just(num) | None) | None}' * 'List{Just(Just(num) | None) | None}'",
+    "Types must be related for this operation. Narrowed type 'List{Just(Just(num) | None) | None}' is not related to 'None'",
   });
 }
 
@@ -220,10 +232,34 @@ test "conditionals" {
   \\ 5 is false
   ;
   try doErrorTest(src, 4, [_][]const u8{
-    "Expected condition expression to be of type 'bool', but got 'num'",
-    "Expected condition expression to be of type 'bool', but got 'List{Map{any, any}}'",
+    "Expected condition expression to be of type 'bool' but found 'num'",
+    "Expected condition expression to be of type 'bool' but found 'List{Map{any, any}}'",
     "Expected type instance in lhs of `is` operator but found 'Type'",
     "Expected type 'Type' in rhs of `is` operator but found type 'false'\n\tHelp: For constant types, consider using '==' or '!=' operator instead.",
+  });
+}
+
+test "circularity" {
+  const src =
+  \\ type T{P} = A1(str) | B1(S{P})
+  \\ type S{K} = A2(K) | B2(T{num})
+  \\ let p: T{str} = A1('fox')
+  \\ p = B1(A2(5) as S{str})
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Cannot cast from type 'A2(num)' to type 'S{str}'",
+  });
+}
+
+test "circularity-2" {
+  const src =
+  \\ type T{P} = A1(P) | B1(S{P})
+  \\ type S{K} = A2(K) | B2(T{K})
+  \\ let p: T{str} = A1('fox')
+  \\ p = B1(A2(5) as S{num})
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Cannot assign type 'B1(A2(num) | B2(A1(num) | B1({...})))' to type 'T{str}'",
   });
 }
 
@@ -246,8 +282,8 @@ test "narrowing-1" {
   \\ end
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Expected type 'num' > 'num', but got 'str' > 'num'",
-    "Expected type 'num' + 'num', but got 'L(List{num})' + 'num'",
+    "Expected type 'num' > 'num' but found 'str' > 'num'",
+    "Expected type 'num' + 'num' but found 'L(List{num})' + 'num'",
   });
 }
 
@@ -262,7 +298,7 @@ test "narrowing-2" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type ~ 'num', but got ~ 'never'",
+    "Expected type ~ 'num' but found ~ 'never'",
   });
 }
 
@@ -276,8 +312,8 @@ test "narrowing-3" {
   \\ end
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Expected type 'num' + 'num', but got 'Just(num) | None' + 'num'",
-    "Expected type 'num' + 'num', but got 'num' + 'Just(num) | None'",
+    "Expected type 'num' + 'num' but found 'Just(num) | None' + 'num'",
+    "Expected type 'num' + 'num' but found 'num' + 'Just(num) | None'",
   });
 }
 
@@ -291,7 +327,7 @@ test "narrowing-4" {
   \\ end
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Types must be related for comparison. Narrowed type 'Just(num) | None' is not related to 'num'",
+    "Types must be related for this operation. Narrowed type 'Just(num) | None' is not related to 'num'",
     "elif x is not num",
   });
 }
@@ -314,7 +350,7 @@ test "narrowing-5" {
   \\ p
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num', but got 'num' + 'Tuple{List{Tuple{num, List{num}}}, num}'",
+    "Expected type 'num' + 'num' but found 'num' + 'Tuple{List{Tuple{num, List{num}}}, num}'",
   });
 }
 
@@ -322,24 +358,23 @@ test "narrowing-6.1" {
   const src =
   \\ type NumStr = N(num) | S(str)
   \\ type ListStr = L(List{NumStr}) | S(str)
-  \\ let x: (ListStr)? = Just(L([NumStr.N(5) as NumStr, ListStr.S('a')]) as ListStr)
-  \\ if x.?? is L and x.??[0] is num
+  \\ let x: (ListStr)? = Just(L([NumStr.N(5) as NumStr, NumStr.S('a')]) as ListStr)
+  \\ if x.? is L and x.?[0] is num
   \\   # pass
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Type 'L(List{N(num) | S(str)})' is not indexable",
+    "Type 'ListStr' is not indexable",
   });
 }
-
 
 test "narrowing-6.2" {
   const src =
   \\ type NumStr = N(num) | S(str)
   \\ type ListStr = L(List{NumStr}) | S(str)
-  \\ let x: (ListStr)? = Just(L([NumStr.N(5) as NumStr, ListStr.S('a')]) as ListStr)
-  \\ if x.?? is L #and x.??[0] is num
-  \\   match x.??
+  \\ let x: (ListStr)? = Just(L([NumStr.N(5) as NumStr, NumStr.S('a')]) as ListStr)
+  \\ if x.? is L
+  \\   match x.?
   \\    case L([t, ..]) => t += 5
   \\    case L([..]) => assert(false, 'yay')
   \\   end
@@ -348,7 +383,21 @@ test "narrowing-6.2" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num', but got 'NumStr' + 'num'",
+    "Expected type 'num' + 'num' but found 'NumStr' + 'num'",
+  });
+}
+
+test "narrowing-6.3" {
+  const src =
+  \\ type NumStr = N(num) | S(str)
+  \\ type ListStr = L(List{NumStr}) | S(str)
+  \\ let x: (ListStr)? = Just(L([NumStr.N(5) as NumStr, ListStr.S('a')]) as ListStr)
+  \\ if x.? is L and x.?[0] is num
+  \\   # pass
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Expected type 'NumStr' but found 'ListStr'",
   });
 }
 
@@ -366,8 +415,8 @@ test "narrowing-7" {
   \\ y
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Expected type 'num' * 'num', but got 'A | B' * 'num'",
-    "Expected type 'num' + 'num', but got 'B | A' + 'A'",
+    "Expected type 'num' * 'num' but found 'A | B' * 'num'",
+    "Expected type 'num' + 'num' but found 'B | A' + 'A'",
   });
 }
 
@@ -389,9 +438,9 @@ test "narrowing-8" {
   \\ p
   ;
   try doErrorTest(src, 4, [_][]const u8{
-    "Expected type 'num' + 'num', but got 'NumStr' + 'num'",
+    "Expected type 'num' + 'num' but found 'NumStr' + 'num'",
     "m['a'][0] + 5",
-    "Expected type 'num' - 'num', but got 'num' - 'NumStr'",
+    "Expected type 'num' - 'num' but found 'num' - 'NumStr'",
     "case L(q) => p -= q[0][1]",
   });
 }
@@ -406,7 +455,7 @@ test "narrowing-9" {
   \\ x
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num', but got 'A' + 'num'",
+    "Expected type 'num' + 'num' but found 'A' + 'num'",
   });
 }
 
@@ -426,7 +475,7 @@ test "narrowing-10" {
   \\ fun(S('fancy'))
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' / 'num', but got 'never' / 'never'",
+    "Expected type 'num' / 'num' but found 'never' / 'never'",
   });
 }
 
@@ -448,7 +497,7 @@ test "narrowing-11" {
   \\ let x = fish(Five(5))
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num', but got 'never' + 'num'",
+    "Expected type 'num' + 'num' but found 'never' + 'num'",
   });
 }
 
@@ -474,7 +523,7 @@ test "narrowing-12" {
     \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num', but got 'never' + 'num'",
+    "Expected type 'num' + 'num' but found 'never' + 'num'",
   });
 }
 
@@ -650,7 +699,7 @@ test "constant types" {
   \\ y * x
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' * 'num', but got '7' * '5'",
+    "Expected type 'num' * 'num' but found '7' * '5'",
   });
 }
 
@@ -675,9 +724,9 @@ test "functions-1" {
   \\ funny(12)
   ;
   try doErrorTest(src, 3, [_][]const u8{
-    "Argument mismatch. Expected type 'T' but found 'str'",
+    "Argument type mismatch. Expected type 'T' but found 'str'",
     "Non-generic function called as generic",
-    "Argument mismatch. Expected 0 argument(s) but found 1",
+    "Argument arity mismatch. Expected 0 argument(s) but found 1",
   });
 }
 
@@ -695,7 +744,7 @@ test "functions-2" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' - 'num', but got 'never' - 'never'",
+    "Expected type 'num' - 'num' but found 'never' - 'never'",
   });
 }
 
@@ -721,7 +770,7 @@ test "functions-4" {
   \\ fancy(false)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "expected token '(', but found '{'",
+    "expected token '(' but found '{'",
   });
 }
 
@@ -760,7 +809,7 @@ test "functions-7.<function arguments>" {
   \\ funny([])
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Argument mismatch. Expected type 'List{str}' but found 'List{any}'",
+    "Argument type mismatch. Expected type 'List{str}' but found 'List{any}'",
   });
 }
 
@@ -777,7 +826,7 @@ test "error type" {
   \\ j + 5
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num', but got 'Error(str) | Ok(num)' + 'num'",
+    "Expected type 'num' + 'num' but found 'Error(str) | Ok(num)' + 'num'",
   });
 }
 
@@ -812,10 +861,10 @@ test "simple-classes-1" {
   \\ let q = Bar()
   ;
   try doErrorTest(src, 4, [_][]const u8{
-    "Fox has no property 'y'",
+    "type 'Fox' has no property 'y'",
     "a class having field(s) without defaults must define an `init` method that initializes such field(s)",
     "field 'y' is declared but uninitialized",
-    "Argument mismatch. Expected 1 argument(s) but found 0",
+    "Argument arity mismatch. Expected 1 argument(s) but found 0",
   });
 }
 
@@ -846,11 +895,41 @@ test "simple-classes-2" {
   \\ f.pulse = f.pulse
   \\ let r = Racoon()
   \\ r.x
-  
   ;
   try doErrorTest(src, 2, [_][]const u8{
     "Cannot modify immutable type 'fn (): Fox'",
     "illegal return statement in `init` method"
+  });
+}
+
+test "immutable method mod" {
+  const src =
+  \\ class Foo
+  \\  pub def fish()
+  \\    return 5
+  \\  end
+  \\ end
+  \\
+  \\ let j = Foo()
+  \\ j.fish = def => 10
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "Cannot modify immutable type 'fn (): num'",
+    "j.fish = def => 10"
+  });
+}
+
+test "field init" {
+  const src =
+  \\ class Foo
+  \\  x: str
+  \\  def init()
+  \\  end
+  \\ end
+  \\ Foo()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "I am unable to deduce that the field 'x' is definitely initialized"
   });
 }
 
@@ -862,8 +941,8 @@ test "generic-classes-1" {
   \\ q.lens()
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Map{str, num} has no property 'doesNotExist'",
-    "List{num} has no property 'lens'",
+    "type 'Map{str, num}' has no property 'doesNotExist'",
+    "type 'List{num}' has no property 'lens'",
   });
 }
 
@@ -896,10 +975,10 @@ test "generic-classes-2" {
   \\ x.pulse().getGen()(5)
   ;
     try doErrorTest(src, 5, [_][]const u8{
-    "Fox{num} has no property 'y'",
+    "type 'Fox{num}' has no property 'y'",
     "Type 'Error(num)' is not indexable",
     "Type 'num' is not indexable",
-    "Expected type 'num' - 'num', but got 'num' - 'str'",
+    "Expected type 'num' - 'num' but found 'num' - 'str'",
     "Type 'num' is not indexable"
   });
 }
@@ -941,13 +1020,13 @@ test "generic-classes-3" {
   \\ let j: Poo{'miah'} = Fox{'mia'}('mia')
   ;
     try doErrorTest(src, 8, [_][]const u8{
-    "Expected type 'num' + 'num', but got 'List{mia}' + 'num'",
+    "Expected type 'num' + 'num' but found 'List{mia}' + 'num'",
     "Could not resolve type of ident: 'j'",
     "Could not resolve type of ident: 'p'",
-    "Expected type 'num' + 'num', but got 'List{mia}' + 'num'",
-    "Expected type 'num' + 'num', but got 'num' + 'str'",
-    "Expected type 'num' + 'num', but got 'str' + 'str'",
-    "Argument mismatch. Expected type 'mia' but found 'num'",
+    "Expected type 'num' + 'num' but found 'List{mia}' + 'num'",
+    "Expected type 'num' + 'num' but found 'num' + 'str'",
+    "Expected type 'num' + 'num' but found 'str' + 'str'",
+    "Argument type mismatch. Expected type 'mia' but found 'num'",
     "Cannot initialize type 'Poo{miah}' with type 'Fox{mia} instance'"
   });
 }
@@ -969,8 +1048,8 @@ test "loopy" {
   \\ x + 5
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Expected type 'num' + 'num', but got 'num' + 'str'",
-    "Expected type 'num' + 'num', but got 'AB' + 'num'",
+    "Expected type 'num' + 'num' but found 'num' + 'str'",
+    "Expected type 'num' + 'num' but found 'AB' + 'num'",
   });
 }
 
@@ -979,10 +1058,10 @@ test "labeled argument" {
   \\ def fun(x: str, y: num, a: List{num}, b: Result{any, str})
   \\  println('x is', x, 'y is', y, 'a is', a, 'b is', b)
   \\ end
-  \\ fun(y: 'ops', a: 6, x: [6], ('oops')!)
+  \\ fun(y='ops', a=6, x=[6], ('oops')!)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Argument mismatch. Expected type 'str' but found 'List{num}'",
+    "Argument type mismatch. Expected type 'str' but found 'List{num}'",
   });
 }
 
@@ -991,10 +1070,10 @@ test "labeled argument 2" {
   \\ def fun(x: str, y: num, a: List{num}, b: Result{any, str})
   \\  println('x is', x, 'y is', y, 'a is', a, 'b is', b)
   \\ end
-  \\ fun(y: 'ops', a: 6, x: 'ok', ('oops')!)
+  \\ fun(y='ops', a=6, x='ok', ('oops')!)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Argument mismatch. Expected type 'num' but found 'str'",
+    "Argument type mismatch. Expected type 'num' but found 'str'",
   });
 }
 
@@ -1003,10 +1082,10 @@ test "labeled argument 3" {
   \\ def fun(x: str, y: num, a: List{num}, b: Result{any, str})
   \\  println('x is', x, 'y is', y, 'a is', a, 'b is', b)
   \\ end
-  \\ fun(y: 5, a: 6, x: 'ok', ('oops')!)
+  \\ fun(y=5, a=6, x='ok', ('oops')!)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Argument mismatch. Expected type 'List{num}' but found 'num'"
+    "Argument type mismatch. Expected type 'List{num}' but found 'num'"
   });
 }
 
@@ -1015,7 +1094,7 @@ test "labeled argument 4" {
   \\ def fun(x: str, y: num, a*: List{num})
   \\  println('x is', x, 'y is', y, 'a is', a)
   \\ end
-  \\ fun(y: 5, a: [2, 3], y: 'oo', a: [1, 2], a: [5, 6, 7])
+  \\ fun(y=5, a=[2, 3], y='oo', a=[1, 2], a=[5, 6, 7])
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "duplicate labeled argument found",
@@ -1027,7 +1106,7 @@ test "labeled argument 5" {
   \\ def fun(x: str, y: num, a*: List{num})
   \\  println('x is', x, 'y is', y, 'a is', a)
   \\ end
-  \\ fun(y: 5, a: [2, 3])
+  \\ fun(y=5, a=[2, 3])
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "missing required argument(s)",
@@ -1039,7 +1118,7 @@ test "labeled argument 6" {
   \\ def fun(x: str, y: num, a: List{num}, b: Result{any, str})
   \\  println('x is', x, 'y is', y, 'a is', a, 'b is', b)
   \\ end
-  \\ fun(6: 'a', 12: 9)
+  \\ fun(6='a', 12: 9)
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "invalid labeled argument",
@@ -1054,7 +1133,7 @@ test "class init" {
   \\ Err('box')
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Too many arguments to class call. Expected none, but got 1",
+    "Too many arguments to class call. Expected none but found 1",
   });
 }
 
@@ -1065,13 +1144,12 @@ test "patterns-1.<ordinary match>" {
   \\  case ('a' as a, 'b' as b) as d => println('ok')
   \\  case ('q', 'k') => println('third')
   \\ end
-  \\ 
   ;
  try doErrorTest(src, 4, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "str",
-    "Tuple{str, str}"
+    "Tuple(_, str)",
+    "Tuple(str, _)"
   });
 }
 
@@ -1154,8 +1232,9 @@ test "patterns-5.<match on classes (fields)>" {
   \\  case A(Ant()) => println(40)
   \\ end
   ;
-  try doErrorTest(src, 1, [_][]const u8{
-    "'Ant' has 1 field(s), but pattern test assumes 0",
+  try doErrorTest(src, 2, [_][]const u8{
+    "pattern of unequal number of argument(s): 0 and 1",
+    "case A(Ant()) => println(40)",
   });
 }
 
@@ -1192,8 +1271,8 @@ test "patterns-7.<tuple exhaustiveness>" {
   try doErrorTest(src, 4, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "str",
-    "Tuple{str, str}"
+    "Tuple(_, str)",
+    "Tuple(str, _)"
   });
 }
 
@@ -1210,8 +1289,8 @@ test "patterns-8.<list exhaustiveness>" {
   try doErrorTest(src, 5, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "str",
-    "Tuple{str, str}",
+    "Tuple(_, str)",
+    "Tuple(str, _)",
     "List{Tuple{str, str}}"
   });
 }
@@ -1255,7 +1334,7 @@ test "patterns-10.<type checks>" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "expected type 'num', but got 'str'"
+    "Expected type 'num' but found 'str'"
   });
 }
 
@@ -1356,7 +1435,7 @@ test "patterns-14.<type checks (fields)>" {
   });
 }
 
-test "patterns-14b.<type checks (fields)>" {
+test "patterns-14b.<label arguments>" {
   const src =
   \\ class Cat
   \\  x = 5
@@ -1372,7 +1451,30 @@ test "patterns-14b.<type checks (fields)>" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
+    "label used inconsistently in pattern arguments",
+  });
+}
+
+test "patterns-14b.<type checks (fields)>" {
+  const src =
+  \\ class Cat
+  \\  x = 5
+  \\ end
+  \\ class Dog
+  \\  y = 10
+  \\ end
+  \\ type Animal = C(Cat) | D(Dog)
+  \\ let p: Animal = D(Dog())
+  \\ let z = false
+  \\ match p
+  \\  case D(Dog(x, y, ..)) => println('nope')
+  \\ end
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
     "type 'Dog' has 1 field(s), but pattern test assumes 2 or more",
+    "inexhaustive pattern match",
+    "Remaining pattern type(s)",
+    "C(Cat)"
   });
 }
 
@@ -1507,7 +1609,7 @@ test "patterns-22.<match on generics (exhaustiveness)>" {
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "str",
+    "Fox(str)",
   });
 }
 
@@ -1606,6 +1708,22 @@ test "patterns-26.<redundancy>" {
   });
 }
 
+test "patterns-26.<redundancy-hard-error>" {
+  const src =
+  \\ match ('a', 'b', 'c')
+  \\  case ('x', 'y', 'a') => println('first')
+  \\  case ('a' as a, 'b' as b, _) as d => println('ok')
+  \\  case ('q', 'k', 'q') => println('third')
+  \\  case (_, _, _) => ''
+  \\  case (..) => '^_^'
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "Consider rewriting the pattern or rearranging the case clause(s).",
+    "case (..) => '^_^'"
+  });
+}
+
 test "patterns-27.<redundancy>" {
   const src =
   \\ let j = true
@@ -1661,11 +1779,55 @@ test "patterns-29.<match on maps (exhaustiveness)>" {
   \\  case {"sound": _, "format": _} => println(1)
   \\ end
   ;
+  try doErrorTest(src, 3, [_][]const u8{
+    "inexhaustive pattern match.",
+    "Remaining pattern type(s):",
+    "Map{str, _}",
+  });
+}
+
+test "patterns-29.<match on maps (exhaustivenes 2)>" {
+  const src =
+  \\ class Fox
+  \\  url: str
+  \\  def init(url: str)
+  \\    self.url = url
+  \\  end
+  \\ end
+  \\ type Fmt = Class(Fox) | Str(str)
+  \\ let foo = {"sound": Class(Fox('fin.co')) as Fmt, "format": Str("txt")}
+  \\ match foo
+  \\  case { a: Class(Fox('url')) as b} => println(12, url, a, b)
+  \\ end
+  ;
   try doErrorTest(src, 4, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "str",
-    "List{str}",
+    "Fox(str)",
+    "Map{_, Class(Fox) | Str(str)}",
+  });
+}
+
+test "patterns-29.<match on maps (exhaustivenes 3)>" {
+  const src =
+  \\ class Fox
+  \\  url: str
+  \\  def init(url: str)
+  \\    self.url = url
+  \\  end
+  \\ end
+  \\ type Fmt = Class(Fox) | Str(str)
+  \\ let foo = {"sound": Class(Fox('fin.co')) as Fmt, "format": Str("txt")}
+  \\ match foo
+  \\  case { a: Class(Fox('url')) as b, x: Str("ogg"),} => println(12, url, a, b)
+  \\ end
+  ;
+  try doErrorTest(src, 5, [_][]const u8{
+    "inexhaustive pattern match.",
+    "Remaining pattern type(s):",
+    "Str(str)",
+    "Map{_, Class(Fox) | Str(str)}",
+    "Fox(str)",
   });
 }
 
@@ -1690,6 +1852,23 @@ test "patterns-30.<match on maps (redundancy)>" {
     "case {\"sound\" as a: Class(Fox(url)) as b, \"format\": Str(\"ogg\"),} => println(12, url, a, b)",
     "possible redundant case",
     "case {\"sound\": _, \"format\": _} => println(1)",
+  });
+}
+
+
+test "patterns-30b.<match on lists (redundancy)>" {
+  const src =
+  \\ match [1, 6]
+  \\  case [..] => println('default')
+  \\  case [8, 9] => println(12, url, a, b)
+  \\  case [0, 8] => println(1)
+  \\ end
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "possible redundant case",
+    "case [8, 9] => println(12, url, a, b)",
+    "possible redundant case",
+    "case [0, 8] => println(1)",
   });
 }
 
@@ -1730,8 +1909,42 @@ test "patterns-32.<match in functions>" {
   \\ j += 4
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "cannot return multiple types: 'num && void'",
-    "Expected type 'num' + 'num', but got 'num && void' + 'num'"
+    "cannot return multiple types: 'num & void'",
+    "Expected type 'num' + 'num' but found 'num & void' + 'num'"
+  });
+}
+
+test "cfa.<void returns>" {
+  const src =
+  \\ def check(n: num)
+  \\  if n > 5
+  \\    do
+  \\    end
+  \\  else
+  \\    return 5
+  \\  end
+  \\ end
+  \\ check(3) + 5
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Expected type 'num' + 'num' but found 'num & void' + 'num'",
+  });
+}
+
+test "cfa-2.<void returns>" {
+  const src =
+  \\ def check(n: num)
+  \\  if n > 5
+  \\    return 5
+  \\  else
+  \\    do
+  \\    end
+  \\  end
+  \\ end
+  \\ check(3) + 5
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Expected type 'num' + 'num' but found 'num & void' + 'num'",
   });
 }
 
@@ -1749,8 +1962,8 @@ test "patterns-33.<match in functions>" {
   \\ j += 4
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "cannot return multiple types: 'str && bool && num && void'",
-    "Expected type 'num' + 'num', but got 'str && bool && num && void' + 'num'"
+    "cannot return multiple types: 'str & bool & num & void'",
+    "Expected type 'num' + 'num' but found 'str & bool & num & void' + 'num'"
   });
 }
 
@@ -1784,7 +1997,7 @@ test "patterns-35.<match in functions>" {
   \\ check(13)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected return type 'num', but got 'str'",
+    "Expected return type 'num' but found 'str'",
   });
 }
 
@@ -1797,10 +2010,12 @@ test "patterns-36.<inexhaustive rested patterns>" {
   \\  case (..) if !z => println('has something or none')
   \\ end
   ;
-  try doErrorTest(src, 3, [_][]const u8{
+  try doErrorTest(src, 5, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Tuple{str, bool, str, bool, str, bool}",
+    "Tuple(_, _, str, _, _, _)",
+    "bool",
+    "Tuple(str, _, _, _, _, _)"
   });
 }
 
@@ -1837,7 +2052,7 @@ test "patterns-38.<inexhaustive patterns>" {
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "num",
+    "Ok(num)",
   });
 }
 
@@ -1858,55 +2073,59 @@ test "patterns-39.<inexhaustive patterns>" {
   try doErrorTest(src, 4, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "str",
-    "num",
+    "Error(str)",
+    "Ok(num)",
   });
 }
 
 test "patterns-40.<annotated tags>" {
   const src =
   \\ type T = Tag(a: num, b: str, c: bool)
-  \\  match Tag(a: 5, b: 'oops', c: false)
+  \\  match Tag(a=5, b='oops', c=false)
   \\    case Tag(a=5, b=6, c=7) => println('yay')
   \\  end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "expected type 'str', but got 'num'",
+    "Expected type 'str' but found 'num'",
   });
 }
 
 test "patterns-41.<annotated tags>" {
   const src =
   \\ type T = Tag(a: num, b: str, c: bool)
-  \\  match Tag(a: 5, b: 'oops', c: false)
+  \\  match Tag(a=5, b='oops', c=false)
   \\    case Tag(a=5, b='oops', c=false) => println('yay')
   \\  end
   ;
   try doErrorTest(src, 5, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "true",
-    "str",
-    "num",
+    "Tag(_, _, true)",
+    "Tag(_, str, _)",
+    "Tag(num, _, _)",
   });
 }
 
 test "patterns-42.<annotated tags>" {
   const src =
   \\ type T = Tag(a: num, b: str, c: bool)
-  \\  match Tag(a: 5, b: 'oops', c: false)
+  \\  match Tag(a=5, b='oops', c=false)
   \\    case Tag(a=7, b='nope', d=true) => println('nay')
   \\  end
   ;
-  try doErrorTest(src, 1, [_][]const u8{
-    "type 'Tag(num, str, bool)' has no field 'd'",
+  try doErrorTest(src, 5, [_][]const u8{
+    "type 'T' has no field 'd'",
+    "inexhaustive pattern match",
+    "Remaining pattern type(s):",
+    "Tag(_, str, _)",
+    "Tag(num, _, _)"
   });
 }
 
 test "patterns-43.<annotated tags exhaustiveness>" {
   const src =
   \\ type T = Tag(a: num, b: str, c: bool)
-  \\  match Tag(a: 5, b: 'oops', c: false)
+  \\  match Tag(a=5, b='oops', c=false)
   \\    case Tag(a=5, b='oopsy', c=false) => println('nay')
   \\    case Tag(a=_, b=_, c=true) => println('nay')
   \\  end
@@ -1914,7 +2133,119 @@ test "patterns-43.<annotated tags exhaustiveness>" {
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "false",
+    "Tag(_, _, false)",
+  });
+}
+
+test "patterns-44.<constant types>" {
+  const src =
+  \\ type F = Foo(a: 5, b: 5)
+  \\ match Foo(a=10, b=10)
+  \\  case _ => "nah"
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Expected type '5' but found 'num'",
+  });
+}
+
+test "patterns-44.<constant types 2>" {
+  const src =
+  \\ type F = Foo(a: 5, b: 5)
+  \\ match Foo(a=5, b=5)
+  \\  case Foo(b=10, a=10) => "nah"
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Expected type '5' but found 'num'",
+  });
+}
+
+test "patterns-44.<wrong label position>" {
+  const src =
+  \\ type F = Foo(a: 5, b: 5)
+  \\ match Foo(a=5, b=5)
+  \\  case Foo(b=5, a=5) => "nah"
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "The tag field 'a' was found in a wrong position.",
+  });
+}
+
+test "patterns-45.<redundancy in constant types>" {
+  const src =
+  \\ class Foo
+  \\  pub a: 5 = 5
+  \\ end
+  \\ match Foo()
+  \\  case Foo(a=5) => "nah"
+  \\  case _ => "boh"
+  \\ end
+  \\ 1 / '1' # error propagation since we're testing a warning
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "possible redundant case",
+    "case _ => \"boh\""
+  });
+}
+
+test "patterns-46.<missing patterns>" {
+  const src =
+  \\ class Ant
+  \\ end
+  \\ class Rat
+  \\ end
+  \\ type AntRat = A(Ant) | R(Rat)
+  \\ let j = R(Rat()) as AntRat
+  \\ match j
+  \\  case A(Ant()) => 12
+  \\  case R(Rat()) => 15
+  \\  case _ => 5
+  \\ end
+  \\ type Season = Spring | Summer | Autumn | Winter | Mag(str, num, str, num)
+  \\ match Autumn as Season
+  \\   case Spring => "Mild"
+  \\   case Summer => "Hot"
+  \\   case Autumn => "Windy"
+  \\   case Winter => "Cold"
+  \\   case Mag("a", 5, "b", 7) => "ah"
+  \\ end
+  ;
+ try doErrorTest(src, 6, [_][]const u8{
+    "inexhaustive pattern match.",
+    "Remaining pattern type(s):",
+    "Mag(_, _, _, num)",
+    "Mag(_, _, str, _)",
+    "Mag(_, num, _, _)",
+    "Mag(str, _, _, _)",
+  });
+}
+
+test "patterns-47.<missing patterns>" {
+  const src =
+  \\ class Panda
+  \\  pub x: num
+  \\  pub y: str
+  \\  def init(a: num, b: str)
+  \\    self.x = a
+  \\    self.y = b
+  \\  end
+  \\ end
+  \\ type Legion = Legion(str, num, Panda, bool)
+  \\ let j = Legion('a', 5, Panda(5, 'boy'), true)
+  \\ match j
+  \\  case Legion('a', 5, Panda(5, 'boy'), true) => println('you rock!')
+  \\ end
+  ;
+ try doErrorTest(src, 7, [_][]const u8{
+    "inexhaustive pattern match.",
+    "Remaining pattern type(s):",
+    "Legion(_, _, _, false)",
+    "Panda(_, str)",
+    "Panda(num, _)",
+    "Legion(_, num, _, _)",
+    "Legion(str, _, _, _)"
   });
 }
 
@@ -1925,7 +2256,7 @@ test "parse-modes .1" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "expected token '<identifier>', but found 'str'",
+    "expected token '<ident>' but found 'str'",
   });
 }
 
@@ -1936,7 +2267,7 @@ test "parse-modes .2" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "expected token '<identifier>', but found 'List'",
+    "expected token '<ident>' but found 'List'",
   });
 }
 
@@ -1945,7 +2276,7 @@ test "parse-modes .3" {
   \\ type Foo = None | Just
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "expected token '<identifier>', but found 'None'",
+    "expected token '<ident>' but found 'None'",
   });
 }
 
@@ -1954,7 +2285,7 @@ test "typing.<untagged unions>" {
   \\ let x: str | num = 5
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "expected token '=', but found '|'",
+    "expected token '=' but found '|'",
   });
 }
 
@@ -1978,7 +2309,7 @@ test "typing.<tagged unions>" {
   \\  end
   \\ end
   \\
-  \\ stup(1).?? + 5
+  \\ stup(1).? + 5
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "expected 'Maybe' type, found 'Error(str)'",
@@ -1996,7 +2327,7 @@ test "typing.<tagged unions 2>" {
   \\ fun(S('fancy'))
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "cannot return multiple types: 'S(str) && void'",
+    "cannot return multiple types: 'S(str) & void'",
   });
 }
 
@@ -2009,10 +2340,21 @@ test "typing.<tagged unions 3>" {
   });
 }
 
+test "typing.<tagged unions 3b>" {
+  const src =
+  \\ type Bat = A(List{Fox}, Tuple{Fox}) | B
+  \\ type Cat = A(name: Str, booh: Num) | B
+  \\ alias Fox = Foo?
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "expected token '<newline>' but found '?'"
+  });
+}
+
 test "typing.<tagged unions 4>" {
   const src =
   \\ type Bat = A(List{Fox}, Tuple{Fox}) | B
-  \\ type Cat = A(name: Str, Num) | B
+  \\ type Cat = A(name:Str, age:Num) | B
   \\ alias Fox = Foo
   \\ type BTree{T} = Node(T) | Branch(BTree{T}, BTree{T})
   \\ let tree: BTree{num} = Branch(Node(1), Node(2))
@@ -2021,7 +2363,7 @@ test "typing.<tagged unions 4>" {
   \\ type Pairk{K, V} = Pair(K, V)
   \\ let p:Pairk{str, str} = Pair(0, 0)
   \\ type VOrC{V, C} = Vee(V) | Cee(C)
-  \\ alias A{K, V} = Map{K?, Map{K, VOrC{VOrC{K, V}?, K?}}?}?
+  \\ alias A{K, V} = Map{K, Map{K, VOrC{VOrC{K, V}, K}}}
   \\ 2 as A{str, num}
   \\ alias A{K, V} = Maybe{VOrC{K, V}}
   \\ 2 as A{bool, str}
@@ -2051,7 +2393,7 @@ test "typing.<type and tag collision>" {
   \\ type J = J(str) | T(num)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "type with name 'J' collides with one of its variants",
+    "type with name 'J' shadows one of its variants",
   });
 }
 
@@ -2081,24 +2423,34 @@ test "tags.<params>" {
   \\ let j = A()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Argument mismatch. Expected 1 argument(s) but found 0",
+    "Argument arity mismatch. Expected 1 argument(s) but found 0",
   });
 }
 
 test "tags.<duplicate>" {
   const src =
   \\ type T = A(x:str, y:num)
-  \\ let j = A(x:'a', x:5)
+  \\ let j = A(x='a', x=5)
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "duplicate labeled argument found",
   });
 }
 
-test "tags.<label>" {
+test "tags.<label incomplete>" {
   const src =
   \\ type T = A(x:str, num)
-  \\ let j = A(j:'a', 5)
+  \\ let j = A(j='a', 5)
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "type with one or more labeled argument(s) must be completely labeled",
+  });
+}
+
+test "tags.<label>" {
+  const src =
+  \\ type T = A(x:str, y:num)
+  \\ let j = A(j='a', 5)
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "illegal or invalid label: 'j'",
@@ -2256,6 +2608,64 @@ test "aspec.<methods 3>" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "expected token '<identifier>', but found 'pub'",
+    "expected token '<ident>' but found 'pub'",
   });
 }
+
+test "tag namespaces" {
+  const src =
+  \\ type Cat = A(str) | B(str)
+  \\ type Dog = A(num) | B(str)
+  \\ let x: Cat = Cat.A('fox')
+  \\ let y: Dog = Dog.A(12)
+  \\ println(x, y)
+  \\ # no longer okay, because although Dog.B is exactly same as Cat.B, the namespace (Dog or Cat) now matters, they're not just aliases
+  \\ x = Dog.B('foo')
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Cannot assign type 'Dog' to type 'Cat'",
+  });
+}
+
+test "tag namespaces .2" {
+  const src =
+  \\ type T = A | B
+  \\ let j = T.A
+  \\ j + 5
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Expected type 'num' + 'num' but found 'T' + 'num'",
+  });
+}
+
+test "tag namespaces .3" {
+  const src =
+  \\ type T = A | B
+  \\ let j: A = T.A
+  \\ j + 5
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Cannot initialize type 'A' with type 'T'",
+  });
+}
+
+test "parameterized access" {
+  const src =
+  \\ type T{K, V} = K
+  \\ let x: T{str, num} = T.K
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "bad access of parameterized type",
+  });
+}
+
+test "unary add" {
+  const src =
+  \\ let x = "abc"
+  \\ println(+x)
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Expected type + 'num' but found + 'str'",
+  });
+}
+

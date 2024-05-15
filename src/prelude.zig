@@ -41,6 +41,10 @@ pub const BuiltinsSrc =
 \\  pub def get(index: num): Maybe{T}
 \\    #[[internal]]
 \\  end
+\\
+\\  pub def slice(start_index: num, end_index: num): List{T}
+\\    #[[internal]]
+\\  end
 \\ end
 \\
 \\ class Tuple{T}
@@ -48,7 +52,6 @@ pub const BuiltinsSrc =
 \\    #[[internal]]
 \\  end
 \\ end
-\\
 \\
 \\ type MapEntry{K, V} = Key(K) | Value(V)
 \\

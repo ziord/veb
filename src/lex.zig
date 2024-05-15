@@ -2,6 +2,7 @@ const std = @import("std");
 const BuiltinsSrc = @import("prelude.zig").BuiltinsSrc;
 const OpCode = @import("opcode.zig").OpCode;
 const VebAllocator = @import("allocator.zig");
+const util = @import("util.zig");
 pub const ks = @import("constants.zig");
 
 pub const Keywords = std.ComptimeStringMap(TokenType, .{
@@ -48,6 +49,7 @@ pub const Keywords = std.ComptimeStringMap(TokenType, .{
   .{ks.MaybeVar, .TkMaybe},
   .{ks.ResultVar, .TkResult},
   .{ks.ListVar, .TkList},
+  .{ks.PanicVar, .TkPanic},
   .{ks.ErrorVar, .TkError},
   .{ks.AnyVar, .TkAny},
   .{ks.TupleVar, .TkTuple},
@@ -127,6 +129,7 @@ pub const TokenType = enum (u8) {
   TkFalse,          // false
   TkMatch,          // match
   TkMaybe,          // maybe
+  TkPanic,          // panic
   TkTuple,          // tuple
   TkWhile,          // while
   TkResult,         // result
@@ -136,11 +139,14 @@ pub const TokenType = enum (u8) {
   TkNoReturn,       // noreturn
   TkNumber,         // <number>
   TkString,         // <string>
-  TkAllocString,    // <string>
+  TkEscString,      // <string>
   TkIdent,          // <identifier>
-  TkUnindentified,  // <error>
+  TkLexError,       // <error>
   TkEof,            // <eof>
 
+  pub inline fn is(self: @This(), ty: @This()) bool {
+    return self == ty;
+  }
 
   pub fn optype(self: @This()) OpType {
     return switch (self) {
@@ -257,6 +263,7 @@ pub const TokenType = enum (u8) {
       .TkJust => ks.JustVar,
       .TkNone => ks.NoneVar,
       .TkList => ks.ListVar,
+      .TkPanic => ks.PanicVar,
       .TkSelf => ks.SelfVar,
       .TkVoid => ks.VoidVar,
       .TkFalse => ks.FalseVar,
@@ -269,10 +276,11 @@ pub const TokenType = enum (u8) {
       .TkOrElse => "orelse",
       .TkReturn => "return",
       .TkContinue => "continue",
-      .TkNumber => "<number>",
-      .TkString, .TkAllocString => "<string>",
-      .TkIdent => "<identifier>",
-      .TkUnindentified => "<error>",
+      .TkNumber => "<num>",
+      .TkString => "<str>",
+      .TkEscString => "<esc-str>",
+      .TkIdent => "<ident>",
+      .TkLexError => "<error>",
       .TkEof => "<eof>",
     };
   }
@@ -346,67 +354,158 @@ pub const OpType = enum (u8) {
 };
 
 pub const Optr = struct {
-  optype: OpType,
-  token: Token,
+  ty: TokenType,
+  pos: u32,
+  line: u32,
 
-  pub fn init(token: Token) @This() {
-    return @This() {.optype = token.ty.optype(), .token = token};
+  pub fn init(tok: Token) @This() {
+    return @This() {.ty = tok.ty, .pos = tok.offset, .line = tok.line};
+  }
+
+  pub inline fn token(self: Optr) Token {
+    return Token.init(self.ty, self.pos, .User, self.ty.str(), self.line);
+  }
+
+  pub inline fn str(self: @This()) []const u8 {
+    return self.ty.str();
+  }
+
+  pub inline fn optype(self: @This()) OpType {
+    return self.ty.optype();
+  }
+};
+
+const U8Writer = util.U8Writer;
+
+pub const SrcKind = ParseMode;
+
+pub const TokenBit = struct {
+  pos: u32,
+  ty: TokenType,
+  line: u32,
+
+  pub inline fn init(token: Token) TokenBit {
+    return TokenBit{.pos = token.offset, .ty = token.ty, .line = token.line};
+  }
+
+  pub inline fn toToken(self: TokenBit) Token {
+    return Token.init(self.ty, self.pos, .User, self.ty.str(), self.line);
+  }
+};
+
+
+pub const IdentToken = struct {
+  val: [*]const u8,
+  len: u8,
+  line: u16,
+  offset: u32,
+
+  pub inline fn init(token: Token) IdentToken {
+    return IdentToken{.val = token.val, .len = @intCast(token.len), .line = @intCast(token.line), .offset = token.offset};
+  }
+
+  pub inline fn lexeme(self: *const IdentToken) []const u8 {
+    @setRuntimeSafety(false);
+    return self.val[0..@intCast(self.len)];
+  }
+
+  pub inline fn toToken(self: IdentToken) Token {
+    @setRuntimeSafety(false);
+    return Token.init(.TkIdent, self.offset, .User, self.val[0..@intCast(self.len)], @intCast(self.line));
   }
 };
 
 pub const Token = struct {
+  val: [*]const u8,
+  offset: u32,
+  len: u32,
+  line: u32,
   ty: TokenType,
-  line: usize,
-  offset: usize,
-  value: []const u8,
+  src_kind: SrcKind,
 
-  pub inline fn is(self: @This(), ty: TokenType) bool {
+  const DefaultToken = Token.init(.TkEof, 0, SrcKind.User, "", 1);
+
+  pub inline fn init(ty: TokenType, offset: u32, src_kind: SrcKind, val: []const u8, line: u32) Token {
+    return Token{.val = val.ptr, .offset = offset, .len = @intCast(val.len), .ty = ty, .src_kind = src_kind, .line = line};
+  }
+
+  pub inline fn is(self: *const Token, ty: TokenType) bool {
     return self.ty == ty;
   }
 
-  pub fn eql(self: @This(), other: @This()) bool {
+  pub inline fn equal(self: *const Token, other: Token) bool {
     return self.offset == other.offset and self.ty == other.ty;
   }
 
-  pub inline fn valueEql(self: *const @This(), val: []const u8) bool {
-    return std.mem.eql(u8, self.value, val);
+  pub inline fn lexeme(self: *const Token) []const u8 {
+    @setRuntimeSafety(false);
+    return self.val[0..self.len];
   }
 
-  pub fn isErr(self: @This()) bool {
-    return self.is(.TkUnindentified);
+  /// check if a token has the same value as val ([]const u8 | Token)
+  pub inline fn valueEql(self: *const Token, val: anytype) bool {
+    @setRuntimeSafety(false);
+    if (@TypeOf(val) == []const u8) {
+      return std.mem.eql(u8, self.val[0..self.len], val);
+    } else {
+      return std.mem.eql(u8, self.val[0..self.len], val.lexeme());
+    }
   }
 
-  pub fn parseNum(self: @This()) !f64 {
-    if (self.value.len > 1 and self.value[0] == '0') {
-      const ty = self.value[1];
+  pub inline fn getDefaultToken() Token {
+    return DefaultToken;
+  }
+
+  pub inline fn getToken(val: []const u8, ty: TokenType) Token {
+    return Token.init(ty, 0, .User, val, 0);
+  }
+
+  pub inline fn dupTk(self: Token, ty: TokenType) Token {
+    return Token.init(ty, self.offset, self.src_kind, self.lexeme(), self.line);
+  }
+
+  pub inline fn isTkErr(self: Token) bool {
+    return self.ty == .TkLexError;
+  }
+
+  pub inline fn isTkEof(self: Token) bool {
+    return self.ty == .TkEof;
+  }
+
+  pub inline fn fromBinaryNode(node: anytype) Token {
+    // node really is a BinaryNode
+    return Token.init(node.op_tkty, node.op_offset, node.op_origin, node.op_tkty.str(), node.left.getToken().line);
+  }
+
+  pub inline fn tkFrom(self: *const @This(), val: []const u8, ty: TokenType) Token {
+    return Token.init(ty, self.offset, self.src_kind, val, self.line);
+  }
+
+  pub fn parseNum(self: *const @This()) !f64 {
+    const value = self.lexeme();
+    if (value.len > 1 and value[0] == '0') {
+      const ty = value[1];
       if (ty == 'x' or ty == 'o' or ty == 'b') {
-        return @floatFromInt(try std.fmt.parseInt(i64, self.value, 0));
+        return @floatFromInt(try std.fmt.parseInt(i64, value, 0));
       }
     }
-    return try std.fmt.parseFloat(f64, self.value);
+    return try std.fmt.parseFloat(f64, value);
   }
 
-  pub fn column(self: @This(), src: []const u8) usize {
-    // FIXME: elegantly handle this
-    if (self.offset > src.len) return self.column(BuiltinsSrc);
-    const offset = if (self.offset == src.len) self.offset - 1 else self.offset;
+  fn _column(self: *const @This(), src: []const u8) usize {
+    const start = self.offset;
+    const offset = if (start == src.len) start - 1 else start;
     return (
       if (std.mem.lastIndexOf(u8, src[0..offset], "\n")) |col|
-        offset - col - 1
+        offset - @as(u32, @intCast(col)) - 1
       else
         offset
-    ) + self.value.len
-      + @intFromBool((self.ty == .TkString or self.ty == .TkAllocString)); // quote
+    ) + self.len;
   }
 
-  pub fn isAlloc(self: @This()) bool {
-    return self.ty == .TkAllocString;
-  }
-
-  pub fn getLine(self: @This(), src: []const u8) []const u8 {
-    // FIXME: elegantly handle this
-    if (self.offset > src.len) return self.getLine(BuiltinsSrc);
-    const offset = if (self.ty == .TkNewline or self.ty == .TkEof) self.offset - 1 else self.offset;
+  fn _getLine(self: *const @This(), src: []const u8) []const u8 {
+    const start = self.offset;
+    const offset = if ((self.ty == .TkNewline or self.ty == .TkEof) and start > 0) start - 1 else start;
     // walk backwards
     var start_col: usize = offset;
     while (start_col > 0): (start_col -= 1) {
@@ -425,28 +524,18 @@ pub const Token = struct {
     return src[start_col..end_col];
   }
 
-  pub fn getDefault() Token {
-    return Token {
-      .ty = TokenType.TkEof,
-      .value = "",
-      .line = 0,
-      .offset = 1,
-    };
+  pub fn column(self: *const @This(), src: []const u8) usize {
+    return if (self.src_kind == .User) self._column(src) else self._column(BuiltinsSrc);
   }
 
-  pub fn from(token: *const Token) Token {
-    var new: Token = undefined;
-    new = token.*;
-    return new;
+  pub fn getLine(self: *const @This(), src: []const u8) []const u8 {
+    return if (self.src_kind == .User) self._getLine(src) else self._getLine(BuiltinsSrc);
   }
+};
 
-  pub fn fromWithValue(token: *const Token, val: []const u8, ty: TokenType) Token {
-    var new: Token = undefined;
-    new = token.*;
-    new.value = val;
-    new.ty = ty;
-    return new;
-  }
+pub const ParseMode = enum(u8) {
+  Builtin = 0,
+  User = 1,
 };
 
 /// A snapshot of the lexer's state at any point in lexing
@@ -469,10 +558,40 @@ pub const Lexer = struct {
   src: []const u8,
   allocator: std.mem.Allocator,
   allow_nl: usize = 0,
+  mode: ParseMode,
 
   const Self = @This();
+  const LexError = error {
+    none,
+    illegal_token,    // "Illegal token"
+    invalid_dec_lit,  // "Invalid decimal literal"
+    invalid_bin_lit,  // "Invalid binary literal"
+    invalid_oct_lit,  // "Invalid octal literal"
+    invalid_hex_lit,  // "Invalid hex literal"
+    invalid_num_lit,  // "Invalid number literal"
+    unclosed_string,  // "Unclosed string"
+    unknown_token,    // "Unknown token"
+    str_too_long,     // "String too long"
+    name_too_long,    // "Name too long"
+  };
 
-  pub fn init(src: []const u8, allocator: *VebAllocator) Self {
+  pub fn getError(code: LexError) []const u8 {
+    return switch (code) {
+      error.none => "",
+      error.illegal_token => "Illegal token",
+      error.invalid_dec_lit => "Invalid decimal literal",
+      error.invalid_bin_lit => "Invalid binary literal",
+      error.invalid_oct_lit => "Invalid octal literal",
+      error.invalid_hex_lit => "Invalid hex literal",
+      error.invalid_num_lit => "Invalid number literal",
+      error.unclosed_string => "Unclosed string",
+      error.unknown_token => "Unknown token",
+      error.str_too_long => "String too long",
+      error.name_too_long => "Name too long",
+    };
+  }
+
+  pub fn init(src: []const u8, mode: ParseMode, allocator: std.mem.Allocator) Self {
     return Self {
       .line = 1,
       .column = 1,
@@ -480,12 +599,13 @@ pub const Lexer = struct {
       .current = 0,
       .at_error = false,
       .src = src,
-      .allocator = allocator.getAllocator(),
+      .mode = mode,
+      .allocator = allocator,
     };
   }
 
-  inline fn curr(self: *Self) u8 {
-    return if (self.atEnd()) 0 else self.src[self.current];
+  pub inline fn getErrorToken(self: *Self) Token {
+    return self.newToken(.TkLexError);
   }
 
   inline fn atEnd(self: *Self) bool {
@@ -517,23 +637,17 @@ pub const Lexer = struct {
     return self.peek();
   }
 
-  fn newToken(self: *Self, ty: TokenType) Token {
-    return Token {
-      .ty = ty,
-      .line = self.line,
-      .value = self.src[self.start..self.current],
-      .offset = self.start,
-    };
-  }
-
   fn eofToken(self: *Self) Token {
     return self.newToken(.TkEof);
   }
 
-  fn errToken(self: *Self, cause: ?[]const u8) Token {
-    var token = self.newToken(.TkUnindentified);
-    token.value = cause orelse "Illegal token";
-    return token;
+  inline fn slice(self: *Self) []const u8 {
+    @setRuntimeSafety(false);
+    return self.src[self.start..self.current];
+  }
+
+  fn newToken(self: *Self, ty: TokenType) Token {
+    return Token.init(ty, @intCast(self.start), self.mode, self.src[self.start..self.current], @intCast(self.line));
   }
 
   fn advance(self: *Self) u8 {
@@ -557,8 +671,8 @@ pub const Lexer = struct {
       self.adv();
     }
   }
-
-  fn skipWhitespace(self: *Self) !void {
+    
+  fn skipWhitespace(self: *Self) void {
     while (true) {
       const char = self.peek();
       switch(char) {
@@ -574,14 +688,14 @@ pub const Lexer = struct {
     }
   }
 
-  fn lexNum(self: *Self, start: u8) Token {
+  fn lexNum(self: *Self, start: u8) !Token {
     // handle:
     // hex: 0x[a-fA-F0-9]*
     // oct: 0o[1-7]*
     // bin: 0b[0-1]*
-    var is_zero = start == '0';
-    var current = self.peek();
-    var err_token = self.errToken("Invalid decimal literal");
+    const is_zero = start == '0';
+    const current = self.peek();
+    var err_ = LexError.invalid_dec_lit;
     if (is_zero and current == 'b') {
       // "0b" bin_int
       // bin_int <- [01] '_'? bin_int
@@ -592,7 +706,7 @@ pub const Lexer = struct {
           if (self.peek() == '_') {
             self.adv();
             if (self.peek() != '0' and self.peek() != '1') {
-              return self.errToken("Invalid binary literal");
+              return error.invalid_bin_lit;
             }
           }
         }
@@ -611,7 +725,7 @@ pub const Lexer = struct {
           if (self.peek() == '_') {
             self.adv();
             if (!('0' <= self.peek() and self.peek() <= '7')) {
-              return self.errToken("Invalid octal literal");
+              return error.invalid_oct_lit;
             }
           }
         }
@@ -621,14 +735,14 @@ pub const Lexer = struct {
       // "0x" hex_int
       // hex_int -> [0-9a-fA-F] '_'? hex_int
       self.adv(); // skip 'x'
-      err_token.value = "Invalid hex literal";
+      err_ = error.invalid_hex_lit;
       if (std.ascii.isHex(self.peek())) {
         while (std.ascii.isHex(self.peek())) {
           self.adv();
           if (self.peek() == '_') {
             self.adv();
             if (!std.ascii.isHex(self.peek())) {
-              return err_token;
+              return err_;
             }
           }
         }
@@ -643,7 +757,7 @@ pub const Lexer = struct {
       if (self.peek() == '_') { // 
         self.adv(); 
         if (!std.ascii.isDigit(self.peek())) {
-          return err_token;
+          return err_;
         }
       }
       while (std.ascii.isDigit(self.peek())) {
@@ -651,7 +765,7 @@ pub const Lexer = struct {
         if (self.peek() == '_') {
           self.adv();
           if (!std.ascii.isDigit(self.peek())) {
-            return err_token;
+            return err_;
           }
         }
       }
@@ -668,13 +782,13 @@ pub const Lexer = struct {
             if (self.peek() == '_') {
               self.adv();
               if (!std.ascii.isDigit(self.peek())) {
-                return err_token;
+                return err_;
               }
             }
           }
         } else {
           // hack for: 0.e1234 i.e. dec+ "." e dec+ since zig supports this
-          if (std.ascii.toLower(self.peek()) != 'e') return err_token;
+          if (std.ascii.toLower(self.peek()) != 'e') return err_;
         }
       }
       if (std.ascii.toLower(self.peek()) == 'e') {
@@ -689,86 +803,51 @@ pub const Lexer = struct {
             if (self.peek() == '_') {
               self.adv();
               if (!std.ascii.isDigit(self.peek())) {
-                return err_token;
+                return err_;
               }
             }
           }
         } else {
-          return err_token;
+          return err_;
         }
       }
       return self.newToken(.TkNumber);
     }
-    return self.errToken("Invalid number literal");
+    return error.invalid_num_lit;
   }
 
-  fn lexIdent(self: *Self) Token {
+  fn lexIdent(self: *Self) !Token {
     while (!self.atEnd() and self.isAlpha(self.src[self.current])): (_ = self.advance()) {}
-    var token = self.newToken(.TkIdent);
-    if (Keywords.get(token.value)) |ty| {
-      token.ty = ty;
+    if (Keywords.get(self.slice())) |ty| {
+      return self.newToken(ty);
     }
-    return token;
+    if ((self.current - self.start) > ks.MAX_IDENT_LEN) {
+      return error.name_too_long;
+    }
+    return self.newToken(.TkIdent);
   }
 
-  inline fn convHex(self: *Self, ch: u8) u8 {
-    _ = self;
-    if ('0' <= ch and ch <= '9') {
-      return ch - '0';
-    }
-    if ('a' <= ch and ch <= 'f') {
-      return ch - 'a' + 10;
-    }
-    return ch - 'A' + 10;
-  }
-
-  fn lexStr(self: *Self, start: u8) Token {
-    var escapes: u32 = 0;
+  fn lexStr(self: *Self, start: u8) !Token {
+    var escaped = false;
     while (!self.atEnd() and self.peek() != start) {
       if (self.peek() == '\\') {
         // skip - so next char is skipped.
         self.adv();
-        escapes += 1;
+        escaped = true;
       }
       self.adv();
     }
     if (self.atEnd()) {
-      return self.errToken("Unclosed string");
+      return error.unclosed_string;
     }
-    var token = self.newToken(.TkString);
-    token.value = token.value[1..]; // skip opening quot `"`
-    self.adv(); // skip closing quot `"`
-    // check for escape sequences
-    if (std.mem.indexOf(u8, token.value, "\\") == null) return token;
-    var buf = self.allocator.alloc(u8, token.value.len - escapes) catch {
-      return self.errToken("could not allocate string with escape sequence");
-    };
-    @memset(buf, 0);
-    var len = token.value.len;
-    var i: u32 = 0;
-    var idx: u32 = 0;
-    while (idx < len) : (idx += 1) {
-      var char = token.value[idx];
-      if (char == '\\') {
-        var next = token.value[idx + 1];
-        switch (next) {
-          'a' => buf[i] = 7,    // '\a'
-          'b' => buf[i] = 8,    // '\b'
-          'f' => buf[i] = 12,   // '\f'
-          'n' => buf[i] = '\n', // '\n'
-          'r' => buf[i] = '\r', // '\r'
-          't' => buf[i] = '\t', // '\a'
-          'v' => buf[i] = 11,   // '\v'
-          else => |ch| buf[i] = ch,
-        }
-        idx += 1;
-      } else {
-        buf[i] = char;
-      }
-      i += 1;
+    // skip opening quot `"`
+    self.start += 1;
+    if ((self.current - self.start) > ks.MAX_STR_LEN) {
+      return error.str_too_long;
     }
-    token.value = buf;
-    token.ty = .TkAllocString;
+    const token = self.newToken(if (!escaped) .TkString else .TkEscString);
+    // skip closing quot `"`
+    self.adv();
     return token;
   }
 
@@ -794,20 +873,18 @@ pub const Lexer = struct {
 
   pub fn getTentativeToken(self: *Self) Token {
     const ss = self.snapshot();
-    const tok = self.getToken();
+    const tok = self.getToken() catch self.newToken(.TkError);
     self.rewind(ss);
     return tok;
   }
 
-  pub fn getToken(self: *Self) Token {
-    self.skipWhitespace() catch {
-      return self.errToken("Unclosed comment");
-    };
+  pub fn getToken(self: *Self) !Token {
+    self.skipWhitespace();
     self.start = self.current;
     if (self.atEnd()) {
       return self.eofToken();
     }
-    var ch = self.advance();
+    const ch = self.advance();
     if (std.ascii.isDigit(ch)) {
       return self.lexNum(ch);
     }
@@ -841,7 +918,7 @@ pub const Lexer = struct {
       '=' => self.newToken(if (self.match('=')) .Tk2Eq else if (self.match('>')) .TkEqGrt else .TkEqual),
       '<' => self.newToken(if (self.match('=')) .TkLeq else if (self.match('<')) .Tk2Lthan else .TkLthan),
       '>' => self.newToken(if (self.match('=')) .TkGeq else if (self.match('>')) .Tk2Gthan else .TkGthan),
-      else => self.errToken("Unknown token"),
+      else => error.unknown_token,
     };
   }
 };

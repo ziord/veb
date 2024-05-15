@@ -1,18 +1,20 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+
+const Allocator = std.mem.Allocator;
 pub const logger = std.log.scoped(.veb);
 
 pub const NameGen = struct {
-  al: std.mem.Allocator,
+  al: Allocator,
   name_id: usize = 0,
 
-  pub inline fn init(al: std.mem.Allocator) @This() {
+  pub inline fn init(al: Allocator) @This() {
     return @This(){.al = al};
   }
 
   pub fn generate(self: *@This(), comptime fmt: []const u8, args: anytype) [] const u8 {
-    var name = std.fmt.allocPrint(self.al, fmt ++ ".{}", args ++ .{self.name_id}) catch @panic("could not generate name");
+    const name = std.fmt.allocPrint(self.al, fmt ++ ".{}", args ++ .{self.name_id}) catch @panic("could not generate name");
     self.name_id += 1;
     return name;
   }
@@ -36,7 +38,7 @@ pub fn TWriter(comptime T: type) type {
 
     pub const Writer = std.ArrayList(T).Writer;
 
-    pub fn init(al: std.mem.Allocator) @This() {
+    pub fn init(al: Allocator) @This() {
       return @This(){.backing = std.ArrayList(T).init(al)};
     }
 
@@ -44,7 +46,15 @@ pub fn TWriter(comptime T: type) type {
       return self.backing.writer();
     }
 
-    pub inline fn allocator(self: *@This()) std.mem.Allocator {
+    pub fn view(self: *@This()) []const T {
+      return self.backing.items;
+    }
+
+    pub fn len(self: *@This()) usize {
+      return self.backing.items.len;
+    }
+  
+    pub inline fn allocator(self: *@This()) Allocator {
       return self.backing.allocator;
     }
 
@@ -111,15 +121,22 @@ pub inline fn assert(check: bool, msg: []const u8) void {
   }
 }
 
-pub inline fn alloc(comptime T: type, allocator: std.mem.Allocator) *T {
+pub inline fn alloc(comptime T: type, allocator: Allocator) *T {
   return allocator.create(T) catch |e| {
     std.debug.print("AllocationError {}", .{e});
     std.os.exit(1);
   };
 }
 
-pub inline fn box(comptime T: type, val: T, allocator: std.mem.Allocator) *T {
-  var item = allocator.create(T) catch {
+pub inline fn allocSlice(comptime T: type, n: usize, allocator: Allocator) []T {
+  return allocator.alloc(T, n) catch |e| {
+    std.debug.print("AllocationError {}", .{e});
+    std.os.exit(1);
+  };
+}
+
+pub inline fn box(comptime T: type, val: T, allocator: Allocator) *T {
+  const item = allocator.create(T) catch {
     std.debug.print("Allocation failed\n", .{});
     std.os.exit(1);
   };
@@ -127,7 +144,7 @@ pub inline fn box(comptime T: type, val: T, allocator: std.mem.Allocator) *T {
   return item;
 }
 
-pub fn boxEnsureCapacity(comptime T: type, val: T, al: std.mem.Allocator, cap: usize) *T {
+pub fn boxEnsureCapacity(comptime T: type, val: T, al: Allocator, cap: usize) *T {
   var item = @call(.always_inline, box, .{T, val, al});
   item.ensureTotalCapacity(cap);
   return item;

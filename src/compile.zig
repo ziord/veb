@@ -1,20 +1,20 @@
 const std = @import("std");
 const value = @import("value.zig");
-const ast = @import("ast.zig");
+const tir = @import("tir.zig");
 const ks = @import("constants.zig");
 const parse = @import("parse.zig");
 const util = @import("util.zig");
 const ds = @import("ds.zig");
-const CnAllocator = @import("allocator.zig");
+const VebAllocator = @import("allocator.zig");
 const diagnostics = @import("diagnostics.zig");
 const check = @import("check.zig");
 const Disassembler = @import("debug.zig").Disassembler;
 const OpCode = @import("opcode.zig").OpCode;
 const VM = @import("vm.zig").VM;
-const Token = ast.Token;
 
+const Token = tir.Token;
 const Code = value.Code;
-const Node = ast.AstNode;
+const Node = tir.Node;
 const Inst = value.Inst;
 const ObjFn = value.ObjFn;
 const TypeKind = parse.TypeKind;
@@ -25,6 +25,7 @@ const TypeList = check.TypeList;
 const Type = check.Type;
 const U8Writer = util.U8Writer;
 const InitVar = ks.InitVar;
+const assert = check.assert;
 const logger = std.log.scoped(.compile);
 
 const VRegister = struct {
@@ -47,7 +48,7 @@ const VRegister = struct {
     var regs = std.MultiArrayList(Reg){};
     regs.ensureTotalCapacity(al, value.MAX_REGISTERS) catch {};
     for (0..value.MAX_REGISTERS) |i| {
-      regs.append(al, .{.val = @intCast(i), .free = true}) catch {};
+      regs.appendAssumeCapacity(.{.val = @intCast(i), .free = true});
     }
     return Self {.regs = regs};
   }
@@ -83,7 +84,7 @@ const VRegister = struct {
       i += 1;
       if (j == n) break;
     }
-    std.debug.assert(j == n);
+    assert(j == n);
     return reg + 1;
   }
 
@@ -117,7 +118,7 @@ const VRegister = struct {
         if (j == n) break :main;
       }
     }
-    std.debug.assert(j == n);
+    assert(j == n);
     return start;
   }
 
@@ -132,7 +133,7 @@ const VRegister = struct {
     for (vals, frees, 0..) |val, free, i| {
       if (j == 0) break;
       if (val == r) {
-        std.debug.assert(!free);
+        assert(!free);
         frees[i] = true;
         r += 1;
         j -= 1;
@@ -147,7 +148,7 @@ const VRegister = struct {
     for (vals, 0..) |val, i| {
       if (val == reg) {
         var frees = slice.items(.free);
-        std.debug.assert(!frees[i]);
+        assert(!frees[i]);
         frees[i] = true;
         return;
       }
@@ -156,30 +157,45 @@ const VRegister = struct {
 };
 
 const GlobalVar = struct {
-  name: *[]const u8,
+  _name: [*]const u8,
+  _name_len: u32,
   mempos: u32,
   index: u32, // index into compiler's `globals`
   initialized: bool = false,
   patched: bool = false,
+
+  pub inline fn name(self: *const GlobalVar) []const u8 {
+    return self._name[0..@intCast(self._name_len)];
+  }
 };
 
 /// like a GlobalVar but with more efficient read/write access
 const GSymVar = struct {
-  name: *[]const u8,
+  _name: [*]const u8,
+  _name_len: u32,
   initialized: bool = false,
   patched: bool = false,
+
+  pub inline fn name(self: *const GSymVar) []const u8 {
+    return self._name[0..@intCast(self._name_len)];
+  }
 };
 
 const LocalVar = struct {
-  scope: i32,
+  _name: [*]const u8,
+  _name_len: u8,
   reg: u32,
-  name: *[]const u8,
+  scope: i32,
   index: u32,
   initialized: bool = false,
   captured: bool = false,
 
-  pub fn init(scope: i32, name: *[]const u8, reg: u32, index: u32) @This() {
-    return @This() {.scope = scope, .name = name, .reg = reg, .index = index};
+  pub fn init(scope: i32, _name: []const u8, reg: u32, index: u32) @This() {
+    return @This() {.scope = scope, ._name = _name.ptr, ._name_len = @intCast(_name.len), .reg = reg, .index = index};
+  }
+
+  pub inline fn name(self: *const LocalVar) []const u8 {
+    return self._name[0..@intCast(self._name_len)];
   }
 };
 
@@ -193,24 +209,23 @@ const Upvalue = struct {
 };
 
 pub const Compiler = struct {
-  fun: *ObjFn,
-  gsyms: std.MultiArrayList(GSymVar),
-  locals: std.MultiArrayList(LocalVar),
-  upvalues: std.MultiArrayList(Upvalue),
-  globals: std.MultiArrayList(GlobalVar),
-  loop_ctrls: ds.ArrayList(*ast.ControlNode),
+  gsyms: ds.ArrayListUnmanaged(GSymVar),
+  locals: ds.ArrayListUnmanaged(LocalVar),
+  upvalues: ds.ArrayListUnmanaged(Upvalue),
+  globals: ds.ArrayListUnmanaged(GlobalVar),
+  loop_ctrls: ds.ArrayListUnmanaged(*tir.ControlNode),
   vreg: VRegister,
-  allocator: *CnAllocator,
-  enclosing: ?*Compiler = null,
-  vm: *VM,
-  scope: i32 = GLOBAL_SCOPE, // defaults to global scope
   rk_bx: RkBxPair = RkBxPair{},
+  scope: i32 = GLOBAL_SCOPE, // defaults to global scope
+  skip_gsyms: bool = false,
+  u8w: U8Writer,
+  allocator: *VebAllocator,
+  enclosing: ?*Compiler = null,
+  fun: *ObjFn,
+  vm: *VM,
   diag: *Diagnostic,
   generics: *GenInfoMap,
   _prelude: *Node,
-  _prelude_len: usize = 0,
-  skip_gsyms: bool = false,
-  u8w: U8Writer,
   
   const Self = @This();
 
@@ -232,30 +247,25 @@ pub const Compiler = struct {
   const CompileError = error{CompileError};
 
   pub fn init(
-    diag: *Diagnostic, vm: *VM, fun: *ObjFn, info: *GenInfoMap,
-    allocator: *CnAllocator, prel: *Node, prev: ?*@This(), mtd_token: ?Token
+    diag: *Diagnostic, vm: *VM, fun: *ObjFn, generics: *GenInfoMap,
+    allocator: *VebAllocator, prel: *Node,
+    prev: ?*@This(), mtd_token: ?Token,
   ) Self {
     var al = allocator.getArenaAllocator();
-    var gsyms = std.MultiArrayList(GSymVar){};
-    var locals = std.MultiArrayList(LocalVar){};
-    var upvalues = std.MultiArrayList(Upvalue){};
-    var globals = std.MultiArrayList(GlobalVar){};
-    gsyms.ensureTotalCapacity(al, MAX_GSYMS) catch {};
-    locals.ensureTotalCapacity(al, MAX_LOCALS) catch {};
     var self = Self {
-      .fun = fun,
-      .allocator = allocator,
-      .gsyms = gsyms,
-      .locals = locals,
-      .upvalues = upvalues,
-      .globals = globals,
-      .loop_ctrls = ds.ArrayList(*ast.ControlNode).init(al),
+      .gsyms = ds.ArrayListUnmanaged(GSymVar).initCapacity(MAX_GSYMS, al),
+      .locals = ds.ArrayListUnmanaged(LocalVar).initCapacity(MAX_LOCALS, al),
+      .upvalues = ds.ArrayListUnmanaged(Upvalue).init(),
+      .globals = ds.ArrayListUnmanaged(GlobalVar).init(),
+      .loop_ctrls = ds.ArrayListUnmanaged(*tir.ControlNode).init(),
       .vreg = VRegister.init(al),
+      .u8w = U8Writer.init(al),
+      .allocator = allocator,
+      .fun = fun,
       .vm = vm,
       .diag = diag,
-      .generics = info,
+      .generics = generics,
       ._prelude = prel,
-      .u8w = U8Writer.init(al),
     };
     if (prev) |p| {
       self.adoptBuiltinsPrelude(p);
@@ -265,8 +275,7 @@ pub const Compiler = struct {
     if (mtd_token) |token| {
       self.appendSelfParam(token) catch unreachable;
     } else {
-      var loc = ast.VarNode.init(Token.getDefault());
-      _ = self.initLocal(&loc) catch unreachable;
+      _ = self.initLocal(Token.getDefaultToken()) catch unreachable;
     }
     return self;
   }
@@ -293,7 +302,7 @@ pub const Compiler = struct {
     );
   }
 
-  inline fn isSelfVar(self: *Self, node: *ast.VarNode) bool {
+  inline fn isSelfVar(self: *Self, node: *tir.TVarNode) bool {
     _ = self;
     return node.token.valueEql(ks.SelfVar);
   }
@@ -370,102 +379,90 @@ pub const Compiler = struct {
     return ((self.fun.code.values.len + value.MAX_REGISTERS + 1) <= value.Code._18Bits);
   }
 
-  fn addLocal(self: *Self, node: *ast.VarNode) !u32 {
+  fn addLocal(self: *Self, token: Token) !u32 {
     // add a local and return its register.
-    if (self.locals.len >= MAX_LOCALS) {
-      return self.compileError(node.token, "Too many locals", .{});
+    if (self.locals.len() >= MAX_LOCALS) {
+      return self.compileError(token, "Too many locals", .{});
     }
-    var reg = try self.getReg(node.token);
+    var reg = try self.getReg(token);
     self.locals.append(
+      LocalVar.init(self.scope, token.lexeme(), reg, @intCast(self.locals.len())),
       self.alloc(),
-      LocalVar.init(self.scope, &node.token.value, reg, @intCast(self.locals.len))
-    ) catch {};
+    );
     return reg;
   }
 
-  fn initLocal(self: *Self, node: *ast.VarNode) !u32 {
-    var dst = try self.addLocal(node);
-    self.locals.items(.initialized)[self.locals.len - 1] = true;
+  fn initLocal(self: *Self, token: Token) !u32 {
+    var dst = try self.addLocal(token);
+    self.locals.items()[self.locals.len() - 1].initialized = true;
     return dst;
   }
 
   fn addUpvalue(self: *Self, index: u32, is_local: bool, debug: Token) !u32 {
-     if (self.locals.len >= MAX_LOCALS) {
+     if (self.locals.len() >= MAX_LOCALS) {
       return self.compileError(debug, "Too many upvalues", .{});
     }
-    var slice = self.upvalues.slice();
-    var indexs = slice.items(.index);
-    var is_locals = slice.items(.is_local);
-    for (indexs, is_locals, 0..) |idx, loc, i| {
-      if (index == idx and is_local == loc) {
+    for (self.upvalues.items(), 0..) |upv, i| {
+      if (index == upv.index and is_local == upv.is_local) {
         return @intCast(i);
       }
     }
-    var ret: u32 = @intCast(self.upvalues.len);
-    self.upvalues.append(self.alloc(), Upvalue.init(index, is_local)) catch |e| {
-      std.debug.print("error: {}\n", .{e});
-      return error.CompileError;
-    };
+    var ret: u32 = @intCast(self.upvalues.len());
+    self.upvalues.append(Upvalue.init(index, is_local), self.alloc());
     return ret;
   }
 
   /// add gsym and return its index/pos
-  fn addGSymVar(self: *Self, node: *ast.VarNode) struct {pos: u32, isGSym: bool} {
+  fn addGSymVar(self: *Self, token: Token) struct {pos: u32, isGSym: bool} {
     // Deduplicate globals. If a spot is already allocated for a global 'a', 
     // a redefinition of 'a' should not allocate a new spot.
-    if (self.findGlobal(node)) |info| {
+    if (self.findGlobal(token)) |info| {
       return .{.pos = info.pos, .isGSym = info.isGSym};
     }
-    if (self.gsyms.len >= MAX_GSYMS or self.skip_gsyms) {
+    if (self.gsyms.len() >= MAX_GSYMS or self.skip_gsyms) {
       logger.debug("Gsyms {s}..using globals list", .{if (self.skip_gsyms) "elided" else "exceeded"});
-      return .{.pos = self.addGlobalVar(node), .isGSym = false};
+      return .{.pos = self.addGlobalVar(token), .isGSym = false};
     }
-    var idx: u32 = @intCast(self.gsyms.len);
-    self.gsyms.append(
-      self.alloc(),
-      GSymVar {.name = &node.token.value}
-    ) catch {};
+    var idx: u32 = @intCast(self.gsyms.len());
+    self.gsyms.append(GSymVar{._name = token.val, ._name_len = token.len}, self.alloc());
     return .{.pos = idx, .isGSym = true};
   }
 
-  fn addGlobalVar(self: *Self, node: *ast.VarNode) u32 {
+  fn addGlobalVar(self: *Self, token: Token) u32 {
     var gvar = GlobalVar {
-      .name = &node.token.value, 
-      .mempos = self.storeVar(node),
-      .index = @intCast(self.globals.len),
+      ._name = token.val,
+      ._name_len = token.len,
+      .mempos = self.storeVar(token),
+      .index = @intCast(self.globals.len()),
     };
-    self.globals.append(self.alloc(), gvar) catch {};
+    self.globals.append(gvar, self.alloc());
     return gvar.mempos;
   }
 
-  inline fn addPatchInitGlobalVar(self: *Self, node: *ast.VarNode) void {
+  inline fn addPatchInitGlobalVar(self: *Self, node: *tir.TVarNode) void {
      _ = self.addGSymVar(node);
     var info = self.patchGlobal(node) catch return;
     self.initializeGlobal(info);
   }
 
-  fn findLocalVar(self: *Self, node: *ast.VarNode) ?LocalVar {
-    if (self.locals.len == 0) return null;
-    var i = self.locals.len;
-    var slice = self.locals.slice(); 
-    var scopes = slice.items(.scope);
-    var names = slice.items(.name);
-    while (i > 0): (i -= 1) {
-      var idx = i - 1;
-      if (self.scope < scopes[idx]) break;
-      if (node.token.valueEql(names[idx].*)) {
-        return self.locals.get(idx);
+  fn findLocalVar(self: *Self, node: *tir.TVarNode) ?LocalVar {
+    var i = self.locals.len() -| 1;
+    for (0..self.locals.len()) |_| {
+      if (self.scope < self.locals.itemAt(i).scope) break;
+      if (node.token.valueEql(self.locals.itemAt(i).name())) {
+        return self.locals.itemAt(i);
       }
+      i -|= 1;
     }
     return null;
   }
 
-  fn findUpvalue(self: *Self, node: *ast.VarNode) ?u32 {
+  fn findUpvalue(self: *Self, node: *tir.TVarNode) ?u32 {
     if (self.enclosing == null) return null;
     var compiler = self.enclosing.?;
     var local = compiler.findLocalVar(node);
     if (local) |loc| {
-      compiler.locals.items(.captured)[loc.index] = true;
+      compiler.locals.items()[loc.index].captured = true;
       return self.addUpvalue(loc.index, true, node.token) catch null;
     }
     var index = compiler.findUpvalue(node);
@@ -475,37 +472,35 @@ pub const Compiler = struct {
     return null;
   }
 
-  fn findGSymVar(self: *Self, node: *ast.VarNode) ?u32 {
-    if (self.gsyms.len == 0) return null;
-    var i: usize = self.gsyms.len;
-    var names = self.gsyms.items(.name);
-    while (i > 0): (i -= 1) {
-      if (node.token.valueEql(names[i - 1].*)) {
-        return @intCast(i - 1);
+  fn findGSymVar(self: *Self, token: Token) ?u32 {
+    var i = self.gsyms.len() -| 1;
+    for (0..self.gsyms.len()) |_| {
+      if (token.valueEql(self.gsyms.itemAt(i).name())) {
+        return @intCast(i);
       }
+      i -|= 1;
     }
     return null;
   }
 
-  fn findGlobalVar(self: *Self, node: *ast.VarNode) ?GlobalVar {
-    if (self.globals.len == 0) return null;
-    var i: usize = self.globals.len;
-    var names = self.globals.items(.name);
-    while (i > 0): (i -= 1) {
-      if (node.token.valueEql(names[i - 1].*)) {
-        return self.globals.get(i - 1);
+  fn findGlobalVar(self: *Self, token: Token) ?GlobalVar {
+    var i = self.globals.len() -| 1;
+    for (0..self.globals.len()) |_| {
+      if (token.valueEql(self.globals.itemAt(i).name())) {
+        return self.globals.itemAt(i);
       }
+      i -|= 1;
     }
     return null;
   }
 
-  fn findGlobal(self: *Self, node: *ast.VarNode) ?GlobalVarInfo {
-    if (self.findGSymVar(node)) |pos| {
+  fn findGlobal(self: *Self, token: Token) ?GlobalVarInfo {
+    if (self.findGSymVar(token)) |pos| {
       return .{.pos = pos, .isGSym = true, .gvar = null};
-    } else if (self.findGlobalVar(node)) |gvar| {
+    } else if (self.findGlobalVar(token)) |gvar| {
       return .{.pos = gvar.mempos, .isGSym = false, .gvar = gvar};
     } else if (self.enclosing) |compiler| {
-      if (compiler.findGlobal(node)) |info| {
+      if (compiler.findGlobal(token)) |info| {
         var ret = info;
         ret.from_enclosing = true;
         return ret;
@@ -515,26 +510,20 @@ pub const Compiler = struct {
   }
 
   fn appendSelfParam(self: *Self, token: Token) !void {
-    const self_tok = Token.fromWithValue(&token, ks.SelfVar, token.ty);
-    var node = ast.VarNode.init(self_tok).box(self.allocator.getArenaAllocator());
-    _ = try self.initLocal(node);
+    const self_tok = token.tkFrom(ks.SelfVar, token.ty);
+    _ = try self.initLocal(self_tok);
   }
 
   fn popLocalVars(self: *Self) void {
-    if (self.locals.len == 0) return;
-    var slice = self.locals.slice(); 
-    var scopes = slice.items(.scope);
-    var regs = slice.items(.reg);
-    var captures = slice.items(.captured);
     var close: ?u32 = null;
-    for (scopes, regs, captures) |scope, reg, captured| {
-      if (scope > self.scope) {
+    for (self.locals.items()) |lcl| {
+      if (lcl.scope > self.scope) {
         // only take the first local, close upwards from there
-        if (captured and close == null) {
-          close = reg;
+        if (lcl.captured and close == null) {
+          close = lcl.reg;
         }
-        self.vreg.releaseReg(reg);
-        self.locals.len -= 1;
+        self.vreg.releaseReg(lcl.reg);
+        self.locals.list.items.len -= 1;
       }
     }
     if (close) |reg| {
@@ -544,67 +533,60 @@ pub const Compiler = struct {
 
   /// load prelude
   fn loadBuiltinsPrelude(self: *Self) void {
-    util.assert(self.globals.len == 0, "globals len should be zero at startup");
+    util.assert(self.globals.len() == 0, "globals len should be zero at startup");
     self.skip_gsyms = true;
-    self.preallocateGlobals(&self._prelude.AstProgram.decls);
+    self.preallocateGlobals(self._prelude.NdProgram.decls);
     self.skip_gsyms = false;
-    var slice = self.globals.slice();
-    var patchs = slice.items(.patched);
-    var inits = slice.items(.initialized);
     // patch and initialize all builtin globals:
-    for (0..patchs.len) |i| {
-      patchs[i] = true;
-      inits[i] = true;
+    for (0..self.globals.len()) |i| {
+      self.globals.items()[i].patched = true;
+      self.globals.items()[i].initialized = true;
     }
-    self._prelude_len = patchs.len;
   }
 
   /// adopt prelude
   fn adoptBuiltinsPrelude(self: *Self, other: *Self) void {
-    var slice = other.globals.slice();
     var al = self.alloc();
-    for (0..other._prelude_len) |i| {
+    for (0..other.globals.len()) |i| {
       // store the global refs
-      self.globals.append(al, slice.get(i)) catch unreachable;
+      self.globals.append(other.globals.itemAt(i), al);
       // store the actual global values
       _ = self.fun.code.writeValue(other.fun.code.values.items[i], self.vm);
     }
-    self._prelude_len = other._prelude_len;
   }
 
   /// preallocate all globals in `gsyms` or `globals`
-  fn preallocateGlobals(self: *Self, toplevels: *ast.AstList) void {
+  fn preallocateGlobals(self: *Self, toplevels: tir.NodeItems) void {
     // TODO: update
     if (self.inLocalScope()) return;
-    for (toplevels.items()) |decl| {
+    for (toplevels) |decl| {
       switch (decl.*) {
-        .AstVarDecl => |*vd| {
-          _ = self.addGSymVar(vd.ident);
+        .NdVarDecl => |*vd| {
+          _ = self.addGSymVar(vd.name.toToken());
         },
-        .AstFun => |*fun| {
-          if (fun.isGeneric()) {
-            if (self.generics.get(decl)) |list| {
-              for (list.items()) |itm| {
-                itm.instance.AstFun.name = itm.synth_name;
-                _ = self.addGSymVar(itm.synth_name);
-              }
-            }
-          } else {
-            if (fun.name) |ident| {
-              _ = self.addGSymVar(ident);
+        .NdBasicFun => |*fun| {
+          if (fun.data.name) |ident| {
+            _ = self.addGSymVar(ident);
+          }
+        },
+        .NdGenericFun => {
+          if (self.generics.get(decl)) |list| {
+            for (list.items()) |itm| {
+              itm.instance.NdBasicFun.data.name.? = itm.synth_name;
+              _ = self.addGSymVar(itm.synth_name);
             }
           }
         },
-        .AstClass => |*cls| {
-          if (cls.isGeneric()) {
+        .NdClass => |*cls| {
+          if (cls.isParameterized()) {
             if (self.generics.get(decl)) |list| {
               for (list.items()) |itm| {
-                itm.instance.AstClass.name = itm.synth_name;
+                itm.instance.NdClass.name = tir.IdentToken.init(itm.synth_name);
                 _ = self.addGSymVar(itm.synth_name);
               }
             }
           } else {
-            _ = self.addGSymVar(cls.name);
+            _ = self.addGSymVar(cls.name.toToken());
           }
         },
         else => {},
@@ -613,71 +595,66 @@ pub const Compiler = struct {
   }
 
   /// patch a preallocated global entry
-  fn patchGlobal(self: *Self, node: *ast.VarNode) !GlobalVarInfo {
-    if (self.findGlobal(node)) |info| {
+  fn patchGlobal(self: *Self, token: Token) !GlobalVarInfo {
+    if (self.findGlobal(token)) |info| {
       if (info.isGSym) {
         // GSyms use `pos` as a direct index into the `gsyms` array
         // so we can reach this GSym directly
-        self.gsyms.items(.patched)[info.pos] = true;
+        self.gsyms.items()[info.pos].patched = true;
       } else {
-        self.globals.items(.patched)[info.gvar.?.index] = true;
+        self.globals.items()[info.gvar.?.index].patched = true;
       }
       return info;
     }
-    return self.compileError(node.token, "cannot patch variable '{s}'", .{node.token.value});
+    return self.compileError(token, "cannot patch variable '{s}'", .{token.lexeme()});
   }
 
   fn initializeGlobal(self: *Self, info: GlobalVarInfo) void {
     if (info.isGSym) {
-      self.gsyms.items(.initialized)[info.pos] = true;
+      self.gsyms.items()[info.pos].initialized = true;
     } else {
-      self.globals.items(.initialized)[info.gvar.?.index] = true;
+      self.globals.items()[info.gvar.?.index].initialized = true;
     }
   }
 
   fn validateNoUnpatchedGlobals(self: *Self, token: Token) !void {
     const fmt = "Use of unpached global '{s}'";
     {
-      var slice = self.gsyms.slice();
-      var patches = slice.items(.patched);
-      for (patches, 0..) |patched, i| {
-        if (!patched) {
-          return self.compileError(token, fmt, .{slice.items(.name)[i].*});
+      for (self.gsyms.items()) |gsym| {
+        if (!gsym.patched) {
+          return self.compileError(token, fmt, .{gsym.name()});
         }
       }
     }
     {
-      var slice = self.globals.slice();
-      var patches = slice.items(.patched);
-      for (patches, 0..) |patched, i| {
-        if (!patched) {
-          return self.compileError(token, fmt, .{slice.items(.name)[i]});
+      for (self.globals.items()) |gsym| {
+        if (!gsym.patched) {
+          return self.compileError(token, fmt, .{gsym.name()});
         }
       }
     }
   }
 
-  fn validateLocalVarUse(self: *Self, slot: u32, node: *ast.VarNode) !void {
-    if (!self.locals.items(.initialized)[slot]) {
-      return self.compileError(node.token, "cannot use variable '{s}' in its own initializer", .{node.token.value});
+  fn validateLocalVarUse(self: *Self, slot: u32, node: *tir.TVarNode) !void {
+    if (!self.locals.items()[slot].initialized) {
+      return self.compileError(node.token, "cannot use variable '{s}' in its own initializer", .{node.token.lexeme()});
     }
   }
 
-  fn validateGlobalVarUse(self: *Self, info: GlobalVarInfo, node: *ast.VarNode) !void {
+  fn validateGlobalVarUse(self: *Self, info: GlobalVarInfo, node: *tir.TVarNode) !void {
     if (info.from_enclosing) {
       // this global var was obtained from an enclosing compiler's
       // global state, so it IS already validated. Just return.
       return;
     }
     if (info.isGSym) {
-      var slice = self.gsyms.slice();
-      if (slice.items(.patched)[info.pos] and !slice.items(.initialized)[info.pos]) {
-        return self.compileError(node.token, "cannot use variable '{s}' in its own initializer", .{node.token.value});
+      if (self.gsyms.items()[info.pos].patched and !self.gsyms.items()[info.pos].initialized) {
+        return self.compileError(node.token, "cannot use variable '{s}' in its own initializer", .{node.token.lexeme()});
       }
     } else {
-      var gvar = info.gvar.?;
+      const gvar = info.gvar.?;
       if (gvar.patched and !gvar.initialized) {
-        return self.compileError(node.token, "cannot use variable '{s}' in its own initializer", .{node.token.value});
+        return self.compileError(node.token, "cannot use variable '{s}' in its own initializer", .{node.token.lexeme()});
       }
     }
   }
@@ -695,51 +672,87 @@ pub const Compiler = struct {
     }
   }
 
-  fn storeVar(self: *Self, node: *ast.VarNode) u32 {
-    var val = value.objVal(value.createString(self.vm, &self.vm.strings, node.token.value, false));
+  fn storeVar(self: *Self, token: Token) u32 {
+    const val = value.objVal(value.createString(self.vm, &self.vm.strings, token.lexeme(), false));
     return self.fun.code.writeValue(val, self.vm);
   }
 
-  fn cNumber(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
+  fn cNumber(self: *Self, node: *tir.NumberNode, dst: u32) u32 {
     // load rx, memidx
-    return self.cConst(dst, value.numberVal(node.value), node.line());
+    return self.cConst(dst, value.numberVal(node.value), node.token.line);
   }
 
-  fn cBool(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
+  fn cBool(self: *Self, node: *tir.BoolNode, dst: u32) u32 {
     // load rx, memidx
-    return self.cConst(dst, value.boolVal(node.token.is(.TkTrue)), node.line());
+    return self.cConst(dst, value.boolVal(node.token.is(.TkTrue)), node.token.line);
   }
 
-  fn cString(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
+  fn cEscString(self: *Self, node: *tir.StringNode, dst: u32) u32 {
+    const token = node.token;
+    const val = token.lexeme();
+    const escapes = std.mem.count(u8, val, "\\");
+    var buf = util.allocSlice(u8, token.len - escapes, self.allocator.getAllocator());
+    var i: u32 = 0;
+    var idx: u32 = 0;
+    while (idx < token.len) : (idx += 1) {
+      const char = val[idx];
+      if (char == '\\') {
+        const next = val[idx + 1];
+        switch (next) {
+          'a' => buf[i] = 7,    // '\a'
+          'b' => buf[i] = 8,    // '\b'
+          'f' => buf[i] = 12,   // '\f'
+          'n' => buf[i] = '\n', // '\n'
+          'r' => buf[i] = '\r', // '\r'
+          't' => buf[i] = '\t', // '\a'
+          'v' => buf[i] = 11,   // '\v'
+          else => |ch| buf[i] = ch,
+        }
+        idx += 1;
+      } else {
+        buf[i] = char;
+      }
+      i += 1;
+    }
     return self.cConst(
       dst,
-      value.objVal(value.createString(self.vm, &self.vm.strings, node.token.value, node.token.isAlloc())),
-      node.line()
+      value.objVal(value.createString(self.vm, &self.vm.strings, buf[0..i], true)),
+      node.token.line,
     );
   }
 
-  fn cNil(self: *Self, node: *ast.LiteralNode, dst: u32) u32 {
-    // load rx, memidx
-    return self.cConst(dst, value.nilVal(), node.line());
+  fn cString(self: *Self, node: *tir.StringNode, dst: u32) u32 {
+    if (node.token.is(.TkString)) {
+      return self.cConst(
+        dst,
+        value.objVal(value.createString(self.vm, &self.vm.strings, node.token.lexeme(), false)),
+        node.token.line,
+      );
+    } else {
+      return self.cEscString(node, dst);
+    }
   }
 
-  fn cUnary(self: *Self, node: *ast.UnaryNode, reg: u32) CompileError!u32 {
+  fn cUnary(self: *Self, node: *tir.UnaryNode, reg: u32) CompileError!u32 {
+    if (node.op.optype() == .OpAdd) {
+      return self.c(node.expr, reg);
+    }
     self.optimizeConstBX();
-    const inst_op = node.op.optype.toInstOp();
+    const inst_op = node.op.optype().toInstOp();
     const rk = try self.c(node.expr, reg);
-    self.fun.code.write2ArgsInst(inst_op, reg, rk, @intCast(node.line()), self.vm);
+    self.fun.code.write2ArgsInst(inst_op, reg, rk, node.op.line, self.vm);
     self.deoptimizeConstBX();
     return reg;
   }
 
-  inline fn cLgc(self: *Self, node: *ast.BinaryNode, reg: u32) CompileError!u32 {
+  inline fn cLgc(self: *Self, node: *tir.BinaryNode, reg: u32) CompileError!u32 {
     // and, or
     // for and/or we do not want any const optimizations as we need consts to be loaded to registers
     // since const optimizations can cause no instructions to be emitted for consts. For ex: `4 or 5`
     // turn off const optimizations
     self.enterNoOpt();
     var rx = try self.c(node.left, reg);
-    const end_jmp = self.fun.code.write2ArgsJmp(node.op.optype.toInstOp(), rx, node.line(), self.vm);
+    const end_jmp = self.fun.code.write2ArgsJmp(node.optype().toInstOp(), rx, node.line(), self.vm);
     rx = try self.c(node.right, reg);
     self.fun.code.patch2ArgsJmp(end_jmp);
     // restore const optimizations
@@ -747,27 +760,27 @@ pub const Compiler = struct {
     return reg;
   }
 
-  fn cBinary(self: *Self, node: *ast.BinaryNode, dst: u32) CompileError!u32 {
+  fn cBinary(self: *Self, node: *tir.BinaryNode, dst: u32) CompileError!u32 {
     // handle and | or
-    if (node.op.optype.isLgcOp()) return try self.cLgc(node, dst);
-    if (node.op.optype == .OpIs) return try self.cIs(node, dst);
+    if (node.optype().isLgcOp()) return try self.cLgc(node, dst);
+    if (node.optype() == .OpIs) return try self.cIs(node, dst);
     self.optimizeConstRK();
     var rk1 = try self.c(node.left, dst);
     const dst2 = try self.getReg(node.left.getToken());
     var rk2 = try self.c(node.right, dst2);
     // we own this register, so we can free
     self.vreg.releaseReg(dst2);
-    const inst_op = node.op.optype.toInstOp();
+    const inst_op = node.optype().toInstOp();
     self.fun.code.write3ArgsInst(inst_op, dst, rk1, rk2, @intCast(node.line()), self.vm);
     self.deoptimizeConstRK();
     return dst;
   }
 
-  fn cIs(self: *Self, node: *ast.BinaryNode, dst: u32) !u32 {
+  fn cIs(self: *Self, node: *tir.BinaryNode, dst: u32) !u32 {
     self.optimizeConstRK();
-    var rk1 = try self.c(node.left, dst);
     var op = OpCode.Is;
-    var rk2 = tb: {
+    const rk1 = try self.c(node.left, dst);
+    const rk2 = tb: {
       var typ = node.right.getType().?;
       typ = if (typ.isTop()) typ.top().child else typ;
       if (typ.isClass()) {
@@ -778,15 +791,16 @@ pub const Compiler = struct {
           else if (typ.klass().isStringClass()) @intFromEnum(TypeKind.TyString)
           else blk: {
             op = OpCode.Iscls;
-            var cls = typ.klass();
-            var reg = try self.getReg(node.right.getToken());
-            var rk2 = try self.cVar(cls.node.?.AstClass.name, reg);
+            const cls = typ.klass();
+            const reg = try self.getReg(node.right.getToken());
+            var name = tir.TVarNode.init(cls.data.node.?.NdClass.name.toToken());
+            const rk2 = try self.cVar(&name, reg);
             self.vreg.releaseReg(reg);
             break :blk rk2;
           }
         );
-      } else if (typ.isNoneTy()) {
-        break :tb @intFromEnum(check.types.TypeKind.TyNil);
+      } else if (typ.isNoneTy() or (typ.isTagOrClass() and typ.toc().tktype.is(.TkNone))) {
+        break :tb @intFromEnum(tir.TypeKind.TyNil);
       } else if (typ.isErrorTy()) {
         break :tb TypeKind.TyClass + 3;
       } else if (typ.isTag()) {
@@ -798,8 +812,16 @@ pub const Compiler = struct {
         const rk2 = self.cConst(dst2, value.objVal(name), token.line);
         self.vreg.releaseReg(dst2);
         break :tb rk2;
+      } else if (typ.isTagOrClass()) {
+        op = OpCode.Istoc;
+        const token = node.right.getToken();
+        const dst2 =  try self.getReg(node.left.getToken());
+        const name = value.createString(self.vm, &self.vm.strings, typ.toc().name, false);
+        const rk2 = self.cConst(dst2, value.objVal(name), token.line);
+        self.vreg.releaseReg(dst2);
+        break :tb rk2;
       } else {
-        break :tb @intFromEnum(typ.concrete().tkind);
+        break :tb @intFromEnum(typ.concrete().kind);
       }
     };
     self.fun.code.write3ArgsInst(op, dst, rk1, rk2, @intCast(node.line()), self.vm);
@@ -807,15 +829,15 @@ pub const Compiler = struct {
     return dst;
   }
 
-  inline fn cCollection(self: *Self, node: *ast.ListNode, ast_node: *Node, dst: u32, op: OpCode, set: OpCode) !u32 {
-    const size: u32 = @intCast(node.elems.len());
+  inline fn cCollection(self: *Self, node: *tir.ListNode, ast_node: *Node, dst: u32, op: OpCode, set: OpCode) !u32 {
+    const size: u32 = @intCast(node.elems.len);
     self.fun.code.write2ArgsInst(op, dst, size, self.lastLine(), self.vm);
-    var token = ast_node.getToken();
+    const token = ast_node.getToken();
     var idx: u32 = undefined;
-    for (node.elems.items(), 0..) |elem, i| {
-      var reg = try self.getReg(token);
-      var rk_val = try self.c(elem, reg);
-      var val = value.numberVal(@floatFromInt(i));
+    for (node.elems, 0..) |elem, i| {
+      const reg = try self.getReg(token);
+      const rk_val = try self.c(elem, reg);
+      const val = value.numberVal(@floatFromInt(i));
       if (self.withinRKLimit(1)) {
         idx = self.fun.code.storeConst(val, self.vm);
       } else {
@@ -829,24 +851,24 @@ pub const Compiler = struct {
     return dst;
   }
 
-  fn cList(self: *Self, node: *ast.ListNode, ast_node: *Node, dst: u32) !u32 {
+  fn cList(self: *Self, node: *tir.ListNode, ast_node: *Node, dst: u32) !u32 {
     return try self.cCollection(node, ast_node, dst, .Nlst, .Slst);
   }
 
-  fn cTuple(self: *Self, node: *ast.ListNode, ast_node: *Node, dst: u32) !u32 {
+  fn cTuple(self: *Self, node: *tir.ListNode, ast_node: *Node, dst: u32) !u32 {
     return try self.cCollection(node, ast_node, dst, .Ntup, .Stup);
   }
 
-  fn cMap(self: *Self, node: *ast.MapNode, dst: u32) !u32 {
-    const size: u32 = @intCast(node.pairs.len());
+  fn cMap(self: *Self, node: *tir.MapNode, dst: u32) !u32 {
+    const size: u32 = @intCast(node.pairs.len);
     // TODO: specialize map with k-v types
     self.fun.code.write2ArgsInst(.Nmap, dst, size, self.lastLine(), self.vm);
-    var token = Token.getDefault();
-    for (node.pairs.items()) |pair| {
-      var reg1 = try self.getReg(token);
-      var reg2 = try self.getReg(token);
-      var rk_key = try self.c(pair.key, reg1);
-      var rk_val = try self.c(pair.value, reg2);
+    const token = Token.getDefaultToken();
+    for (node.pairs) |pair| {
+      const reg1 = try self.getReg(token);
+      const reg2 = try self.getReg(token);
+      const rk_key = try self.c(pair.key, reg1);
+      const rk_val = try self.c(pair.value, reg2);
       self.fun.code.write3ArgsInst(.Smap, dst, rk_key, rk_val, self.lastLine(), self.vm);
       self.vreg.releaseReg(reg1);
       self.vreg.releaseReg(reg2);
@@ -854,7 +876,7 @@ pub const Compiler = struct {
     return dst;
   }
 
-  fn cExprStmt(self: *Self, node: *ast.ExprStmtNode, reg: u32) !u32 {
+  fn cExprStmt(self: *Self, node: *tir.ExprStmtNode, reg: u32) !u32 {
     // sequence point
     const dst = try self.getReg(node.expr.getToken());
     _ = try self.c(node.expr, dst);
@@ -862,7 +884,7 @@ pub const Compiler = struct {
     return reg;
   }
 
-  fn cVar(self: *Self, node: *ast.VarNode, dst: u32) !u32 {
+  fn cVar(self: *Self, node: *tir.TVarNode, dst: u32) !u32 {
     // Sometimes, the lookup of generic and non-generic function calls may collide
     // based on how such calls were made.
     // To handle such an edge case, we *first* check if this node is a function type.
@@ -872,12 +894,13 @@ pub const Compiler = struct {
     if (node.typ) |typ| {
       if (typ.isFunction()) {
         var fun = typ.function();
-        if (fun.isGeneric()) {
+        if (fun.isParameterized()) {
           self.softError(node.token, "cannot generate code for an uninstantiated generic type", .{});
           return dst;
-        } else if (fun.node != null and fun.node.?.AstFun.name != null) {
-          var last = self.diag.count();
-          var reg = self.cVar(fun.node.?.AstFun.name.?, dst) catch undefined;
+        } else if (fun.data.node != null and fun.data.node.?.NdBasicFun.data.name != null) {
+          const last = self.diag.count();
+          var id = tir.TVarNode.init(fun.data.node.?.NdBasicFun.data.name.?);
+          const reg = self.cVar(&id, dst) catch undefined;
           // we use this indirection because for some reason zig generates bad
           // code for the above `catch` when used for handling this error
           if (self.diag.count() == last) return reg;
@@ -890,25 +913,26 @@ pub const Compiler = struct {
       try self.validateLocalVarUse(lvar.index, node);
       return lvar.reg;
     } else if (self.findUpvalue(node)) |upv| {
-      self.fun.code.write2ArgsInst(.Gupv, dst, upv, node.line(), self.vm);
+      self.fun.code.write2ArgsInst(.Gupv, dst, upv, node.token.line, self.vm);
       return dst;
-    } else if (self.findGlobal(node)) |info| {
+    } else if (self.findGlobal(node.token)) |info| {
       try self.validateGlobalVarUse(info, node);
       const inst: OpCode = if(info.isGSym) .Ggsym else .Gglb;
-      self.fun.code.write2ArgsInst(inst, dst, info.pos, node.line(), self.vm);
+      self.fun.code.write2ArgsInst(inst, dst, info.pos, node.token.line, self.vm);
       return dst;
     } else if (node.typ) |typ| {
       if (typ.isClass() and !self.isSelfVar(node) and !typ.klass().builtin and typ.inferred) {
         var cls = typ.klass();
-        if (cls.isGeneric()) {
+        if (cls.isParameterized()) {
           if (!cls.isInstantiatedGeneric()) {
             self.softError(node.token, "cannot generate code for an uninstantiated generic type", .{});
             return dst;
-          } else if (cls.node) |nd| {
+          } else if (cls.data.node) |nd| {
             // try to capture the monomorphized class type, we only do this for looking up the var
             // that actually defines the class's type and not a var annotated with a class type.
-            var last = self.diag.count();
-            var reg = self.cVar(nd.AstClass.name, dst) catch undefined;
+            const last = self.diag.count();
+            var id = tir.TVarNode.init(nd.NdClass.name.toToken());
+            const reg = self.cVar(&id, dst) catch undefined;
             if (self.diag.count() == last) return reg;
             self.diag.popUntil(last);
           }
@@ -920,105 +944,109 @@ pub const Compiler = struct {
         return self.cTagVar(node, ty, dst);
       }
     }
-    return self.compileError(node.token, "use of undefined variable '{s}'", .{node.token.value});
+    return self.compileError(node.token, "use of undefined variable '{s}'", .{node.token.lexeme()});
   }
 
-  fn cDotAccess(self: *Self, node: *ast.DotAccessNode, is_call: bool, dst: u32) !u32 {
+  fn cDotAccess(self: *Self, node: *tir.DotAccessNode, is_call: bool, dst: u32) !u32 {
     // is_call is an optimization hint that helps generate an inst that combines Gmtd + Call
     self.optimizeConstRK();
+    defer self.deoptimizeConstRK();
     var tmp = node.lhs.getType().?;
-    // qualified tag access
-    if (tmp.isTaggedUnion() or (tmp.isTag() and node.rhs.isVariable())) {
-      return self.cTagVar(&node.rhs.AstVar, node.typ.?, dst);
+    // qualified tag access using tag union, e.g T.Bar
+    if (tmp.isTaggedUnion() or (tmp == node.typ.?)) {
+      // the second condition holds if this is a fully qualified tag access like: type T = K ;; T.K
+      return self.cTagVar(&node.rhs.NdTVar, node.typ.?, dst);
     }
-    var rk_inst = try self.c(node.lhs, dst);
+    const rk_inst = try self.c(node.lhs, dst);
     // tag field access
     if (tmp.isTag()) {
-      const prop_idx: u32 = @intFromFloat(node.rhs.AstNumber.value);
-      const line = node.lhs.getToken().line;
-      self.fun.code.write3ArgsInst(.Gsfd, dst, rk_inst, prop_idx, line, self.vm);
-      self.deoptimizeConstRK();
+      const prop_idx: u32 =
+        if (node.rhs.isNumberLiteral()) @intFromFloat(node.rhs.NdNumber.value)
+        else if (tmp.tag().getFieldWithId(node.rhs.NdTVar.value())) |pos| @intCast(pos)
+        else unreachable; 
+      self.fun.code.write3ArgsInst(.Gsfd, dst, rk_inst, prop_idx, node.lhs.getToken().line, self.vm);
       return dst;
     }
-    var prop = node.rhs.getToken(); // should be a VarNode's token
+    const prop = node.rhs.getToken(); // should be a VarNode's token
     var prop_idx: u32 = 0;
     var op: OpCode = undefined;
     var ty = tmp.classOrInstanceClass().klass();
-    if (ty.getFieldIndex(prop.value)) |idx| {
+    if (ty.getFieldIndex(prop.lexeme())) |idx| {
       prop_idx = @intCast(idx);
       op = .Gfd;
-    } else if (ty.getMethodIndex(prop.value)) |idx| {
+    } else if (ty.getMethodIndex(prop.lexeme())) |idx| {
       prop_idx = @intCast(idx);
       op = if (is_call) .Jmtdc else .Gmtd;
     } else {
-      return self.compileError(prop, "No such field/method '{s}'", .{prop.value});
+      return self.compileError(prop, "No such field/method '{s}'", .{prop.lexeme()});
     }
     self.fun.code.write3ArgsInst(op, dst, rk_inst, prop_idx, prop.line, self.vm);
-    self.deoptimizeConstRK();
     return dst;
   }
 
-  fn cVarAssign(self: *Self, node: *ast.VarNode, expr: *Node, reg: u32) !u32 {
+  fn cVarAssign(self: *Self, node: *tir.TVarNode, expr: *Node, reg: u32) !u32 {
     if (self.findLocalVar(node)) |lvar| {
       // use lvar's reg as dst for expr
-      var ret = try self.c(expr, lvar.reg);
+      const ret = try self.c(expr, lvar.reg);
       if (ret != lvar.reg) {
         // this implies the result of expr was stored in a different register.
         // Move it to lvar's register.
-        self.fun.code.write3ArgsInst(.Mov, lvar.reg, ret, 0, node.line(), self.vm);
+        self.fun.code.write3ArgsInst(.Mov, lvar.reg, ret, 0, node.token.line, self.vm);
       }
       return lvar.reg;
     } else if (self.findUpvalue(node)) |upv| {
-      var rx = try self.c(expr, reg);
-      self.fun.code.write2ArgsInst(.Supv, rx, upv, node.line(), self.vm);
+      const rx = try self.c(expr, reg);
+      self.fun.code.write2ArgsInst(.Supv, rx, upv, node.token.line, self.vm);
       return reg;
-    } else if (self.findGlobal(node)) |info| {
+    } else if (self.findGlobal(node.token)) |info| {
       // sgsym rx, bx -> GS[bx] = r(x)
       // sglb rx, bx -> G[K(bx)] = r(x)
-      var rx = try self.c(expr, reg);
+      const rx = try self.c(expr, reg);
       const inst: OpCode = if (info.isGSym) .Sgsym else .Sglb;
-      self.fun.code.write2ArgsInst(inst, rx, info.pos, node.line(), self.vm);
+      self.fun.code.write2ArgsInst(inst, rx, info.pos, node.token.line, self.vm);
       return rx;
     } else {
-      return self.compileError(node.token, "undefined variable '{s}'", .{node.token.value});
+      return self.compileError(node.token, "undefined variable '{s}'", .{node.token.lexeme()});
     }
   }
 
-  fn cSubscriptAssign(self: *Self, node: *ast.SubscriptNode, rhs: *Node, dst: u32) !u32 {
+  fn cSubscriptAssign(self: *Self, node: *tir.SubscriptNode, rhs: *Node, dst: u32) !u32 {
     self.optimizeConstRK();
+    defer self.deoptimizeConstRK();
     // lhs-expr
-    var rx = try self.c(node.expr, dst);
+    const rx = try self.c(node.expr, dst);
     // index
-    var idx_reg = try self.getReg(node.expr.getToken());
-    var rk_idx = try self.c(node.index, idx_reg);
+    const idx_reg = try self.getReg(node.expr.getToken());
+    const rk_idx = try self.c(node.index, idx_reg);
     // rhs-expr
-    var val_reg = try self.getReg(node.index.getToken());
-    var rk_val = try self.c(rhs, val_reg);
-    var op: OpCode = if (node.expr.getType().?.isListTy()) .Slst else .Smap;
-    self.fun.code.write3ArgsInst(op, rx, rk_idx, rk_val, node.line(), self.vm);
+    const token = node.index.getToken();
+    const val_reg = try self.getReg(token);
+    const rk_val = try self.c(rhs, val_reg);
+    const op: OpCode = if (node.expr.getType().?.isListTy()) .Slst else .Smap;
+    self.fun.code.write3ArgsInst(op, rx, rk_idx, rk_val, token.line, self.vm);
     self.vreg.releaseReg(idx_reg);
     self.vreg.releaseReg(val_reg);
-    self.deoptimizeConstRK();
     return dst;
   }
 
-  fn cDotAccessAssign(self: *Self, node: *ast.DotAccessNode, rhs: *Node, dst: u32) !u32 {
+  fn cDotAccessAssign(self: *Self, node: *tir.DotAccessNode, rhs: *Node, dst: u32) !u32 {
     self.optimizeConstRK();
+    defer self.deoptimizeConstRK();
     // lhs-expr
-    var rx = try self.c(node.lhs, dst);
+    const rx = try self.c(node.lhs, dst);
     // rhs-expr
-    var val_reg = try self.getReg(node.rhs.getToken());
-    var rk_val = try self.c(rhs, val_reg);
+    const val_reg = try self.getReg(node.rhs.getToken());
+    const rk_val = try self.c(rhs, val_reg);
     var typ = node.lhs.getType().?;
     const token = node.lhs.getToken();
     if (typ.isInstance() or typ.isClass()) {
       var ty = typ.classOrInstanceClass().klass();
-      var prop = node.rhs.getToken();
+      const prop = node.rhs.getToken();
       var prop_idx: u32 = 0;
-      if (ty.getFieldIndex(prop.value)) |idx| {
+      if (ty.getFieldIndex(prop.lexeme())) |idx| {
         prop_idx = @intCast(idx);
       } else {
-        return self.compileError(prop, "No such field '{s}'", .{prop.value});
+        return self.compileError(prop, "No such field '{s}'", .{prop.lexeme()});
       }
       self.fun.code.write3ArgsInst(.Sfd, rx, prop_idx, rk_val, prop.line, self.vm);
     } else if (typ.isJustTy()) {
@@ -1028,19 +1056,30 @@ pub const Compiler = struct {
       return self.compileError(token, "unexpected type: '{s}'", .{typ.typename(&self.u8w)});
     }
     self.vreg.releaseReg(val_reg);
-    self.deoptimizeConstRK();
     return dst;
   }
 
-  fn cAssign(self: *Self, node: *ast.BinaryNode, reg: u32) !u32 {
+  fn cAssign(self: *Self, node: *tir.BinaryNode, reg: u32) !u32 {
+    // desugaring can make a noreturn type assigned to a var. for ex $p = panic(..)
+    // don't compile the lhs of an assignment that falls into this scenario.
+    if (node.right.getType()) |ty| {
+      if (ty.isNoreturnTy()) {
+        return self.c(node.right, reg);
+      }
+    }
+    // desugaring may assign an Empty node to a var in a vardecl to reserve the slot,
+    // if that is the case, just skip the assignment
+    if (node.right.isEmpty()) {
+      return reg;
+    }
     return switch (node.left.*) {
-      .AstVar => |*vr| {
+      .NdTVar => |*vr| {
         return try self.cVarAssign(vr, node.right, reg);
       },
-      .AstSubscript => |*sub| {
+      .NdSubscript => |*sub| {
         return try self.cSubscriptAssign(sub, node.right, reg);
       },
-      .AstDotAccess => |*da| {
+      .NdDotAccess => |*da| {
         return try self.cDotAccessAssign(da, node.right, reg);
       },
       // would be unreachable after type checking
@@ -1048,14 +1087,14 @@ pub const Compiler = struct {
     };
   }
 
-  fn cCast(self: *Self, node: *ast.CastNode, dst: u32) !u32 {
+  fn cCast(self: *Self, node: *tir.CastNode, dst: u32) !u32 {
     const ty = node.expr.getType();
     // generate code for bool cast, if the expression is not already a bool type
     if (ty != null and !ty.?.isBoolTy()) {
       if (node.typn.typ.isSimple() and node.typn.typ.isBoolTy()) {
         self.optimizeConstRK();
-        var rk = try self.c(node.expr, dst);
-        self.fun.code.write2ArgsInst(.Bcst, dst, rk, node.line(), self.vm);
+        const rk = try self.c(node.expr, dst);
+        self.fun.code.write2ArgsInst(.Bcst, dst, rk, self.lastLine(), self.vm);
         self.deoptimizeConstRK();
         return dst;
       }
@@ -1063,34 +1102,35 @@ pub const Compiler = struct {
     return try self.c(node.expr, dst);
   }
 
-  fn cVarDecl(self: *Self, node: *ast.VarDeclNode, reg: u32) !u32 {
+  fn cVarDecl(self: *Self, node: *tir.VarDeclNode, reg: u32) !u32 {
     // let var = expr
-    var bin: ast.BinaryNode = .{
-      .left = @constCast(&@as(Node, .{.AstVar = node.ident.*})),
+    const token = node.name.toToken();
+    var bin: tir.BinaryNode = .{
+      .left = @constCast(&@as(Node, .{.NdTVar = tir.TVarNode.init(token)})),
       .right = node.value,
-      .op = undefined, .typ = node.ident.typ
+      .op_origin = undefined,
+      .op_tkty = undefined,
+      .op_offset = undefined,
+      .typ = node.typ
     };
-    // we must be certain about this type being inferred or from an 
-    // annotation, for proper code gen
-    node.ident.typ.?.inferred = !node.has_annotation;
     if (self.inLocalScope()) {
       // local
-      var dst = try self.addLocal(node.ident);
-      var lvar_pos = self.locals.len - 1;
+      const dst = try self.addLocal(token);
+      const lvar_pos = self.locals.len() - 1;
       _ = try self.cAssign(&bin, dst);
       // initialize the local after its rhs has been compiled successfully
-      self.locals.items(.initialized)[lvar_pos] = true;
+      self.locals.items()[lvar_pos].initialized = true;
     } else {
       // global
-      var info = try self.patchGlobal(node.ident);
+      const info = try self.patchGlobal(token);
       // first, deinitialize the global just in case it was initialized by
       // some other code (since globals are deduplicated/shared)
       if (info.isGSym) {
-        self.gsyms.items(.initialized)[info.pos] = false;
+        self.gsyms.items()[info.pos].initialized = false;
       } else {
-        self.globals.items(.initialized)[info.gvar.?.index] = false;
+        self.globals.items()[info.gvar.?.index].initialized = false;
       }
-      var dst = try self.getReg(node.ident.token);
+      const dst = try self.getReg(token);
       _ = try self.cAssign(&bin, dst);
       // now, initialize this global after its rhs has been compiled successfully
       self.initializeGlobal(info);
@@ -1099,50 +1139,50 @@ pub const Compiler = struct {
     return reg;
   }
 
-  fn cSubscript(self: *Self, node: *ast.SubscriptNode, dst: u32) !u32 {
+  fn cSubscript(self: *Self, node: *tir.SubscriptNode, dst: u32) !u32 {
     if (node.expr.getType()) |typ| {
       self.optimizeConstRK();
+      defer self.deoptimizeConstRK();
       if (typ.isListTy() or typ.isTupleTy()) {
         // list index
-        var rk_val = try self.c(node.expr, dst);
-        var reg = try self.getReg(node.expr.getToken());
-        var rk_idx = try self.c(node.index, reg);
-        var op: OpCode = if (typ.isListTy()) .Glst else .Gtup;
-        self.fun.code.write3ArgsInst(op, dst, rk_idx, rk_val, node.line(), self.vm);
+        const rk_val = try self.c(node.expr, dst);
+        const reg = try self.getReg(node.expr.getToken());
+        const rk_idx = try self.c(node.index, reg);
+        const op: OpCode = if (typ.isListTy()) .Glst else .Gtup;
+        self.fun.code.write3ArgsInst(op, dst, rk_idx, rk_val, self.lastLine(), self.vm);
         self.vreg.releaseReg(reg);
       } else {
         // map access
-        std.debug.assert(typ.isMapTy());
-        var rk_val = try self.c(node.expr, dst);
-        var reg = try self.getReg(node.expr.getToken());
-        var rk_key = try self.c(node.index, reg);
-        self.fun.code.write3ArgsInst(.Gmap, dst, rk_key, rk_val, node.line(), self.vm);
+        assert(typ.isMapTy());
+        const rk_val = try self.c(node.expr, dst);
+        const reg = try self.getReg(node.expr.getToken());
+        const rk_key = try self.c(node.index, reg);
+        self.fun.code.write3ArgsInst(.Gmap, dst, rk_key, rk_val, self.lastLine(), self.vm);
         self.vreg.releaseReg(reg);
       }
-      self.deoptimizeConstRK();
       return dst;
     }
     unreachable;
   }
 
-  fn cDeref(self: *Self, node: *ast.DerefNode, reg: u32) !u32 {
+  fn cDeref(self: *Self, node: *tir.DerefNode, reg: u32) !u32 {
     const rx = try self.c(node.expr, reg);
-    self.fun.code.write3ArgsInst(.Asrt, rx, 0, 0, node.token.line, self.vm);
+    self.fun.code.write3ArgsInst(.Asrt, rx, 0, 0, node.tkbit.line, self.vm);
     return rx;
   }
 
-  fn cBlockNoPops(self: *Self, node: *ast.BlockNode, reg: u32) !u32 {
+  fn cBlockNoPops(self: *Self, node: *tir.BlockNode, reg: u32) !u32 {
     self.incScope();
-    for (node.nodes.items()) |nd| {
+    for (node.nodes) |nd| {
       _ = try self.c(nd, reg);
     }
     self.decScope();
     return reg;
   }
 
-  fn cBlock(self: *Self, node: *ast.BlockNode, reg: u32) !u32 {
+  fn cBlock(self: *Self, node: *tir.BlockNode, reg: u32) !u32 {
     self.incScope();
-    for (node.nodes.items()) |nd| {
+    for (node.nodes) |nd| {
       _ = try self.c(nd, reg);
     }
     self.decScope();
@@ -1150,7 +1190,7 @@ pub const Compiler = struct {
     return reg;
   }
 
-  fn cNType(self: *Self, node: *ast.TypeNode, reg: u32) u32 {
+  fn cNType(self: *Self, node: *tir.TypeNode, reg: u32) u32 {
     // only compile if not in annotation/alias context
     if (!node.from_alias_or_annotation) {
       // TODO: should we be using the typeid() instead of a singular value 
@@ -1159,7 +1199,7 @@ pub const Compiler = struct {
       // but again, no one should even be doing this in the first place! 
       return self.cConst(
         reg, value.numberVal(@floatFromInt(node.typ.typeid())),
-        node.token.line
+        node.tkbit.line
       );
     }
     return reg;
@@ -1167,78 +1207,19 @@ pub const Compiler = struct {
 
   const JmpPatch = struct{jmp_to_next: usize, jmp_to_end: usize};
 
-  fn cIf(self: *Self, node: *ast.IfNode, dst: u32) !u32 {
-    // self.enterJmp();
-    var reg = try self.getReg(node.cond.getToken());
+  fn cSimpleIf(self: *Self, node: *tir.SimpleIfNode, dst: u32) !u32 {
+    const reg = try self.getReg(node.cond.getToken());
     // if-
-    var rx = try self.c(node.cond, reg);
+    const rx = try self.c(node.cond, reg);
     // jmp to elif, if any
-    var cond_to_elif_or_else = self.fun.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
-    _ = try self.cBlock(node.then.block(), reg);
+    const cond_to_else = self.fun.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
+    _ = try self.c(node.then, reg);
     var should_patch_if_then_to_end = true;
-    var if_then_to_end = blk: {
+    const if_then_to_end = blk: {
       // as a simple optimization, if we only have an if-end statement, i.e. no elif & else,
       // we don't need to jump after the last statement in the if-then block, control
       // would naturally fallthrough to outside of the if-end statement.
-      if (node.elifs.len() == 0 and node.els.block().canAssumeEmpty(Node.isMarker)) {
-        should_patch_if_then_to_end = false;
-        break :blk @as(usize, 0);
-      }
-      break :blk self.fun.code.write2ArgsSJmp(.Jmp, 2, false, self.lastLine(), self.vm);
-    };
-    var elifs_then_to_end: ds.ArrayList(usize) = undefined;
-    // elifs-
-    if (node.elifs.isNotEmpty()) {
-      // first, patch cond_to_elif_or_else here
-      self.fun.code.patch2ArgsJmp(cond_to_elif_or_else);
-      elifs_then_to_end = ds.ArrayList(usize).init(self.alloc());
-      var last_patch: ?JmpPatch = null;
-      for (node.elifs.items()) |elif| {
-        if (last_patch) |pch| {
-          // we want the last compiled elif's failing cond to jump here; 
-          // - just before the next elif code
-          self.fun.code.patch2ArgsJmp(pch.jmp_to_next);
-        }
-        var patch: JmpPatch = try self.cElif(&elif.AstElif, reg);
-        elifs_then_to_end.append(patch.jmp_to_end);
-        last_patch = patch;
-      }
-      // the last elif in `elifs` would not be patched considering we're 
-      // patching the first only after we've seen the second, hence, we patch it here
-      self.fun.code.patch2ArgsJmp(last_patch.?.jmp_to_next);
-    } else {
-      self.fun.code.patch2ArgsJmp(cond_to_elif_or_else);
-    }
-    // else-
-    _ = try self.cBlock(node.els.block(), reg);
-    if (node.elifs.isNotEmpty()) {
-      // patch up elif_then_to_end 
-      for (elifs_then_to_end.items()) |idx| {
-        self.fun.code.patch2ArgsSJmp(idx);
-      }
-    }
-    if (should_patch_if_then_to_end) {
-      self.fun.code.patch2ArgsSJmp(if_then_to_end);
-    }
-    // self.leaveJmp();
-    self.vreg.releaseReg(reg);
-    return dst;
-  }
-
-  fn cSimpleIf(self: *Self, node: *ast.SimpleIfNode, dst: u32) !u32 {
-    // self.enterJmp();
-    var reg = try self.getReg(node.cond.getToken());
-    // if-
-    var rx = try self.c(node.cond, reg);
-    // jmp to elif, if any
-    var cond_to_else = self.fun.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
-    _ = try self.cBlock(node.then.block(), reg);
-    var should_patch_if_then_to_end = true;
-    var if_then_to_end = blk: {
-      // as a simple optimization, if we only have an if-end statement, i.e. no elif & else,
-      // we don't need to jump after the last statement in the if-then block, control
-      // would naturally fallthrough to outside of the if-end statement.
-      if (node.els.block().canAssumeEmpty(Node.isMarker)) {
+      if (node.els.isBlock() and node.els.block().canAssumeEmpty(Node.isEmpty)) {
         should_patch_if_then_to_end = false;
         break :blk @as(usize, 0);
       }
@@ -1246,11 +1227,10 @@ pub const Compiler = struct {
     };
     self.fun.code.patch2ArgsJmp(cond_to_else);
     // else-
-    _ = try self.cBlock(node.els.block(), reg);
+    _ = try self.c(node.els, reg);
     if (should_patch_if_then_to_end) {
       self.fun.code.patch2ArgsSJmp(if_then_to_end);
     }
-    // self.leaveJmp();
     self.vreg.releaseReg(reg);
     return dst;
   }
@@ -1271,13 +1251,13 @@ pub const Compiler = struct {
     self.loop_ctrls.clearRetainingCapacity();
   }
 
-  fn cWhile(self: *Self, node: *ast.WhileNode, dst: u32) !u32 {
-    var reg = try self.getReg(node.cond.getToken());
+  fn cWhile(self: *Self, node: *tir.WhileNode, dst: u32) !u32 {
+    const reg = try self.getReg(node.cond.getToken());
     // cond-
-    var to_cond = self.fun.code.getInstLen();
-    var rx = try self.c(node.cond, reg);
+    const to_cond = self.fun.code.getInstLen();
+    const rx = try self.c(node.cond, reg);
     // jmp to exit
-    var cond_to_exit = self.fun.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
+    const cond_to_exit = self.fun.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
     _ = try self.cBlock(node.then.block(), reg);
     // loop to cond
     // +1 to include the jmp inst itself, which we already processed
@@ -1290,7 +1270,7 @@ pub const Compiler = struct {
     return dst;
   }
 
-  fn cControl(self: *Self, node: *ast.ControlNode, dst: u32) u32 {
+  fn cControl(self: *Self, node: *tir.ControlNode, dst: u32) u32 {
     if (node.isBreak()) {
       // jmp fwd
       node.patch_index = self.fun.code.write2ArgsSJmp(.Jmp, 2, false, node.token.line, self.vm);
@@ -1298,57 +1278,47 @@ pub const Compiler = struct {
       // jmp bck
       node.patch_index = self.fun.code.write2ArgsSJmp(.Jmp, 0, true, node.token.line, self.vm);
     }
-    self.loop_ctrls.append(node);
+    self.loop_ctrls.append(node, self.alloc());
     return dst;
   }
 
-  /// returns jmp_to_next for patching the jmp to the next elif/else/,
-  /// and jmp_to_end for patching the jmp to the end of the entire if-stmt
-  fn cElif(self: *Self, node: *ast.ElifNode, reg: u32) !JmpPatch {
-    const rx = try self.c(node.cond, reg);
-    // jmp to else, if any
-    const cond_jmp = self.fun.code.write2ArgsJmp(.Jf, rx, self.lastLine(), self.vm);
-    _ = try self.cBlock(node.then.block(), reg);
-    const then_jmp = self.fun.code.write2ArgsSJmp(.Jmp, 2, false, self.lastLine(), self.vm);
-    return .{.jmp_to_next = cond_jmp, .jmp_to_end = then_jmp};
-  }
-
-  fn cFun(self: *Self, node: *ast.FunNode, ast_node: *Node, is_method: bool, _reg: u32) !u32 {
+  fn cFun(self: *Self, ast_node: *Node, is_method: bool, _reg: u32) !u32 {
     // is_method tells us if we're currently trying to compile a class's method
-    if (node.isGeneric()) return self.cFunGeneric(ast_node, is_method, _reg);
-    if (!node.body.block().checked) {
-      if (self.inGlobalScope() and node.name != null) {
-        _ = try self.patchGlobal(node.name.?);
+    if (ast_node.isGenericFun()) return self.cFunGeneric(ast_node, is_method, _reg);
+    var node = &ast_node.NdBasicFun;
+    if (!node.data.body.block().checked) {
+      if (self.inGlobalScope() and node.data.name != null) {
+        _ = try self.patchGlobal(node.data.name.?);
       }
       logger.debug("skipping compilation of unchecked function: {}", .{node});
       return _reg;
     }
     var reg: u32 = undefined;
-    var token = ast_node.getToken();
-    var new_fn = value.createFn(self.vm, @intCast(node.params.len()));
-    var is_global = self.inGlobalScope();
-    var is_lambda = node.name == null;
+    const token = ast_node.getToken();
+    var new_fn = value.createFn(self.vm, @intCast(node.params.len));
+    const is_global = self.inGlobalScope();
+    var is_lambda = node.data.name == null;
     if (is_lambda) new_fn.name = value.createString(self.vm, &self.vm.strings, ks.LambdaVar, false);
     if (is_global) {
       // global
       if (!is_lambda) {
-        var ident = node.name.?;
+        var ident = node.data.name.?;
         var info = try self.patchGlobal(ident);
         self.initializeGlobal(info);
         reg = try self.getReg(token);
         if (!info.isGSym) {
           new_fn.name = value.asString(self.fun.code.values.items[info.pos]);
         } else {
-          new_fn.name = value.createString(self.vm, &self.vm.strings, classname(ident.token), false);
+          new_fn.name = value.createString(self.vm, &self.vm.strings, classname(ident), false);
         }
       } else reg = _reg;
-    } else if (node.name) |ident| {
+    } else if (node.data.name) |ident| {
       // local (named)
       reg = try self.initLocal(ident);
-      new_fn.name = value.createString(self.vm, &self.vm.strings, classname(ident.token), false);
+      new_fn.name = value.createString(self.vm, &self.vm.strings, classname(ident), false);
     } else {
       // local (lambda)
-      std.debug.assert(_reg != VRegister.DummyReg);
+      assert(_reg != VRegister.DummyReg);
       reg = _reg;
     }
     var compiler = Compiler.init(
@@ -1359,38 +1329,35 @@ pub const Compiler = struct {
     compiler.enclosing = self;
     // localize params
     compiler.incScope();
-    for (node.params.items()) |param| {
-      _ = try compiler.initLocal(param.ident);
+    for (node.params) |param| {
+      _ = try compiler.initLocal(param.name);
     }
     // compile function body using cBlockNoPops() since no need to pop locals,
     // - return does this automatically
-    _ = try compiler.cBlockNoPops(node.body.block(), _reg);
+    _ = try compiler.cBlockNoPops(node.data.body.block(), _reg);
     // append return inst as last
-    if (is_method and  node.name.?.token.valueEql(InitVar)) {
+    if (is_method and  node.data.name.?.valueEql(InitVar)) {
       // return `self`
       compiler.fun.code.write2ArgsInst(.Ret, 0, 0, token.line, self.vm);
-    } else if (node.body.block().nodes.len() == 0 or !node.body.block().nodes.getLast().isRet()) {
+    } else if (node.data.body.block().nodes.len == 0 or !node.data.body.block().getLast().isRet()) {
       _ = compiler.cVoidRet(compiler.lastLine());
     }
     compiler.decScope();
-    new_fn.envlen = compiler.upvalues.len;
+    new_fn.envlen = compiler.upvalues.len();
     self.optimizeConstBX();
-    var tmp = try self.getReg(token);
-    var dst = self.cConst(tmp, value.objVal(new_fn), token.line);
+    const tmp = try self.getReg(token);
+    const dst = self.cConst(tmp, value.objVal(new_fn), token.line);
     self.fun.code.write2ArgsInst(.Bclo, reg, dst, token.line, self.vm);
     self.vreg.releaseReg(tmp);
     self.deoptimizeConstBX();
     // set upvalues
-    var slice = compiler.upvalues.slice();
-    var indexs = slice.items(.index);
-    var is_locals = slice.items(.is_local);
-    for (indexs, is_locals) |idx, loc| {
+    for (compiler.upvalues.items()) |upv| {
       // use .Bclo as a placeholder
-      self.fun.code.write2ArgsInst(.Bclo, @intFromBool(loc), idx, self.lastLine(), self.vm);
+      self.fun.code.write2ArgsInst(.Bclo, @intFromBool(upv.is_local), upv.index, self.lastLine(), self.vm);
     }
     if (is_global) {
-      if (node.name) |ident| {
-        var info = self.findGlobal(ident).?;
+      if (node.data.name) |ident| {
+        const info = self.findGlobal(ident).?;
         const inst: OpCode = if (info.isGSym) .Sgsym else .Sglb;
         self.fun.code.write2ArgsInst(inst, reg, info.pos, self.lastLine(), self.vm);
       }
@@ -1410,39 +1377,37 @@ pub const Compiler = struct {
   fn cFunGeneric(self: *Self, node: *Node, is_method: bool, reg: u32) CompileError!u32 {
     if (self.generics.get(node)) |list| {
       for (list.items()) |itm| {
-        if (itm.instance.isFun()) {
-          var fun = &itm.instance.AstFun;
-          if (fun.is_builtin) continue;
-          // only attach names in the local scope since if we're in the global scope,
-          // the name has already been attached in preallocateGlobals()
-          if (self.inLocalScope()) {
-            fun.name = itm.synth_name;
-          }
-          _ = try self.cFun(fun, itm.instance, is_method, reg);
+        var fun = &itm.instance.NdBasicFun;
+        if (fun.data.builtin) continue;
+        // only attach names in the local scope since if we're in the global scope,
+        // the name has already been attached in preallocateGlobals()
+        if (self.inLocalScope()) {
+          fun.data.name = itm.synth_name;
         }
+        _ = try self.cFun(itm.instance, is_method, reg);
       }
     }
     return reg;
   }
 
-  fn cCall(self: *Self, node: *ast.CallNode, reg: u32) !u32 {
+  fn cCall(self: *Self, node: *tir.CallNode, reg: u32) !u32 {
     // For calls, we need to:
     // - get a register window
     // - compile the call expr
     // - generate the instruction: call r(func), b(argc)
-    if (node.variadic) node.transformVariadicArgs();
-    var token = node.expr.getToken();
+    if (node.variadic) node.transformVariadicArgs(self.alloc());
+    const token = node.expr.getToken();
     var ty = node.expr.getType().?;
     ty = if (ty.isTop()) ty.top().child else ty;
     if (ty.isTag()) {
-      return self.cTagCall(node, node.typ.?, reg);
+      return self.cTagCall(node, ty, reg); // node.typ.?
     }
     if (node.expr.isDotAccess() and (!ty.isClass() or node.expr.isFun())) {
       return try self.cMethodCall(node, reg);
     }
-    var fun_dst = try self.c(node.expr, reg);
+    const fun_dst = try self.c(node.expr, reg);
     var _dst = reg;
-    var n: u32 = @intCast(node.args.len());
+    const n: u32 = @intCast(node.args.len);
     var do_move = false;
     var win = blk: {
       break :blk self.vreg.getRegWindow(reg, n) catch {
@@ -1453,17 +1418,15 @@ pub const Compiler = struct {
     if (do_move) {_dst = win; win += 1;}
     // we need the function to be in a specific position in the register window, along with its args
     if (fun_dst != _dst) {
-      // std.debug.assert(self.inLocalScope());
       self.fun.code.write3ArgsInst(.Mov, _dst, fun_dst, 0, token.line, self.vm);
     }
     // don't optimize this call's arguments
     self.enterNoOpt();
-    for (node.args.items(), 0..) |arg, i| {
-      var dst = win + @as(u32, @intCast(i));
-      var tmp = try self.c(arg, dst);
+    for (node.args, 0..) |arg, i| {
+      const dst = win + @as(u32, @intCast(i));
+      const tmp = try self.c(arg, dst);
       // we need the args to be positioned in line with the function in the register window
       if (tmp != dst) {
-        // std.debug.assert(self.inLocalScope());
         self.fun.code.write3ArgsInst(.Mov, dst, tmp, 0, self.lastLine(), self.vm);
       }
     }
@@ -1471,16 +1434,16 @@ pub const Compiler = struct {
     if (!ty.isClass() or node.expr.isFun()) {
       self.fun.code.write2ArgsInst(.Call, _dst, n, token.line, self.vm);
     } else {
-      var flen: u32 = @intCast(ty.klass().fields.len());
+      const flen: u32 = @intCast(ty.klass().data.fields.len());
       // after this instruction is executed, `_dst` holds the instance
       self.fun.code.write3ArgsInst(.Callc, _dst, n, flen, token.line, self.vm);
       // compile default fields
-      var clsnode = &ty.klass().node.?.AstClass;
-      var tmp = try self.getReg(token);
+      var clsnode = &ty.klass().data.node.?.NdClass;
+      const tmp = try self.getReg(token);
       self.optimizeConstRK();
-      for (clsnode.fields.items(), 0..) |vd, idx| {
-        if (vd.AstVarDecl.has_default) {
-          var _r = try self.c(vd.AstVarDecl.value, tmp);
+      for (clsnode.data.fields, 0..) |fd, idx| {
+        if (fd.getFieldValue()) |val| {
+          const _r = try self.c(val, tmp);
           self.fun.code.write3ArgsInst(.Sfd, _dst, @intCast(idx), _r, token.line, self.vm);
         }
       }
@@ -1500,10 +1463,10 @@ pub const Compiler = struct {
     return reg;
   }
 
-  fn cTagVar(self: *Self, node: *ast.VarNode, ty: *Type, reg: u32) !u32 {
+  fn cTagVar(self: *Self, node: *tir.TVarNode, ty: *Type, reg: u32) !u32 {
     const tag = ty.tag();
     const token = node.token;
-    std.debug.assert(tag.paramsLen() == 0);
+    assert(tag.fieldsLen() == 0);
     if (ty.isNoneTy()) {
       self.enterNoOpt();
       const dst = self.cConst(reg, value.noneVal(), token.line);
@@ -1516,20 +1479,20 @@ pub const Compiler = struct {
     return dst;
   }
 
-  fn cTagCall(self: *Self, node: *ast.CallNode, ty: *Type, reg: u32) !u32 {
+  fn cTagCall(self: *Self, node: *tir.CallNode, ty: *Type, reg: u32) !u32 {
     if (ty.isErrorTy()) {
-      var nd = ast.ErrorNode.init(node.args.itemAt(0));
+      var nd = tir.ErrorNode.init(node.args[0]);
       return self.cError(&nd, reg);
     }
     const tag = ty.tag();
     const token = node.expr.getToken();
-    const strc = value.createStruct(self.vm, tag.paramsLen());
+    const strc = value.createStruct(self.vm, tag.fieldsLen());
     strc.name = value.createString(self.vm, &self.vm.strings, tag.name, false);
     self.enterNoOpt();
     const dst = self.cConst(reg, value.objVal(strc), token.line);
     self.leaveNoOpt();
     const _dst = try self.getReg(token);
-    for (node.args.items(), 0..) |arg, idx| {
+    for (node.args, 0..) |arg, idx| {
       const tmp = try self.c(arg, _dst);
       self.fun.code.write3ArgsInst(.Ssfd, dst, @intCast(idx), tmp, token.line, self.vm);
     }
@@ -1537,38 +1500,38 @@ pub const Compiler = struct {
     return dst;
   }
 
-  fn isTupleLenMethodCall(self: *Self, node: *ast.CallNode) bool {
+  fn isTupleLenMethodCall(self: *Self, node: *tir.CallNode) bool {
     _ = self;
     if (node.expr.isDotAccess()) {
-      var da = &node.expr.AstDotAccess;
+      var da = &node.expr.NdDotAccess;
       if (da.lhs.getType()) |ty| {
         return (
           ty.isTupleTy()
-          and da.rhs.isVariable()
-          and da.rhs.AstVar.token.valueEql("len")
+          and da.rhs.isTVariable()
+          and da.rhs.NdTVar.token.valueEql(ks.LenVar)
         );
       }
     }
     return false;
   }
 
-  fn cMethodCall(self: *Self, node: *ast.CallNode, reg: u32) !u32 {
+  fn cMethodCall(self: *Self, node: *tir.CallNode, reg: u32) !u32 {
     // For calls, we need to:
     // - get a register window
     // - compile the call expr
     // - generate the instruction: call r(func), b(argc)
     // optimize tuple len call since we know the result at compile time, i.e. tuple.len()
     if (self.isTupleLenMethodCall(node)) {
-      const len = node.expr.AstDotAccess.lhs.getType().?.klass().tparamsLen();
+      const len = node.expr.NdDotAccess.lhs.getType().?.klass().tparamsLen();
       self.enterNoOpt();
       const dst = self.cConst(reg, value.numberVal(@floatFromInt(len)), node.expr.getToken().line);
       self.leaveNoOpt();
       return dst;
     }
-    if (node.variadic) node.transformVariadicArgs();
-    var token = node.expr.getToken();
+    if (node.variadic) node.transformVariadicArgs(self.alloc());
+    const token = node.expr.getToken();
     var _dst = reg;
-    var n: u32 = @intCast(node.args.len());
+    const n: u32 = @intCast(node.args.len);
     var do_move = false;
     var win = blk: {
       break :blk self.vreg.getRegWindow(reg, n) catch {
@@ -1580,19 +1543,19 @@ pub const Compiler = struct {
     // we need the function to be in a specific position in the register window, along with its args
     // don't optimize this call's arguments
     self.enterNoOpt();
-    for (node.args.items(), 0..) |arg, i| {
-      var dst = win + @as(u32, @intCast(i));
-      var tmp = try self.c(arg, dst);
+    for (node.args, 0..) |arg, i| {
+      const dst = win + @as(u32, @intCast(i));
+      const tmp = try self.c(arg, dst);
       // we need the args to be positioned in line with the function in the register window
       if (tmp != dst) {
         self.fun.code.write3ArgsInst(.Mov, dst, tmp, 0, self.lastLine(), self.vm);
       }
     }
     self.leaveNoOpt();
-    var fun_dst = try self.cDotAccess(&node.expr.AstDotAccess, true, reg);
+    var fun_dst = try self.cDotAccess(&node.expr.NdDotAccess, true, reg);
     if (fun_dst != _dst) {
       self.fun.code.resetBy(1);
-      fun_dst = try self.cDotAccess(&node.expr.AstDotAccess, false, reg);
+      fun_dst = try self.cDotAccess(&node.expr.NdDotAccess, false, reg);
       self.fun.code.write3ArgsInst(.Mov, _dst, fun_dst, 0, token.line, self.vm);
       logger.debug("fun_dst != _dst on method call", .{});
     }
@@ -1614,73 +1577,40 @@ pub const Compiler = struct {
     return dst;
   }
 
-  fn cRet(self: *Self, node: *ast.RetNode, reg: u32) !u32 {
+  fn cRet(self: *Self, node: *tir.RetNode, reg: u32) !u32 {
     _ = reg;
     if (node.expr) |expr| {
-      var rg = try self.getReg(expr.getToken());
-      var dst = try self.c(expr, rg);
+      const rg = try self.getReg(expr.getToken());
+      const dst = try self.c(expr, rg);
       self.vreg.releaseReg(rg);
-      self.fun.code.write2ArgsInst(.Ret, dst, 0, node.token.line, self.vm);
+      self.fun.code.write2ArgsInst(.Ret, dst, 0, node.tkbit.line, self.vm);
       return dst;
     }
-    return self.cVoidRet(node.token.line);
+    return self.cVoidRet(node.tkbit.line);
   }
 
-  fn cError(self: *Self, node: *ast.ErrorNode, reg: u32) !u32 {
-    var tmp = try self.getReg(node.expr.getToken());
-    var dst = try self.c(node.expr, tmp);
+  fn cError(self: *Self, node: *tir.ErrorNode, reg: u32) !u32 {
+    const tmp = try self.getReg(node.expr.getToken());
+    const dst = try self.c(node.expr, tmp);
     self.vreg.releaseReg(tmp);
     self.fun.code.write2ArgsInst(.Nerr, reg, dst, self.lastLine(), self.vm);
     return reg;
   }
 
-  fn cOrElse(self: *Self, node: *ast.OrElseNode, reg: u32) !u32 {
-    // ok orelse e? alt
-    // c(ok)
-    // is reg, err ?
-    // jt alt
-    // jf alt-end
-    // alt:
-    // e? define-local
-    // alt-code
-    // alt-end:
-    var rx = try self.c(node.ok, reg);
-    var tmp = try self.getReg(node.ok.getToken());
-    var rk2 = (TypeKind.TyClass + 3);
-    self.fun.code.write3ArgsInst(.Is, tmp, rx, rk2, self.lastLine(), self.vm);
-    var ok_to_alt = self.fun.code.write2ArgsJmp(.Jt, tmp, self.lastLine(), self.vm);
-    var ok_to_end = self.fun.code.write2ArgsJmp(.Jf, tmp, self.lastLine(), self.vm);
-    self.vreg.releaseReg(tmp);
-    self.fun.code.patch2ArgsJmp(ok_to_alt);
-    if (node.evar) |evar| {
-      self.incScope();
-      var dst = try self.initLocal(evar);
-      util.assert(rx < value.MAX_REGISTERS, "rx should be a register");
-      self.fun.code.write3ArgsInst(.Mov, dst, rx, 0, evar.token.line, self.vm);
-      _ = try self.c(node.err, reg);
-      self.decScope();
-      self.popLocalVars();
-    } else {
-      _ = try self.c(node.err, reg);
-    }
-    self.fun.code.patch2ArgsJmp(ok_to_end);
-    return rx;
-  }
-
-  fn cMatch(self: *Self, node: *ast.MatchNode, reg: u32) !u32 {
-    return self.c(node.lnode, reg);
+  fn cMatch(self: *Self, node: *tir.MatchNode, reg: u32) !u32 {
+    return self.c(node.lnode.?, reg);
   }
 
   fn cClassGeneric(self: *Self, node: *Node, reg: u32) CompileError!u32 {
     if (self.generics.get(node)) |list| {
       for (list.items()) |itm| {
         if (itm.instance.isClass()) {
-          var cls = &itm.instance.AstClass;
-          if (cls.is_builtin) continue;
+          var cls = &itm.instance.NdClass;
+          if (cls.data.builtin) continue;
           // only attach names in the local scope since if we're in the global scope,
           // the name has already been attached in preallocateGlobals()
           if (self.inLocalScope()) {
-            cls.name = itm.synth_name;
+            cls.name = tir.IdentToken.init(itm.synth_name);
           }
           _ = try self.cClass(itm.instance, cls, reg);
         }
@@ -1691,16 +1621,16 @@ pub const Compiler = struct {
 
   /// extract the actual class name
   inline fn classname(name: Token) []const u8 {
-    return if (std.mem.indexOf(u8, name.value, ".")) |idx| name.value[0..idx] else name.value;
+    return if (std.mem.indexOf(u8, name.lexeme(), ".")) |idx| name.lexeme()[0..idx] else name.lexeme();
   }
 
-  fn cClass(self: *Self, ast_node: *Node, node: *ast.ClassNode, _reg: u32) !u32 {
-    if (node.isGeneric()) return self.cClassGeneric(ast_node, _reg);
+  fn cClass(self: *Self, ast_node: *Node, node: *tir.ClassNode, _reg: u32) !u32 {
+    if (node.isParameterized()) return self.cClassGeneric(ast_node, _reg);
     var reg: u32 = undefined;
-    var token = ast_node.getToken();
-    var cls = value.createClass(self.vm, node.methods.len());
-    var is_global = self.inGlobalScope();
-    var ident = node.name;
+    const token = ast_node.getToken();
+    var cls = value.createClass(self.vm, node.data.methods.len);
+    const is_global = self.inGlobalScope();
+    var ident = node.name.toToken();
     if (is_global) {
       // global
       var info = try self.patchGlobal(ident);
@@ -1709,25 +1639,25 @@ pub const Compiler = struct {
       if (!info.isGSym) {
         cls.name = value.asString(self.fun.code.values.items[info.pos]);
       } else {
-        cls.name = value.createString(self.vm, &self.vm.strings, classname(ident.token), false);
+        cls.name = value.createString(self.vm, &self.vm.strings, classname(ident), false);
       }
     } else {
       // local
       reg = try self.initLocal(ident);
-      cls.name = value.createString(self.vm, &self.vm.strings, classname(ident.token), false);
+      cls.name = value.createString(self.vm, &self.vm.strings, classname(ident), false);
     }
     // emit class
     self.enterNoOpt();
-    var dst = self.cConst(reg, value.objVal(cls), token.line);
+    const dst = self.cConst(reg, value.objVal(cls), token.line);
     self.leaveNoOpt();
     self.incScope();
-    for (node.methods.items(), 0..) |mth, i| {
-      var mreg = try self.cFun(&mth.AstFun, mth, true, _reg);
+    for (node.data.methods, 0..) |mth, i| {
+      const mreg = try self.cFun(mth, true, _reg);
       self.fun.code.write3ArgsInst(.Smtd, mreg, dst, @intCast(i), token.line, self.vm);
     }
     self.decScope();
     if (is_global) {
-      var info = self.findGlobal(ident).?;
+      const info = self.findGlobal(ident).?;
       const inst: OpCode = if (info.isGSym) .Sgsym else .Sglb;
       self.fun.code.write2ArgsInst(inst, dst, info.pos, self.lastLine(), self.vm);
       self.vreg.releaseReg(reg);
@@ -1735,9 +1665,9 @@ pub const Compiler = struct {
     return _reg;
   }
 
-  fn cProgram(self: *Self, node: *ast.ProgramNode, start: u32) !u32 {
+  fn cProgram(self: *Self, node: *tir.ProgramNode, start: u32) !u32 {
     var reg = start;
-    for (node.decls.items()) |nd| {
+    for (node.decls) |nd| {
       reg = try self.c(nd, reg);
     }
     return reg;
@@ -1745,48 +1675,46 @@ pub const Compiler = struct {
 
   fn c(self: *Self, node: *Node, reg: u32) CompileError!u32 {
     return switch (node.*) {
-      .AstNumber => |*nd| self.cNumber(nd, reg),
-      .AstString => |*nd| self.cString(nd, reg),
-      .AstBool => |*nd| self.cBool(nd, reg),
-      .AstUnary => |*nd| self.cUnary(nd, reg),
-      .AstBinary => |*nd| self.cBinary(nd, reg),
-      .AstList => |*nd| self.cList(nd, node, reg),
-      .AstTuple => |*nd| self.cTuple(nd, node, reg),
-      .AstMap => |*nd| self.cMap(nd, reg),
-      .AstExprStmt => |*nd| self.cExprStmt(nd, reg),
-      .AstVar => |*nd| self.cVar(nd, reg),
-      .AstVarDecl => |*nd| self.cVarDecl(nd, reg),
-      .AstAssign => |*nd| self.cAssign(nd, reg),
-      .AstBlock => |*nd| self.cBlock(nd, reg),
-      .AstNType => |*nd| self.cNType(nd, reg),
-      .AstAlias, .AstScope, .AstFailMarker,
-      .AstRedundantMarker, .AstLiftMarker, => reg,
-      .AstNil => |*nd| self.cNil(nd, reg),
-      .AstCast => |*nd| self.cCast(nd, reg),
-      .AstSubscript => |*nd| self.cSubscript(nd, reg),
-      .AstDeref => |*nd| self.cDeref(nd, reg),
-      .AstIf => |*nd| self.cIf(nd, reg),
-      .AstSimpleIf => |*nd| self.cSimpleIf(nd, reg),
-      .AstWhile => |*nd| self.cWhile(nd, reg),
-      .AstControl => |*nd| self.cControl(nd, reg),
-      .AstFun => |*nd| self.cFun(nd, node, false, reg),
-      .AstCall => |*nd| self.cCall(nd, reg),
-      .AstRet => |*nd| self.cRet(nd, reg),
-      .AstError => |*nd| self.cError(nd, reg),
-      .AstOrElse => |*nd| self.cOrElse(nd, reg),
-      .AstClass => |*nd| self.cClass(node, nd, reg),
-      .AstDotAccess => |*nd| self.cDotAccess(nd, false, reg),
-      .AstMatch => |*nd| self.cMatch(nd, reg),
-      .AstMCondition => |*nd| self.c(nd.tst.AstCondition.cond, reg),
-      .AstProgram, .AstElif, .AstCondition, .AstEmpty, .AstLblArg => unreachable,
+      .NdNumber => |*nd| self.cNumber(nd, reg),
+      .NdString => |*nd| self.cString(nd, reg),
+      .NdBool => |*nd| self.cBool(nd, reg),
+      .NdUnary => |*nd| self.cUnary(nd, reg),
+      .NdBinary => |*nd| self.cBinary(nd, reg),
+      .NdList => |*nd| self.cList(nd, node, reg),
+      .NdTuple => |*nd| self.cTuple(nd, node, reg),
+      .NdMap => |*nd| self.cMap(nd, reg),
+      .NdExprStmt => |*nd| self.cExprStmt(nd, reg),
+      .NdTVar => |*nd| self.cVar(nd, reg),
+      .NdVarDecl => |*nd| self.cVarDecl(nd, reg),
+      .NdAssign => |*nd| self.cAssign(nd, reg),
+      .NdBlock => |*nd| self.cBlock(nd, reg),
+      .NdType => |*nd| self.cNType(nd, reg),
+      .NdAlias, .NdScope, .NdFailMarker,
+      .NdRedunMarker, .NdDiagStartMarker, .NdEmpty, => reg,
+      .NdCast => |*nd| self.cCast(nd, reg),
+      .NdSubscript => |*nd| self.cSubscript(nd, reg),
+      .NdDeref => |*nd| self.cDeref(nd, reg),
+      .NdSimpleIf => |*nd| self.cSimpleIf(nd, reg),
+      .NdWhile => |*nd| self.cWhile(nd, reg),
+      .NdControl => |*nd| self.cControl(nd, reg),
+      .NdBasicFun, .NdGenericFun, => self.cFun(node, false, reg),
+      .NdBasicCall, .NdGenericCall => self.cCall(@constCast(&node.toCallNode()), reg),
+      .NdRet => |*nd| self.cRet(nd, reg),
+      .NdError => |*nd| self.cError(nd, reg),
+      .NdClass => |*nd| self.cClass(node, nd, reg),
+      .NdDotAccess => |*nd| self.cDotAccess(nd, false, reg),
+      .NdMatch => |*nd| self.cMatch(nd, reg),
+      .NdMCondition => |*nd| self.c(nd.tst.NdCondition.cond, reg),
+      .NdParam, .NdField, .NdPubField,
+      .NdProgram, .NdCondition, .NdLblArg, .NdOrElse => unreachable,
     };
   }
 
   pub fn compile(self: *Self, node: *Node) !void {
-    self.preallocateGlobals(&node.AstProgram.decls);
+    self.preallocateGlobals(node.NdProgram.decls);
     const token = node.getToken();
     util.assert(
-      (self.cProgram(&node.AstProgram, VRegister.DummyReg) catch VRegister.DummyReg) == VRegister.DummyReg,
+      (self.cProgram(&node.NdProgram, VRegister.DummyReg) catch VRegister.DummyReg) == VRegister.DummyReg,
       "should be a dummy register"
     );
     self.fun.code.write2ArgsInst(.Ret, 0, 0, self.lastLine(), self.vm);
@@ -1798,5 +1726,4 @@ pub const Compiler = struct {
       return error.CompileError;
     }
   }
-
 };

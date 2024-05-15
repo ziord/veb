@@ -129,7 +129,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
     fn findEntry(self: *Self, entries: [*]i32, capacity: usize, key: K, hash: u64) usize {
       const mask = capacity - 1;
       var i = hash & mask;
-      var start = i;
+      const start = i;
       var deleted: ?usize = null;
       var entry: i32 = undefined;
       while (true) {
@@ -235,7 +235,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
 
     pub fn display(self: *Self) void {
       util.print("{s}", .{"{"});
-      var last = self.len -| 1;
+      const last = self.len -| 1;
       for (self.items[0..self.len], 0..) |itm, i| {
         @call(.always_inline, vl.display, .{itm.key});
         util.print(": ", .{});

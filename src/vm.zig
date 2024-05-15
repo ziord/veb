@@ -98,7 +98,7 @@ pub const VM = struct {
   pub fn deinit(self: *Self) void {
     var curr = self.objects;
     while (curr) |cur| {
-      var next = cur.next;
+      const next = cur.next;
       self.gc.freeObject(cur, self);
       curr = next;
     }
@@ -165,7 +165,7 @@ pub const VM = struct {
       // TODO: unwind
       return self.runtimeError("Stack overflow: too many stack items", .{});
     }
-    var old_stack = self.fiber.stack;
+    const old_stack = self.fiber.stack;
     const cap = Mem.alignTo(Mem.growCapacity(self.fiber.stack_cap), MAX_LOCAL_ITEMS);
     self.fiber.stack = self.mem.resizeBuf(
       Value, self,
@@ -203,7 +203,7 @@ pub const VM = struct {
       // TODO: unwind
       return self.runtimeError("Stack overflow: too many call frames", .{});
     }
-    var cap = Mem.alignTo(Mem.growCapacity(self.fiber.frame_cap), Mem.BUFFER_INIT_SIZE);
+    const cap = Mem.alignTo(Mem.growCapacity(self.fiber.frame_cap), Mem.BUFFER_INIT_SIZE);
     self.fiber.frames = self.mem.resizeBuf(
       CallFrame, self,
       self.fiber.frames,
@@ -266,7 +266,7 @@ pub const VM = struct {
   }
 
   pub inline fn printStack(self: *Self, max: ?usize) void {
-    var len = max orelse self.fiber.stack_cap;
+    const len = max orelse self.fiber.stack_cap;
     for (self.fiber.stack[0..len]) |val| {
       std.debug.print("[ ", .{});
       vl.printValue(val);
@@ -302,8 +302,8 @@ pub const VM = struct {
           var rx: u32 = undefined;
           var bx: u32 = undefined;
           self.read2Args(code, &rx, &bx);
-          var glb = vl.asString(self.readConst(bx, fp));
-          var val = self.globals.get(glb, self);
+          const glb = vl.asString(self.readConst(bx, fp));
+          const val = self.globals.get(glb, self);
           self.assert(val != null);
           @setRuntimeSafety(false);
           fp.stack[rx] = val.?;
@@ -314,7 +314,7 @@ pub const VM = struct {
           var rx: u32 = undefined;
           var bx: u32 = undefined;
           self.read2Args(code, &rx, &bx);
-          var glb = vl.asString(self.readConst(bx, fp));
+          const glb = vl.asString(self.readConst(bx, fp));
           _ = self.globals.set(glb, fp.stack[rx], self);
           continue;
         },
@@ -454,9 +454,9 @@ pub const VM = struct {
           fp.stack[rx] = vl.objVal(clo);
           var i: usize = 0;
           while (i < clo.fun.envlen) : (i += 1) {
-            var next_inst = @call(.always_inline, Self.readWord, .{self, fp});
-            var is_local = Code.readRX(next_inst);
-            var slot = Code.readBX(next_inst);
+            const next_inst = @call(.always_inline, Self.readWord, .{self, fp});
+            const is_local = Code.readRX(next_inst);
+            const slot = Code.readBX(next_inst);
             if (is_local == 1) {
               clo.env[i] = self.captureUpvalue(fiber, &fp.stack[slot]);
             } else {
@@ -470,7 +470,7 @@ pub const VM = struct {
           var n: u32 = undefined;
           self.read2Args(code, &rx, &n);
           try self.ensureFrameCapacity(&fp, &fiber);
-          var val = fp.stack[rx];
+          const val = fp.stack[rx];
           if (vl.isClosure(val)) {
             fiber.appendFrame(vl.asClosure(val), fp.stack + rx);
             fp = fiber.fp;
@@ -483,13 +483,13 @@ pub const VM = struct {
               fp = fiber.fp;
             } else {
               fp.stack[rx] = mtd.as.native.instance;
-              var res = mtd.as.native.fun.fun(self, n, rx);
+              const res = mtd.as.native.fun.fun(self, n, rx);
               if (self.has_error) return error.RuntimeError;
               fp.stack[rx] = res;
             }
           } else {
             var func = vl.asNativeFn(val);
-            var res = func.fun(self, n, rx + 1);
+            const res = func.fun(self, n, rx + 1);
             if (self.has_error) return error.RuntimeError;
             fp.stack[rx] = res;
           }
@@ -502,10 +502,10 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var idx: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &idx);
-          var inst = self.RK(rk1, fp);
+          const inst = self.RK(rk1, fp);
           if (vl.isInstance(inst)) {
-            var closure = vl.asClosure(vl.asObj(inst).cls.?.methods[idx]);
-            var next = @call(.always_inline, Self.readWord, .{self, fp});
+            const closure = vl.asClosure(vl.asObj(inst).cls.?.methods[idx]);
+            const next = @call(.always_inline, Self.readWord, .{self, fp});
             self.read2Args(next, &rx, &rk1);
             fiber.appendFrame(closure, fp.stack + rx);
             @setRuntimeSafety(false);
@@ -513,10 +513,10 @@ pub const VM = struct {
             fp = fiber.fp;
           } else {
             var func = vl.asNativeFn(vl.asObj(inst).cls.?.methods[idx]);
-            var next = @call(.always_inline, Self.readWord, .{self, fp});
+            const next = @call(.always_inline, Self.readWord, .{self, fp});
             self.read2Args(next, &rx, &rk1);
             fp.stack[rx] = inst;
-            var res = func.fun(self, rk1, rx);
+            const res = func.fun(self, rk1, rx);
             if (self.has_error) return error.RuntimeError;
             @setRuntimeSafety(false);
             fp.stack[rx] = res;
@@ -531,15 +531,15 @@ pub const VM = struct {
           var flen: u32 = undefined;
           self.read3Args(code, &rx, &n, &flen);
           try self.ensureFrameCapacity(&fp, &fiber);
-          var cls = vl.asClass(fp.stack[rx]);
-          var inst = vl.createInstance(self, cls, flen);
+          const cls = vl.asClass(fp.stack[rx]);
+          const inst = vl.createInstance(self, cls, flen);
           @setRuntimeSafety(false);
           fp.stack[rx] = vl.objVal(inst);
           continue;
         },
         .Ret => {
-          var rx: u32 = Code.readRX(code);
-          var res = fp.stack[rx];
+          const rx: u32 = Code.readRX(code);
+          const res = fp.stack[rx];
           var frame = fiber.popFrame();
           closeUpvalues(fiber, &frame.stack[0]);
           fp = fiber.fp;
@@ -624,8 +624,8 @@ pub const VM = struct {
           var rk2: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &rk2);
           @setRuntimeSafety(false);
-          var obj = vl.asObj(self.RK(rk1, fp));
-          var cls = vl.asClass(self.RK(rk2, fp));
+          const obj = vl.asObj(self.RK(rk1, fp));
+          const cls = vl.asClass(self.RK(rk2, fp));
           fp.stack[rx] = vl.boolVal((obj.cls.? == cls));
           continue;
         },
@@ -640,6 +640,28 @@ pub const VM = struct {
           if (!vl.isNil(val)) {
             const name = if (vl.isStruct(val)) vl.asStruct(val).name else vl.asTag(val).name;
             fp.stack[rx] = vl.boolVal(name == vl.asString(self.RK(rk2, fp)));
+          } else {
+            fp.stack[rx] = vl.boolVal(false);
+          }
+          continue;
+        },
+        .Istoc => {
+          // istoc rx, rk(x), rk(y)
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var rk2: u32 = undefined;
+          self.read3Args(code, &rx, &rk1, &rk2);
+          @setRuntimeSafety(false);
+          const val = self.RK(rk1, fp);
+          const name = vl.asString(self.RK(rk2, fp));
+          if (vl.isNil(val)) {
+            fp.stack[rx] = vl.boolVal(false);
+          } else if (vl.asObj(val).cls) |cls| { // cls/instance
+            fp.stack[rx] = vl.boolVal(cls.name == name);
+          } else if (vl.isStruct(val)) { // parameterized tags
+            fp.stack[rx] = vl.boolVal(vl.asStruct(val).name == name);
+          } else if (vl.isTag(val)) { // non-parameterized tags
+            fp.stack[rx] = vl.boolVal(vl.asTag(val).name == name);
           } else {
             fp.stack[rx] = vl.boolVal(false);
           }
@@ -746,7 +768,7 @@ pub const VM = struct {
           var tmp: u32 = undefined;
           self.read2Args(code, &rx, &tmp);
           try self.ensureFrameCapacity(&fp, &fiber);
-          var init_mtd = vl.asObj(fp.stack[rx]).cls.?.getInitMethod().?;
+          const init_mtd = vl.asObj(fp.stack[rx]).cls.?.getInitMethod().?;
           fiber.appendFrame(vl.asClosure(init_mtd), fp.stack + rx);
           fp = fiber.fp;
           continue;
@@ -767,8 +789,8 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var idx: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &idx);
-          var inst = self.RK(rk1, fp);
-          var mtd = (
+          const inst = self.RK(rk1, fp);
+          const mtd = (
             if (vl.isInstance(inst)) vl.createBoundUserMethod(self, inst, vl.asClosure(vl.asObj(inst).cls.?.methods[idx]))
             else vl.createBoundNativeMethod(self, inst, vl.asNativeFn(vl.asObj(inst).cls.?.methods[idx]))
           );
@@ -857,7 +879,7 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &rk2);
-          var list = vl.asList(self.RK(rk2, fp));
+          const list = vl.asList(self.RK(rk2, fp));
           var idx = vl.asIntNumber(i64, self.RK(rk1, fp));
           if (idx < 0) idx += @intCast(list.len);
           if (idx >= list.len) {
@@ -883,7 +905,7 @@ pub const VM = struct {
           var rk2: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &rk2);
           var tuple = vl.asTuple(fp.stack[rx]);
-          var idx = vl.asIntNumber(i64, self.RK(rk1, fp));
+          const idx = vl.asIntNumber(i64, self.RK(rk1, fp));
           // assumed safe
           @setRuntimeSafety(false);
           tuple.items[@intCast(idx)] = self.RK(rk2, fp);
@@ -895,7 +917,7 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &rk2);
-          var tuple = vl.asTuple(self.RK(rk2, fp));
+          const tuple = vl.asTuple(self.RK(rk2, fp));
           var idx = vl.asIntNumber(i64, self.RK(rk1, fp));
           if (idx < 0) idx += @intCast(tuple.len);
           if (idx >= tuple.len) {

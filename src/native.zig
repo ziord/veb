@@ -29,6 +29,8 @@ pub const NativeFns = [_][]const u8 {
   "remove",
   "println",
   "slice",
+  "concat",
+  "string",
 };
 
 
@@ -105,6 +107,12 @@ pub fn fnPrint(vm: *VM, argc: u32, args: u32) Value {
   return NOTHING_VAL;
 }
 
+/// string(val: any): str
+pub fn fnString(vm: *VM, argc: u32, args: u32) Value {
+  _ = argc;
+  return vl.valueToString(getArg(vm, args), vm);
+}
+
 /// println(args*: any): void
 pub fn fnPrintln(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
@@ -132,13 +140,21 @@ fn stringLen(vm: *VM, argc: u32, args: u32) Value {
   return vl.numberVal(@floatFromInt(str.len));
 }
 
+// concat(other: str): str
+fn stringConcat(vm: *VM, argc: u32, args: u32) Value {
+  _ = argc;
+  const str = vl.asString(getArg(vm, args));
+  const conc = str.concat(vl.asString(getArg(vm, args + 1)), vm.gc.allocator.getAllocator());
+  return vl.objVal(vl.createString(vm, &vm.strings, conc, true));
+}
+
 fn createStringClass(vm: *VM) *vl.ObjClass {
   //*** method executable ***//
-  const methods = [_]NativeFn {stringLen};
+  const methods = [_]NativeFn {stringLen, stringConcat};
   //*** arity of each method ***//
-  const arities = [_]u32 {0};
+  const arities = [_]u32 {0, 1};
   //*** index into NativeFns array ***//
-  const names = [_]usize{5};
+  const names = [_]usize{5, 19};
   // important to do this first
   var cls = vl.createClass(vm, methods.len);
   vm.classes.string = cls;
@@ -382,4 +398,5 @@ pub fn addBuiltins(vm: *VM) void {
   addNativeFn(vm, "panic", 2, 1, fnPanic);
   addNativeFn(vm, "print", 3, VarArgC, fnPrint);
   addNativeFn(vm, "println", 17, VarArgC, fnPrintln);
+  addNativeFn(vm, "string", 20, 1, fnString);
 }

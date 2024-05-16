@@ -85,6 +85,7 @@ pub const TokenType = enum (u8) {
   TkNewline,        // \n
   TkEqGrt,          // =>
   Tk2Dot,           // ..
+  TkGthanLthan,     // <>
   TkLeq,            // <=
   TkGeq,            // >=
   Tk2Eq,            // ==
@@ -225,6 +226,7 @@ pub const TokenType = enum (u8) {
       .TkNewline => "<newline>",
       .TkEqGrt => "=>",
       .Tk2Dot => "..",
+      .TkGthanLthan => "<>",
       .TkLeq => "<=",
       .TkGeq => ">=",
       .Tk2Eq => "==",
@@ -918,7 +920,7 @@ pub const Lexer = struct {
       '.' => self.newToken(if (self.match('.')) .Tk2Dot else .TkDot),
       '!' => self.newToken(if (self.match('=')) .TkNeq else .TkExMark),
       '=' => self.newToken(if (self.match('=')) .Tk2Eq else if (self.match('>')) .TkEqGrt else .TkEqual),
-      '<' => self.newToken(if (self.match('=')) .TkLeq else if (self.match('<')) .Tk2Lthan else .TkLthan),
+      '<' => self.newToken(if (self.match('=')) .TkLeq else if (self.match('>')) .TkGthanLthan else if (self.match('<')) .Tk2Lthan else .TkLthan),
       '>' => self.newToken(if (self.match('=')) .TkGeq else if (self.match('>')) .Tk2Gthan else .TkGthan),
       else => error.unknown_token,
     };

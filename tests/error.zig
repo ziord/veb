@@ -2691,3 +2691,14 @@ test "match <statement in expr>" {
     "expected token 'end' but found '='",
   });
 }
+
+test "builtin-functions-override" {
+  const src =
+  \\ def panic(x: num)
+  \\  return x - 2
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "expected token '<ident>' but found 'panic'",
+  });
+}

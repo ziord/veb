@@ -258,6 +258,13 @@ pub const ObjString = extern struct {
   pub inline fn string(this: *const @This()) []const u8 {
     return this.str[0..this.len];
   }
+
+  pub inline fn concat(this: *const @This(), other: *const @This(), al: std.mem.Allocator) []const u8 {
+    var new = util.allocSlice(u8, this.len + other.len, al);
+    @memcpy(new.ptr, this.string());
+    @memcpy(new.ptr + this.len, other.string());
+    return new;
+  }
 };
 
 pub const ObjList = extern struct {
@@ -879,7 +886,13 @@ pub fn printObject(val: Value) void {
 
 inline fn writeValues(items: []Value, last: usize, vm: *VM, uw: *ValueStringWriter.Writer) void {
   for (items, 0..) |itm, i| {
+    if (isString(itm)) {
+      uw.write("'");
+    }
     _valToString(itm, vm, uw);
+    if (isString(itm)) {
+      uw.write("'");
+    }
     if (i < last) {
       uw.write(", ");
     }
@@ -1113,6 +1126,8 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
     }
     _ = map.set(tmp, FALSE_VAL, vm);
     return tmp;
+  } else if (is_alloc) {
+    vm.gc.allocator.getAllocator().free(str);
   }
   return string.?.key;
 }

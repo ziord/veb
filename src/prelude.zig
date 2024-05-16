@@ -25,6 +25,10 @@ pub const BuiltinsSrc =
 \\   #[[internal]]
 \\ end
 \\
+\\ def string(val: any): str
+\\   #[[internal]]
+\\ end
+\\
 \\ class List{T}
 \\  pub def append(item: T): void
 \\    #[[internal]]
@@ -95,6 +99,10 @@ pub const BuiltinsSrc =
 \\
 \\ class str
 \\  pub def len(): num
+\\    #[[internal]]
+\\  end
+\\
+\\  pub def concat(other: str): str
 \\    #[[internal]]
 \\  end
 \\ end

@@ -2048,6 +2048,7 @@ pub const Node = union(NodeType)  {
       .NdTVar => |*nd| nd.typ = typ,
       .NdCast => |*cst| cst.typn.typ = typ,
       .NdOrElse => |*nd| nd.typ = typ,
+      .NdBasicCall => |*nd| nd.typ = typ,
       else => unreachable,
     }
   }
@@ -2061,7 +2062,7 @@ pub const Node = union(NodeType)  {
       .NdRedunMarker, .NdScope, .NdTVar,
       .NdDiagStartMarker, .NdPipeHolder => false,
       .NdOrElse, .NdMatch, .NdDeref => true,
-      .NdBinary => |*nd| nd.op_tkty == .TkPipeGthan or nd.left.hasSugar() or nd.right.hasSugar(),
+      .NdBinary => |*nd| nd.op_tkty == .TkPipeGthan or nd.op_tkty == .TkGthanLthan or nd.left.hasSugar() or nd.right.hasSugar(),
       .NdAssign => |*nd| nd.right.hasSugar() or nd.left.hasSugar(),
       .NdSubscript => |*nd| nd.expr.hasSugar() or nd.index.hasSugar(),
       .NdUnary => |*nd| nd.expr.hasSugar(),

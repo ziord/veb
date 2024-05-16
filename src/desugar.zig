@@ -349,11 +349,23 @@ pub const Desugar = struct {
     return res;
   }
 
+  fn desConcat(self: *Desugar, node: *tir.BinaryNode) *Node {
+    // foo <> bar -> foo.concat(bar)
+    const ident = self.newNode(.{.NdTVar = tir.TVarNode.init(node.right.getToken().tkFrom("concat", .TkIdent))});
+    const access = self.newNode(.{.NdDotAccess = tir.DotAccessNode.init(node.left, ident)});
+    var args = util.allocSlice(*Node, 1, self.al);
+    args[0] = node.right;
+    return self.desExpr(self.newNode(.{.NdBasicCall = tir.BasicCallNode.init(access, args)}));
+  }
+
   fn desExpr(self: *Desugar, node: *Node) *Node {
     switch (node.*) {
       .NdBinary => |*nd| {
         if (nd.op_tkty == .TkPipeGthan) {
           return self.desExpr(self.desPipe(nd));
+        }
+        if (nd.op_tkty == .TkGthanLthan) {
+          return self.desConcat(nd);
         }
         nd.left = self.desExpr(nd.left);
         nd.right = self.desExpr(nd.right);

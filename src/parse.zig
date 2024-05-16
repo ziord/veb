@@ -86,6 +86,7 @@ pub const Parser = struct {
     BitOr,       // |
     BitXor,      // ^
     BitAnd,      // &
+    Pipe,        // |>
     Equality,    // !=, ==, is
     Comparison,  // >, >=, <, <=
     Shift,       // >>, <<
@@ -123,10 +124,11 @@ pub const Parser = struct {
     .{.bp = .Access, .prefix = null, .infix = Self.dotderef},           // TkDot
     .{.bp = .None, .prefix = null, .infix = null},                      // TkQMark
     .{.bp = .None, .prefix = null, .infix = null},                      // Tk2QMark
-    .{.bp = .Unary, .prefix = null, .infix = Self.pipeline},            // TkPipeGthan
+    .{.bp = .Pipe, .prefix = null, .infix = Self.pipeline},             // TkPipeGthan
     .{.bp = .None, .prefix = null, .infix = null},                      // TkNewline
     .{.bp = .None, .prefix = null, .infix = null},                      // TkEqGrt
     .{.bp = .None, .prefix = null, .infix = null},                      // Tk2Dot
+    .{.bp = .Term, .prefix = null, .infix = Self.concat},               // TkGthanLthan
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},         // TkLeq
     .{.bp = .Comparison, .prefix = null, .infix = Self.binary},         // TkGeq
     .{.bp = .Equality, .prefix = null, .infix = Self.binary},           // Tk2Eq
@@ -673,6 +675,11 @@ pub const Parser = struct {
   fn pipeline(self: *Self, lhs: *Node, assignable: bool) !*Node {
     self.meta.pipes += 1;
     defer self.meta.pipes -= 1;
+    self.meta.sugars += 1;
+    return self.binary(lhs, assignable);
+  }
+
+  fn concat(self: *Self, lhs: *Node, assignable: bool) !*Node {
     self.meta.sugars += 1;
     return self.binary(lhs, assignable);
   }

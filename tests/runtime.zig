@@ -2017,6 +2017,7 @@ test "builtin-functions" {
   \\ # assert(!!panic, 'panic')
   \\ assert(!!print, 'print')
   \\ assert(!!println, 'println')
+  \\ assert(!!string, 'string')
   \\ (exit, assert)
   ;
   try doRuntimeTest(src);
@@ -4318,6 +4319,51 @@ test "pipelines .8" {
   \\  case _ as w => false
   \\ end
   \\ k |> assert(*, 'should be true')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "string" {
+  const src =
+  \\ let j = (1, 2, "a")
+  \\ string(j) |> assert(* == "(1, 2, 'a')", 'should be same')
+  \\ let j = (1, 2, "a", [None as Maybe{num}, Just(5)], Just('oops'))
+  \\ string(j) |> assert(* == "(1, 2, 'a', [None, Just(5)], Just('oops'))", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "str concat .1" {
+  const src =
+  \\ let j = "This is "
+  \\ j.concat("a very beautiful day!") |> println
+  \\ j.concat("a very beautiful day!") |> assert(* == "This is a very beautiful day!", 'should be same')
+  \\ let j = "the "
+  \\ "quick fox" |> j.concat |> assert(* == "the quick fox", 'should be same')
+  \\ "quick fox" |> j.concat |> (* == "the quick fox") |> assert(*, 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "str concat .2" {
+  const src =
+  \\ let j = (1, 2, "a", [None as Maybe{num}, Just(5)], Just('oops'))
+  \\ (string(j) <> " something " <> string(0xff)) |> println
+  \\ (
+  \\  string(j)
+  \\  <> " something "
+  \\  <> string(0xff)
+  \\  |> assert(
+  \\    * == "(1, 2, 'a', [None, Just(5)], Just('oops')) something 255",
+  \\    'should be same',)
+  \\ )
+  ;
+  try doRuntimeTest(src);
+}
+
+test "str concat .3" {
+  const src =
+  \\ (5 |> string) <> ", yeah" |> * == "5, yeah" |> assert(*, 'should be same')
   ;
   try doRuntimeTest(src);
 }

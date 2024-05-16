@@ -2669,3 +2669,25 @@ test "unary add" {
   });
 }
 
+test "pipelines .1" {
+  const src =
+  \\ let x = *
+  \\ println(x)
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "use of pipe placeholder outside a pipeline expression",
+  });
+}
+
+test "match <statement in expr>" {
+  const src =
+  \\ let j = 10
+  \\ let k = j |> match *
+  \\  case 1..6 as p => j = true
+  \\  case _ as w => j = false
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "expected token 'end' but found '='",
+  });
+}

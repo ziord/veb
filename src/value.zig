@@ -462,7 +462,7 @@ pub const ValueStringWriter = struct {
   pub const Writer = Vec(u8).Writer;
 
   pub fn init() @This() {
-    return @This(){.backing = Vec(u8).init()};
+    return .{.backing = Vec(u8).init()};
   }
 
   pub fn writer(self: *@This(), vm: *VM) Writer {

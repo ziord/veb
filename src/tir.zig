@@ -67,6 +67,7 @@ pub const NodeType = enum {
   NdRet,
   NdScope,
   NdTVar,
+  NdPipeHolder,
   NdProgram,
 };
 
@@ -106,7 +107,7 @@ pub const NumberNode = struct {
   typ: ?*Type = null,
 
   pub inline fn init(token: Token, value: f64) @This() {
-    return @This(){.token = IdentToken.init(token), .value = value};
+    return .{.token = IdentToken.init(token), .value = value};
   }
 
   pub fn lexeme(self: *@This(), al: Allocator) []const u8 {
@@ -123,32 +124,18 @@ pub const NumberNode = struct {
   }
 };
 
-/// NdString
-pub const StringNode = struct {
+
+/// NdEmpty, NdBool, NdString, NdPipeHolder
+pub const SymNode = struct {
   token: Token,
   typ: ?*Type = null,
 
   pub inline fn init(token: Token) @This() {
-    return @This(){.token = token};
+    return .{.token = token};
   }
 
   pub inline fn isAlloc(self: *@This()) bool {
     return self.token.ty == .TkEscString;
-  }
-
-  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
-    _ = depth;
-    _ = try u8w.writer().write(self.token.lexeme());
-  }
-};
-
-/// NdBool
-pub const BoolNode = struct {
-  token: Token,
-  typ: ?*Type = null,
-
-  pub inline fn init(token: Token) @This() {
-    return @This(){.token = token};
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
@@ -172,7 +159,7 @@ pub const BinaryNode = struct {
   typ: ?*Type = null,
 
   pub inline fn init(left: *Node, right: *Node, op_token: Token) @This() {
-    return @This(){
+    return .{
       .left = left,
       .right = right,
       .op_tkty = op_token.ty,
@@ -182,7 +169,7 @@ pub const BinaryNode = struct {
   }
 
   pub inline fn initRested(left: *Node, right: *Node, op_token: Token) @This() {
-    return @This(){
+    return .{
       .left = left,
       .right = right,
       .op_tkty = op_token.ty,
@@ -244,7 +231,7 @@ pub const UnaryNode = struct {
   typ: ?*Type = null,
 
   pub inline fn init(expr: *Node, op_token: Token) @This() {
-    return @This(){.expr = expr, .op = lex.Optr.init(op_token)};
+    return .{.expr = expr, .op = lex.Optr.init(op_token)};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -264,7 +251,7 @@ pub const ListNode = struct {
   typ: ?*Type = null,
 
   pub inline fn init(elems: NodeItems) @This() {
-    return @This() {.elems = elems};
+    return .{.elems = elems};
   }
 
   pub fn clone(self: *@This(), node: *Node, al: Allocator) *Node {
@@ -300,7 +287,7 @@ pub const MapNode = struct {
   pub const Pair = struct {key: *Node, value: *Node};
 
   pub inline fn init(pairs: []Pair) @This() {
-    return @This() {.pairs = pairs};
+    return .{.pairs = pairs};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -325,11 +312,11 @@ pub const TVarNode = struct {
   typ: ?*Type = null,
 
   pub inline fn init(token: Token) @This() {
-    return @This() {.token = token};
+    return .{.token = token};
   }
 
   pub inline fn initType(token: Token, typ: ?*Type) @This() {
-    return @This() {.token = token, .typ = typ};
+    return .{.token = token, .typ = typ};
   }
 
   pub inline fn box(self: *const @This(), al: Allocator) *@This() {
@@ -381,11 +368,11 @@ pub const ExprStmtNode = struct {
   has_sugar: bool = false,
 
   pub inline fn init(expr: *Node) @This() {
-    return @This() {.expr = expr};
+    return .{.expr = expr};
   }
 
   pub inline fn initAll(expr: *Node, has_sugar: bool) @This() {
-    return @This() {.expr = expr, .has_sugar = has_sugar};
+    return .{.expr = expr, .has_sugar = has_sugar};
   }
 
   pub fn isSelfDotAccessAssignment(self: *@This()) ?*DotAccessNode {
@@ -421,12 +408,12 @@ pub const ParamNode = struct {
   typ: *Type,
 
   pub inline fn init(name: Token, typ: *Type) @This() {
-    return @This() {.name = name, .typ = typ};
+    return .{.name = name, .typ = typ};
   }
 
   pub inline fn new(name: Token, typ: *Type, al: Allocator) *@This() {
     const obj = util.alloc(ParamNode, al);
-    obj.* = @This(){.name = name, .typ = typ};
+    obj.* = .{.name = name, .typ = typ};
     return obj;
   }
 
@@ -457,7 +444,7 @@ pub const FieldNode = struct {
   typ: ?*Type,
 
   pub inline fn init(name: Token, value: ?*Node, typ: ?*Type) @This() {
-    return @This() {.name = IdentToken.init(name), .value = value, .typ = typ};
+    return .{.name = IdentToken.init(name), .value = value, .typ = typ};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -484,7 +471,7 @@ pub const PubFieldNode = struct {
   typ: ?*Type,
 
   pub inline fn init(name: Token, value: ?*Node, typ: ?*Type) @This() {
-    return @This() {.name = IdentToken.init(name), .value = value, .typ = typ};
+    return .{.name = IdentToken.init(name), .value = value, .typ = typ};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -511,7 +498,7 @@ pub const VarDeclNode = struct {
   typ: ?*Type,
 
   pub inline fn init(name: Token, value: *Node, typ: ?*Type) @This() {
-    return @This() {.name = IdentToken.init(name), .value = value, .typ = typ};
+    return .{.name = IdentToken.init(name), .value = value, .typ = typ};
   }
 
   pub inline fn box(self: *const @This(), al: Allocator) *@This() {
@@ -547,7 +534,7 @@ pub const BlockNode = struct {
   scoped: bool = false,
 
   pub inline fn init(nodes: NodeItems) @This() {
-    return @This() {.nodes = nodes};
+    return .{.nodes = nodes};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -633,7 +620,7 @@ pub const TypeNode = struct {
   typ: *Type,
 
   pub inline fn init(typ: *Type, token: Token) @This() {
-    return @This() {.tkbit = TokenBit.init(token), .typ = typ};
+    return .{.tkbit = TokenBit.init(token), .typ = typ};
   }
 
   pub fn dryClone(self: *@This(), al: Allocator) *TypeNode {
@@ -671,7 +658,7 @@ pub const AliasNode = struct {
     aliasee.typ.alias = alias.typ;
     alias.from_alias_or_annotation = true;
     aliasee.from_alias_or_annotation = true;
-    return @This() {.alias = alias, .aliasee = aliasee, .typ = alias.typ};
+    return .{.alias = alias, .aliasee = aliasee, .typ = alias.typ};
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
@@ -689,11 +676,11 @@ pub const DerefNode = struct {
   typ: ?*Type = null,
 
   pub inline fn init(expr: *Node, token: Token) @This() {
-    return @This() {.expr = expr, .tkbit = TokenBit.init(token)};
+    return .{.expr = expr, .tkbit = TokenBit.init(token)};
   }
 
   pub inline fn initAssertion(expr: *Node, token: Token) @This() {
-    return @This() {.expr = expr, .tkbit = TokenBit.init(token), .assertion = true};
+    return .{.expr = expr, .tkbit = TokenBit.init(token), .assertion = true};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -722,7 +709,7 @@ pub const DotAccessNode = struct {
   typ: ?*Type = null,
 
   pub inline fn init(lhs: *Node, rhs: *Node) @This() {
-    return @This() { .lhs = lhs, .rhs = rhs};
+    return .{ .lhs = lhs, .rhs = rhs};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -752,7 +739,7 @@ pub const SubscriptNode = struct {
   typ: ?*Type = null,
 
   pub inline fn init(expr: *Node, index: *Node) @This() {
-    return @This() { .expr = expr, .index = index};
+    return .{ .expr = expr, .index = index};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -781,7 +768,7 @@ pub const ConditionNode = struct {
   is_from_loop: bool = false,
 
   pub inline fn init(cond: *Node) @This() {
-    return @This() {.cond = cond};
+    return .{.cond = cond};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -816,28 +803,13 @@ pub const MatchConditionNode = struct {
   }
 };
 
-/// NdEmpty
-pub const EmptyNode = struct {
-  token: Token,
-
-  pub inline fn init(token: Token) @This() {
-    return @This() {.token = token};
-  }
-
-  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
-    _ = depth;
-    _ = self;
-    _ = try u8w.writer().write("<empty>\n");
-  }
-};
-
 /// NdCast
 pub const CastNode = struct {
   expr: *Node,
   typn: *TypeNode,
 
   pub inline fn init(expr: *Node, typn: *TypeNode) @This() {
-    return @This() {.expr = expr, .typn = typn};
+    return .{.expr = expr, .typn = typn};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -863,7 +835,7 @@ pub const SimpleIfNode = struct {
   els: *Node,
 
   pub inline fn init(cond: *Node, then: *Node, els: *Node) @This() {
-    return @This() {.cond = cond, .then = then, .els = els};
+    return .{.cond = cond, .then = then, .els = els};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -897,7 +869,7 @@ pub const WhileNode = struct {
   then: *Node,
 
   pub inline fn init(cond: *Node, then: *Node) @This() {
-    return @This() {.cond = cond, .then = then};
+    return .{.cond = cond, .then = then};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -918,7 +890,7 @@ pub const ControlNode = struct {
   patch_index: usize = 0,
 
   pub inline fn init(token: Token) @This() {
-    return @This() {.token = token};
+    return .{.token = token};
   }
 
   pub fn isBreak(self: ControlNode) bool {
@@ -947,7 +919,7 @@ pub const BasicCallNode = struct {
   typ: ?*Type = null,
 
   pub inline fn init(expr: *Node, _args: NodeItems) @This() {
-    return @This() {.expr = expr, ._args = _args.ptr, ._len = @intCast(_args.len)};
+    return .{.expr = expr, ._args = _args.ptr, ._len = @intCast(_args.len)};
   }
 
   pub inline fn args(self: *@This()) NodeItems {
@@ -1006,7 +978,7 @@ pub const GenericCallNode = struct {
   call: *Node,
 
   pub inline fn init(call: *Node, targs: TypeItems) @This() {
-    return @This() {.call = call, .targs = targs};
+    return .{.call = call, .targs = targs};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -1040,7 +1012,7 @@ pub const CallNode = struct {
     va_start: usize, variadic: bool, labeled: bool,
     typ: ?*Type,
   ) @This() {
-    return @This() {
+    return .{
       .expr = expr, .args = args, .targs = targs,
       .va_start = va_start, .variadic = variadic,
       .labeled = labeled, .typ = typ,
@@ -1071,7 +1043,7 @@ pub const ErrorNode = struct {
   typ: ?*Type = null,
 
   pub inline fn init(expr: *Node) @This() {
-    return @This() {.expr = expr};
+    return .{.expr = expr};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -1094,7 +1066,7 @@ pub const OrElseNode = struct {
   typ: ?*Type = null,
 
   pub inline fn init(ok: *Node, err: *Node, evar: ?*TVarNode) @This() {
-    return @This(){.ok = ok, .err = err, .evar = evar};
+    return .{.ok = ok, .err = err, .evar = evar};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -1123,7 +1095,7 @@ pub const FunData = struct {
   allow_all_aspec: bool = false,
 
   pub inline fn init(name: ?Token, body: *Node, ret: ?*Type, is_builtin: bool, variadic: bool, publ: bool) @This() {
-    return @This() {
+    return .{
       .name = name, .body = body, .ret = ret,
       .builtin = is_builtin, .variadic = variadic,
       .public = publ
@@ -1152,7 +1124,7 @@ pub const BasicFunNode = struct {
     params: ParamItems, name: ?Token, body: *Node, ret: ?*Type,
     is_builtin: bool, variadic: bool, publ: bool, al: Allocator
   ) @This() {
-    return @This(){
+    return .{
       .params = params,
       .data = util.box(FunData, FunData.init(name, body, ret, is_builtin, variadic, publ), al)
     };
@@ -1205,7 +1177,7 @@ pub const GenericFunNode = struct {
   fun: *Node,
 
   pub inline fn init(params: TypeItems, fun: *Node) @This() {
-    return @This(){.params = params, .fun = fun};
+    return .{.params = params, .fun = fun};
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
@@ -1263,7 +1235,7 @@ pub const ClassNode = struct {
     name: Token, protos: ?*Type, fields: NodeItems, methods: NodeItems,
     params: ?TypeItems, checked: bool, builtin: bool, al: Allocator
   ) @This() {
-    return @This() {
+    return .{
       .name = IdentToken.init(name),
       .protos = protos, 
       .data = util.box(
@@ -1304,7 +1276,7 @@ pub const LblArgNode = struct {
   value: *Node,
 
   pub inline fn init(label: Token, value: *Node, ident: *Node) @This() {
-    return @This(){.label = label.lexeme(), .value = value, .ident = ident};
+    return .{.label = label.lexeme(), .value = value, .ident = ident};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -1337,7 +1309,7 @@ pub const MatchNode = struct {
   pub const CaseItems = Items(*ptn.Case);
 
   pub inline fn init(expr: *Node, cases: CaseItems) @This() {
-    return @This() {.expr = expr, .cases = cases};
+    return .{.expr = expr, .cases = cases};
   }
 
   pub inline fn getVariableOfInterest(self: *@This()) Token {
@@ -1380,7 +1352,7 @@ pub const MarkerNode = struct {
   payload: ?*Node = null,
 
   pub inline fn init(token: Token) @This() {
-    return @This() {.token = token};
+    return .{.token = token};
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer, comptime str: []const u8) !void {
@@ -1398,7 +1370,7 @@ pub const RetNode = struct {
   typ: ?*Type = null,
 
   pub inline fn init(expr: ?*Node, token: Token) @This() {
-    return @This() {.expr = expr, .tkbit = TokenBit.init(token)};
+    return .{.expr = expr, .tkbit = TokenBit.init(token)};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -1421,7 +1393,7 @@ pub const ScopeNode = struct {
   leave: bool,
 
   pub inline fn init(enter: bool, leave: bool) @This() {
-    return @This() {.enter = enter, .leave = leave};
+    return .{.enter = enter, .leave = leave};
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
@@ -1437,7 +1409,7 @@ pub const ProgramNode = struct {
   decls: NodeItems,
 
   pub inline fn init(decls: NodeItems) @This() {
-    return @This() {.decls = decls,};
+    return .{.decls = decls,};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -1457,8 +1429,8 @@ pub const ProgramNode = struct {
 
 pub const Node = union(NodeType)  {
   NdNumber: NumberNode,
-  NdString: StringNode,
-  NdBool: BoolNode,
+  NdString: SymNode,
+  NdBool: SymNode,
   NdBinary: BinaryNode,
   NdAssign: BinaryNode,
   NdSubscript: SubscriptNode,
@@ -1477,7 +1449,8 @@ pub const Node = union(NodeType)  {
   NdDeref: DerefNode,
   NdCondition: ConditionNode,
   NdMCondition: MatchConditionNode,
-  NdEmpty: EmptyNode,
+  NdEmpty: SymNode,
+  NdPipeHolder: SymNode,
   NdCast: CastNode,
   NdSimpleIf: SimpleIfNode,
   NdWhile: WhileNode,
@@ -1625,6 +1598,13 @@ pub const Node = union(NodeType)  {
   pub inline fn isEmpty(self: *const @This()) bool {
     return switch (self.*) {
       .NdEmpty => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isPipeHolder(self: *const @This()) bool {
+    return switch (self.*) {
+      .NdPipeHolder => true,
       else => false,
     };
   }
@@ -1878,7 +1858,7 @@ pub const Node = union(NodeType)  {
     return switch (node.*) {
       .NdNumber, .NdString, .NdBool, .NdAlias,
       .NdEmpty, .NdControl, .NdFailMarker, .NdGenericFun,
-      .NdRedunMarker, .NdScope, .NdDiagStartMarker => node,
+      .NdRedunMarker, .NdScope, .NdDiagStartMarker, .NdPipeHolder => node,
       .NdBinary, .NdAssign => |*nd| nd.clone(node, al),
       .NdList, .NdTuple => |*nd| nd.clone(node, al),
       inline else => |*nd| nd.clone(al),
@@ -1897,8 +1877,7 @@ pub const Node = union(NodeType)  {
   pub fn getToken(self: *const @This()) Token {
     return switch (self.*) {
       .NdNumber => |*nd| nd.token.toToken(),
-      .NdString => |*nd| nd.token,
-      .NdBool => |*nd| nd.token,
+      .NdString, .NdBool, .NdEmpty, .NdPipeHolder => |*nd| nd.token,
       .NdBinary, .NdAssign => |*nd| Token.fromBinaryNode(nd),
       .NdUnary => |*nd| nd.op.token(),
       .NdExprStmt => |*nd| nd.expr.getToken(),
@@ -1917,7 +1896,6 @@ pub const Node = union(NodeType)  {
       .NdGenericCall => |*nd| nd.call.getToken(),
       .NdError => |*nd| nd.expr.getToken(),
       .NdOrElse => |*nd| nd.ok.getToken(),
-      .NdEmpty => |nd| nd.token,
       .NdDotAccess => |*nd| nd.lhs.getToken(),
       .NdLblArg => |*nd| nd.ident.getToken(),
       .NdMatch => |*nd| nd.expr.getToken(),
@@ -2029,7 +2007,8 @@ pub const Node = union(NodeType)  {
       .NdWhile, .NdControl, .NdScope, .NdLblArg,
       .NdFailMarker, .NdRedunMarker,
       .NdEmpty, .NdDiagStartMarker,
-      .NdProgram, .NdClass, .NdMatch => null,
+      .NdProgram, .NdClass, .NdMatch,
+      .NdPipeHolder => null,
       .NdBasicCall => |*nd| nd.typ,
       .NdGenericCall => |*nd| nd.call.getType(),
       inline else => |*nd| nd.typ,
@@ -2049,8 +2028,7 @@ pub const Node = union(NodeType)  {
       .NdDotAccess => |*nd| nd.typ = typ,
       .NdSubscript => |*nd| nd.typ = typ,
       .NdDeref => |*nd| nd.typ = typ,
-      .NdString => |*nd| nd.typ = typ,
-      .NdBool => |*nd| nd.typ = typ,
+      .NdString, .NdBool => |*nd| nd.typ = typ,
       .NdScope => {},
       else => {
         util.logger.debug("Attempt to set type on node: {}", .{self});
@@ -2060,9 +2038,8 @@ pub const Node = union(NodeType)  {
 
   pub fn forceSetType(self: *@This(), typ: *Type) void {
     switch (self.*) {
-      .NdString => |*nd| nd.typ = typ,
+      .NdString, .NdBool => |*nd| nd.typ = typ,
       .NdNumber => |*nd| nd.typ = typ,
-      .NdBool => |*nd| nd.typ = typ,
       .NdBinary, .NdAssign => |*nd| nd.typ = typ,
       .NdUnary => |*nd| nd.typ = typ,
       .NdDotAccess => |*nd| nd.typ = typ,
@@ -2082,9 +2059,9 @@ pub const Node = union(NodeType)  {
       .NdCondition, .NdMCondition, .NdEmpty,
       .NdControl, .NdFailMarker,
       .NdRedunMarker, .NdScope, .NdTVar,
-      .NdDiagStartMarker => false,
+      .NdDiagStartMarker, .NdPipeHolder => false,
       .NdOrElse, .NdMatch, .NdDeref => true,
-      .NdBinary => |*nd| nd.left.hasSugar() or nd.right.hasSugar(),
+      .NdBinary => |*nd| nd.op_tkty == .TkPipeGthan or nd.left.hasSugar() or nd.right.hasSugar(),
       .NdAssign => |*nd| nd.right.hasSugar() or nd.left.hasSugar(),
       .NdSubscript => |*nd| nd.expr.hasSugar() or nd.index.hasSugar(),
       .NdUnary => |*nd| nd.expr.hasSugar(),
@@ -2193,7 +2170,7 @@ pub const AliasInfo = struct {
   rhs: *Type, // aliasee
 
   pub inline fn init(lhs: *Type, rhs: *Type) @This() {
-    return @This() {.lhs = lhs, .rhs = rhs};
+    return .{.lhs = lhs, .rhs = rhs};
   }
 };
 
@@ -4024,7 +4001,7 @@ pub const Concrete = struct {
   val: ?[]const u8 = null,
 
   pub inline fn init(kind: TypeKind) @This() {
-    return @This() {.kind = kind};
+    return .{.kind = kind};
   }
 
   pub inline fn toType(self: Concrete) Type {
@@ -4069,7 +4046,7 @@ pub const Constant = struct {
   val: []const u8,
 
   pub inline fn init(kind: TypeKind, val: []const u8) @This() {
-    return @This() {.kind = kind, .val = val};
+    return .{.kind = kind, .val = val};
   }
 
   pub inline fn isTrue(self: *Constant) bool {
@@ -4114,7 +4091,7 @@ pub const Union = struct {
   variants: TypeHashSet,
 
   pub inline fn init() @This() {
-    return Union{.variants = TypeHashSet.init()};
+    return .{.variants = TypeHashSet.init()};
   }
 
   pub inline fn toType(self: Union, al: Allocator) Type {
@@ -4198,7 +4175,7 @@ pub const TaggedUnion = struct {
   active: i32 = -1,
 
   pub inline fn init() @This() {
-    return TaggedUnion{.variants = TypeList.init()};
+    return .{.variants = TypeList.init()};
   }
 
   pub inline fn toType(self: TaggedUnion, al: Allocator) Type {
@@ -4322,7 +4299,7 @@ pub const Generic = struct {
   tparams: TypeList,
 
   pub inline fn init(base: *Type) @This() {
-    return Generic {.tparams = TypeList.init(), .base = base};
+    return .{.tparams = TypeList.init(), .base = base};
   }
 
   pub inline fn toType(self: Generic) Type {
@@ -4372,7 +4349,7 @@ pub const Variable = struct {
 
 
   pub inline fn init() @This() {
-    return Variable {.tokens = TokenList.init()};
+    return .{.tokens = TokenList.init()};
   }
 
   pub inline fn appendTok(self: *@This(), name: Token, al: Allocator) void {
@@ -4430,7 +4407,7 @@ pub const Function = struct {
   };
 
   pub inline fn init(ret: *Type, tparams: ?[]*Type, node: ?*Node, al: Allocator) @This() {
-    return Function {
+    return .{
       .tparams = tparams,
       .data = util.box(
         FunctionData, .{.params = &[_]*Type{}, .ret = ret, .node = node}, al
@@ -4500,7 +4477,7 @@ pub const Class = struct {
     name: []const u8, tktype: TokenType, fields: ds.ArrayListUnmanaged(*Node), methods: TypeList,
     tparams: ?[]*Type, node: ?*Node, empty: bool, builtin: bool, al: Allocator
   ) @This() {
-    return Class {
+    return .{
       .empty = empty,
       .builtin = builtin,
       .tparams = tparams,
@@ -4715,7 +4692,7 @@ pub const Tag = struct {
     tdecl: ?*Type = null,
 
     pub fn clone(self: @This(), al: Allocator, map: *TypeHashMap) @This() {
-      return @This(){
+      return .{
         .name = self.name,
         .typ = self.typ._clone(map, al),
         .tdecl = self.tdecl,
@@ -4724,7 +4701,7 @@ pub const Tag = struct {
   };
 
   pub inline fn init(name: []const u8, ty: TokenType) @This() {
-    return @This(){.name = name, .fields = null, .ty = ty};
+    return .{.name = name, .fields = null, .ty = ty};
   }
 
   pub inline fn isParameterized(self: *@This()) bool {
@@ -4833,7 +4810,7 @@ pub const TagOrClass = struct {
   tktype: TokenType,
 
   pub inline fn init(name: []const u8, tktype: TokenType) @This() {
-    return @This(){.name = name, .tktype = tktype};
+    return .{.name = name, .tktype = tktype};
   }
 
   pub inline fn nameEql(self: *@This(), name: []const u8) bool {
@@ -4861,7 +4838,7 @@ pub const Instance = struct {
   cls: *Type,
 
   pub inline fn init(cls: *Type) @This() {
-    return Instance {.cls = cls};
+    return .{.cls = cls};
   }
 
   pub fn toType(self: @This()) Type {
@@ -4883,7 +4860,7 @@ pub const Recursive = struct {
   base: *Type,
 
   pub inline fn init(base: *Type) @This() {
-    return @This() {.base = base};
+    return .{.base = base};
   }
 
   pub fn isRelatedTo(this: *Recursive, other: *Type, ctx: RelationContext, al: Allocator) bool {
@@ -4906,7 +4883,7 @@ pub const Top = struct {
   child: *Type,
 
   pub inline fn init(child: *Type) @This() {
-    return Top {.child = child};
+    return .{.child = child};
   }
 
   pub inline fn toType(self: @This()) Type {

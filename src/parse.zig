@@ -51,6 +51,7 @@ pub const Parser = struct {
     loops: u32 = 0,
     parens: u32 = 0,
     sugars: u32 = 0,
+    pipes: u32 = 0,
     func: ?*Node = null,
     class: ?*Node = null,
     m_literals: ds.ArrayList(NameTuple),
@@ -62,7 +63,7 @@ pub const Parser = struct {
     const NameTuple = struct{*Node, *Node, bool};
 
     fn init(al: std.mem.Allocator, mode: ParseMode) @This() {
-      return @This(){.m_literals = ds.ArrayList(NameTuple).init(al), .mode = mode};
+      return .{.m_literals = ds.ArrayList(NameTuple).init(al), .mode = mode};
     }
   };
 
@@ -100,7 +101,7 @@ pub const Parser = struct {
     .{.bp = .Term, .prefix = Self.unary, .infix = Self.binary},         // TkPlus
     .{.bp = .Term, .prefix = Self.unary, .infix = Self.binary},         // TkMinus
     .{.bp = .Factor, .prefix = null, .infix = Self.binary},             // TkSlash
-    .{.bp = .Factor, .prefix = null, .infix = Self.binary},             // TkStar
+    .{.bp = .Factor, .prefix = Self.placeholder, .infix = Self.binary}, // TkStar
     .{.bp = .Call, .prefix = Self.grouping, .infix = Self.callExpr},    // TkLBracket
     .{.bp = .None, .prefix = null, .infix = null},                      // TkRBracket
     .{.bp = .Access, .prefix = Self.listing, .infix = Self.indexing},   // TkLSqrBracket
@@ -122,6 +123,7 @@ pub const Parser = struct {
     .{.bp = .Access, .prefix = null, .infix = Self.dotderef},           // TkDot
     .{.bp = .None, .prefix = null, .infix = null},                      // TkQMark
     .{.bp = .None, .prefix = null, .infix = null},                      // Tk2QMark
+    .{.bp = .Unary, .prefix = null, .infix = Self.pipeline},            // TkPipeGthan
     .{.bp = .None, .prefix = null, .infix = null},                      // TkNewline
     .{.bp = .None, .prefix = null, .infix = null},                      // TkEqGrt
     .{.bp = .None, .prefix = null, .infix = null},                      // Tk2Dot
@@ -646,14 +648,33 @@ pub const Parser = struct {
   fn string(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     if (!self.match(.TkString)) try self.consume(.TkEscString);
-    return self.newNode(.{.NdString = tir.StringNode.init(self.previous_tok)});
+    return self.newNode(.{.NdString = tir.SymNode.init(self.previous_tok)});
   }
 
   fn boolean(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     const ty: lex.TokenType = if (self.check(.TkTrue)) .TkTrue else .TkFalse;
     try self.consume(ty);
-    return self.newNode(.{.NdBool = tir.BoolNode.init(self.previous_tok)});
+    return self.newNode(.{.NdBool = tir.SymNode.init(self.previous_tok)});
+  }
+
+  fn placeholder(self: *Self, assignable: bool) !*Node {
+    _ = assignable;
+    if (self.meta.pipes == 0) {
+      self.softErrMsg(
+        self.current_tok,
+        "use of pipe placeholder outside a pipeline expression",
+      );
+    }
+    try self.consume(.TkStar);
+    return self.newNode(.{.NdPipeHolder = tir.SymNode.init(self.previous_tok)});
+  }
+
+  fn pipeline(self: *Self, lhs: *Node, assignable: bool) !*Node {
+    self.meta.pipes += 1;
+    defer self.meta.pipes -= 1;
+    self.meta.sugars += 1;
+    return self.binary(lhs, assignable);
   }
 
   fn unary(self: *Self, assignable: bool) !*Node {
@@ -1913,7 +1934,7 @@ pub const Parser = struct {
       body = try self.statement();
     } else {
       ret_token = self.current_tok;
-      body = try self.parseExpr();
+      body = try self._parse(.Or);
     }
     if (self.meta.m_literals.isNotEmpty()) {
       // take all {name, id} pairs, and generate conditions
@@ -2036,7 +2057,7 @@ pub const Parser = struct {
     // ClassDecl           :=  "class" Ident TypeParams TypeAnnotation? ClassBody "end"
     const prev_cls = self.meta.class;
     defer self.meta.class = prev_cls;
-    self.meta.class = @constCast(&@as(Node, .{.NdEmpty = tir.EmptyNode.init(self.previous_tok)}));
+    self.meta.class = @constCast(&@as(Node, .{.NdEmpty = tir.SymNode.init(self.previous_tok)}));
     switch (self.current_tok.ty) {
       .TkList, .TkError, .TkTuple, .TkMap, .TkStr => (
         if (self.inBuiltinMode()) try self.advance()

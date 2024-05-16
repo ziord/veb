@@ -26,7 +26,7 @@ fn CreateMap(comptime K: type, comptime V: type) type {
     const Map = std.StringHashMap(V);
 
     pub fn init(allocator: Allocator) @This() {
-      return @This() {.map = Map.init(allocator)};
+      return .{.map = Map.init(allocator)};
     }
 
     pub fn put(self: *@This(), key: K, value: V) void {
@@ -51,7 +51,7 @@ pub fn GenScope(comptime K: type, comptime V: type) type {
     pub const ScopeMap = CreateMap(K, V);
 
     pub fn init(al: Allocator) @This(){
-      return @This() {.decls = ds.ArrayList(ScopeMap).init(al)};
+      return .{.decls = ds.ArrayList(ScopeMap).init(al)};
     }
 
     pub inline fn allocator(self: *@This()) Allocator {
@@ -222,7 +222,7 @@ pub const TypeLinker = struct {
   const Self = @This();
 
   pub fn init(ctx: *TContext, diag: *Diagnostic, u8w: *U8Writer) @This() {
-    return Self {
+    return .{
       .ctx = ctx,
       .cyc_scope = PairScope.init(ctx.allocator()),
       .diag = diag,
@@ -900,7 +900,7 @@ pub const TypeLinker = struct {
       .NdProgram => |*nd| self.linkProgram(nd),
       .NdNumber, .NdString, .NdBool, .NdControl, .NdScope,
       .NdCondition, .NdMCondition, .NdEmpty, .NdMatch,
-      .NdFailMarker, .NdRedunMarker, .NdDiagStartMarker, => {},
+      .NdFailMarker, .NdRedunMarker, .NdDiagStartMarker, .NdPipeHolder => {},
     };
   }
 };

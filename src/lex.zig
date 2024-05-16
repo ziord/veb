@@ -81,6 +81,7 @@ pub const TokenType = enum (u8) {
   TkDot,            // .
   TkQMark,          // ?
   Tk2QMark,         // ??
+  TkPipeGthan,      // |>
   TkNewline,        // \n
   TkEqGrt,          // =>
   Tk2Dot,           // ..
@@ -220,6 +221,7 @@ pub const TokenType = enum (u8) {
       .TkDot => ".",
       .TkQMark => "?",
       .Tk2QMark => "??",
+      .TkPipeGthan => "|>",
       .TkNewline => "<newline>",
       .TkEqGrt => "=>",
       .Tk2Dot => "..",
@@ -359,7 +361,7 @@ pub const Optr = struct {
   line: u32,
 
   pub fn init(tok: Token) @This() {
-    return @This() {.ty = tok.ty, .pos = tok.offset, .line = tok.line};
+    return .{.ty = tok.ty, .pos = tok.offset, .line = tok.line};
   }
 
   pub inline fn token(self: Optr) Token {
@@ -908,10 +910,10 @@ pub const Lexer = struct {
       '{' => self.newToken(.TkLCurly),
       '}' => self.newToken(.TkRCurly),
       '^' => self.newToken(.TkCaret),
-      '|' => self.newToken(.TkPipe),
       '~' => self.newToken(.TkTilde),
       '\n' => self.newToken(.TkNewline),
       '"', '\'' => self.lexStr(ch),
+      '|' => self.newToken(if (self.match('>')) .TkPipeGthan else .TkPipe),
       '?' => self.newToken(if (self.match('?')) .Tk2QMark else .TkQMark),
       '.' => self.newToken(if (self.match('.')) .Tk2Dot else .TkDot),
       '!' => self.newToken(if (self.match('=')) .TkNeq else .TkExMark),

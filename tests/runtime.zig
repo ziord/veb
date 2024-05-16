@@ -4230,3 +4230,94 @@ test "nullable assertions" {
   ;
   try doRuntimeTest(src);
 }
+
+test "pipelines .1" {
+  const src =
+  \\ let foo = 5
+  \\ let x = "fox".len()
+  \\ let bar = def (n: num) => n * 5
+  \\ let foobar = def (k: num, y: num) => k + y
+  \\ let a = foo |> bar |> foobar(x, *)
+  \\ a |> println(*, *, *)
+  \\ a |> assert(28 == *, 'should be 28')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "pipelines .2" {
+  const src =
+  \\ [1, 2, 3] |> *.len() |> assert(* == 3, 'should be 3')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "pipelines .3" {
+  const src =
+  \\ let j = 1 |> (*, *, *, *)
+  \\ j |> println
+  \\ j |> assert(*.len() == 4 and *[0] == 1, 'should be these things')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "pipelines .4" {
+  const src =
+  \\ println |> *(5 |> *)
+  \\ assert |> *(5 |> * == 5, 'should be 5')
+  \\ assert |> *(6 != 5, 'should not be 5')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "pipelines .5" {
+  const src =
+  \\ def foo()
+  \\  return Error('oops') as Result{num, str}
+  \\ end
+  \\ let j = 5 |> (foo() orelse *)
+  \\ j |> println
+  \\ j |> assert(* == 5, 'should be 5')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "pipelines .6" {
+  const src =
+  \\ let j = 5
+  \\ let k = j |> match *
+  \\  case 1..6 as p => p |> println(*)
+  \\  case _ as w => w |> println(*, 'oops')
+  \\ end
+  \\ k is void |> assert(*, 'should be true')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "pipelines .7" {
+  const src =
+  \\ let j = 5
+  \\ let k = j |> match *
+  \\  case 1..6 as p => p |> println(*)
+  \\  case _ as w => w |> println(*, 'oops')
+  \\ end
+  \\ k is void |> assert(*, 'should be true')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "pipelines .8" {
+  const src =
+  \\ def foo()
+  \\  return Error('oops') as Result{num, str}
+  \\ end
+  \\ let j = 5 |> (foo() orelse *)
+  \\ j |> println
+  \\ j |> assert(* == 5, 'should be 5')
+  \\ let k = j |> match *
+  \\  case 1..6 as p => true
+  \\  case _ as w => false
+  \\ end
+  \\ k |> assert(*, 'should be true')
+  ;
+  try doRuntimeTest(src);
+}

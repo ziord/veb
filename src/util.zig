@@ -10,7 +10,7 @@ pub const NameGen = struct {
   name_id: usize = 0,
 
   pub inline fn init(al: Allocator) @This() {
-    return @This(){.al = al};
+    return .{.al = al};
   }
 
   pub fn generate(self: *@This(), comptime fmt: []const u8, args: anytype) [] const u8 {
@@ -39,7 +39,7 @@ pub fn TWriter(comptime T: type) type {
     pub const Writer = std.ArrayList(T).Writer;
 
     pub fn init(al: Allocator) @This() {
-      return @This(){.backing = std.ArrayList(T).init(al)};
+      return .{.backing = std.ArrayList(T).init(al)};
     }
 
     pub fn writer(self: *@This()) Writer {

@@ -10,11 +10,11 @@ pub fn ArrayList(comptime T: type) type {
     list: std.ArrayList(T),
 
     pub inline fn init(al: Allocator) @This() {
-      return @This() {.list = std.ArrayList(T).init(al)};
+      return .{.list = std.ArrayList(T).init(al)};
     }
 
     pub inline fn initCapacity(cap: usize, al: Allocator) @This() {
-      return @This() {.list = std.ArrayList(T).initCapacity(al, cap) catch std.ArrayList(T).init(al)};
+      return .{.list = std.ArrayList(T).initCapacity(al, cap) catch std.ArrayList(T).init(al)};
     }
 
     pub inline fn initWith(al: Allocator, item: T) @This() {
@@ -407,7 +407,7 @@ pub fn ArrayHashMap(comptime K: type, comptime V: type) type {
     map: std.AutoArrayHashMap(K, V),
 
     pub inline fn init(al: Allocator) @This() {
-      return @This() {.map = std.AutoArrayHashMap(K, V).init(al)};
+      return .{.map = std.AutoArrayHashMap(K, V).init(al)};
     }
 
     pub inline fn iterator(self: *@This()) std.AutoArrayHashMap(K, V).Iterator {
@@ -462,7 +462,7 @@ pub fn ArrayHashMap(comptime K: type, comptime V: type) type {
         }
         return new;
       };
-      return @This() {.map = map};
+      return .{.map = map};
     }
 
     pub inline fn clearAndFree(self: *@This()) void {
@@ -482,7 +482,7 @@ pub fn ArrayHashMapUnmanaged(comptime K: type, comptime V: type) type {
     const Map = std.AutoArrayHashMapUnmanaged(K, V);
 
     pub inline fn init() @This() {
-      return @This() {.map = std.AutoArrayHashMapUnmanaged(K, V){}};
+      return .{.map = std.AutoArrayHashMapUnmanaged(K, V){}};
     }
 
     pub inline fn iterator(self: *@This()) Map.Iterator {
@@ -533,7 +533,7 @@ pub fn ArrayHashMapUnmanaged(comptime K: type, comptime V: type) type {
         }
         return new;
       };
-      return @This() {.map = map};
+      return .{.map = map};
     }
 
     pub inline fn clearAndFree(self: *@This(), al: Allocator) void {

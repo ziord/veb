@@ -317,7 +317,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
       map: *Self,
 
       pub fn init(self: *Self) @This() {
-        return @This() {.curr = 0, .map = self};
+        return .{.curr = 0, .map = self};
       }
 
       pub fn next(self: *@This()) ?K {

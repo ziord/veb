@@ -191,7 +191,7 @@ const LocalVar = struct {
   captured: bool = false,
 
   pub fn init(scope: i32, _name: []const u8, reg: u32, index: u32) @This() {
-    return @This() {.scope = scope, ._name = _name.ptr, ._name_len = @intCast(_name.len), .reg = reg, .index = index};
+    return .{.scope = scope, ._name = _name.ptr, ._name_len = @intCast(_name.len), .reg = reg, .index = index};
   }
 
   pub inline fn name(self: *const LocalVar) []const u8 {
@@ -204,7 +204,7 @@ const Upvalue = struct {
   is_local: bool,
 
   pub fn init(index: u32, is_local: bool) @This() {
-    return @This() {.index = index, .is_local = is_local};
+    return .{.index = index, .is_local = is_local};
   }
 };
 
@@ -682,12 +682,12 @@ pub const Compiler = struct {
     return self.cConst(dst, value.numberVal(node.value), node.token.line);
   }
 
-  fn cBool(self: *Self, node: *tir.BoolNode, dst: u32) u32 {
+  fn cBool(self: *Self, node: *tir.SymNode, dst: u32) u32 {
     // load rx, memidx
     return self.cConst(dst, value.boolVal(node.token.is(.TkTrue)), node.token.line);
   }
 
-  fn cEscString(self: *Self, node: *tir.StringNode, dst: u32) u32 {
+  fn cEscString(self: *Self, node: *tir.SymNode, dst: u32) u32 {
     const token = node.token;
     const val = token.lexeme();
     const escapes = std.mem.count(u8, val, "\\");
@@ -721,7 +721,7 @@ pub const Compiler = struct {
     );
   }
 
-  fn cString(self: *Self, node: *tir.StringNode, dst: u32) u32 {
+  fn cString(self: *Self, node: *tir.SymNode, dst: u32) u32 {
     if (node.token.is(.TkString)) {
       return self.cConst(
         dst,
@@ -1706,7 +1706,8 @@ pub const Compiler = struct {
       .NdMatch => |*nd| self.cMatch(nd, reg),
       .NdMCondition => |*nd| self.c(nd.tst.NdCondition.cond, reg),
       .NdParam, .NdField, .NdPubField,
-      .NdProgram, .NdCondition, .NdLblArg, .NdOrElse => unreachable,
+      .NdProgram, .NdCondition, .NdLblArg,
+      .NdOrElse, .NdPipeHolder => unreachable,
     };
   }
 

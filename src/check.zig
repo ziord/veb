@@ -3760,6 +3760,9 @@ pub const TypeChecker = struct {
       }
       return;
     }
+    if (node.op_tkty == .TkPipeGthan) {
+      return self.error_(true, err_token, "Invalid pipe application", .{});
+    }
     var errTy: ?*Type = null;
     if (!node_ty.typeidEql(&UnitTypes.tyNumber)) {
       errTy = node_ty;

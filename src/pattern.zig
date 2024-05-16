@@ -35,7 +35,7 @@ pub const Constructor = struct {
   node: ?*Node = null,
 
   pub fn init(name: []const u8, tktype: TokenType, builtin: bool, tag: ConsTag, rested: bool) @This() {
-    return @This(){.name = name, .builtin = builtin, .tag = tag, .rested = rested, .args = &[_]*Pattern{}, .tktype = tktype};
+    return .{.name = name, .builtin = builtin, .tag = tag, .rested = rested, .args = &[_]*Pattern{}, .tktype = tktype};
   }
 
   pub fn append(self: *Constructor, pattern: *Pattern, al: Allocator) void {
@@ -143,7 +143,7 @@ pub const Variable = struct {
   ident: *Node,
 
   pub fn init(ident: *Node) @This() {
-    return @This(){.ident = ident};
+    return .{.ident = ident};
   }
 
   pub fn toVariant(self: @This(), al: Allocator) *MatchVariant {
@@ -151,7 +151,7 @@ pub const Variable = struct {
   }
 
   pub fn clone(self: @This(), al: Allocator) @This() {
-    return @This(){.ident = self.ident.clone(al)};
+    return .{.ident = self.ident.clone(al)};
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
@@ -171,7 +171,7 @@ pub const Wildcard = struct {
   typ: ?*Type = null,
 
   pub fn init(token: Token, generated: bool) @This() {
-    return @This(){.token = token, .generated = generated};
+    return .{.token = token, .generated = generated};
   }
 
   pub fn toVariant(self: @This(), al: Allocator) *MatchVariant {
@@ -204,7 +204,7 @@ pub const Relation = struct {
   }
 
   pub fn clone(self: @This(), al: Allocator) @This() {
-    return @This(){.ident = self.ident, .pattern = self.pattern.clone(al)};
+    return .{.ident = self.ident, .pattern = self.pattern.clone(al)};
   }
 
   pub fn toVariant(self: @This(), al: Allocator) *MatchVariant {
@@ -226,11 +226,11 @@ pub const MultiRelation = struct {
   pub const RelationList = ds.ArrayListUnmanaged(Relation);
 
   pub fn init() @This() {
-    return @This(){.relations = RelationList.init()};
+    return .{.relations = RelationList.init()};
   }
 
   pub fn initCapacity(cap: usize, al: Allocator) @This() {
-    return @This(){.relations = RelationList.initCapacity(cap, al)};
+    return .{.relations = RelationList.initCapacity(cap, al)};
   }
 
   pub fn toVariant(self: @This(), al: Allocator) *MatchVariant {
@@ -238,7 +238,7 @@ pub const MultiRelation = struct {
   }
 
   pub fn clone(self: *@This(), al: Allocator) @This() {
-    return @This(){.relations = self.relations.clone(al)};
+    return .{.relations = self.relations.clone(al)};
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
@@ -280,7 +280,7 @@ pub const Pattern = struct {
   };
 
   pub fn init(variant: *MatchVariant, token: Token, capture: AliasOrAttr) @This() {
-    return @This() {.variant = variant, .token = token, .alat = capture};
+    return .{.variant = variant, .token = token, .alat = capture};
   }
 
   pub fn isVariable(self: *@This()) bool {
@@ -365,7 +365,7 @@ pub const Body = struct {
     } else {
       block = tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{node}), al);
     }
-    return @This(){.node = block, .decls = tir.NodeListU.init()};
+    return .{.node = block, .decls = tir.NodeListU.init()};
   }
 
   pub fn addNode(self: *@This(), node: *Node, al: Allocator) void {
@@ -373,7 +373,7 @@ pub const Body = struct {
   }
 
   pub fn clone(self: *@This(), al: Allocator) @This() {
-    return @This(){.node = self.node.clone(al), .decls = self.decls.clone(al)};
+    return .{.node = self.node.clone(al), .decls = self.decls.clone(al)};
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
@@ -511,7 +511,7 @@ const Switch = struct {
   token: Token,
 
   pub fn init(expr: *Node, token: Token) @This() {
-    return @This(){.occ = expr, .branches = undefined, .token = token};
+    return .{.occ = expr, .branches = undefined, .token = token};
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
@@ -645,7 +645,7 @@ pub const Case = struct {
   pub const CaseList = ds.ArrayList(*Case);
 
   pub fn init(pattern: *Pattern, guard: ?*Node, body: *Node, rev: bool, al: Allocator) @This() {
-    return @This(){.pattern = pattern, .guard = guard, .body = Body.init(body, rev, al)};
+    return .{.pattern = pattern, .guard = guard, .body = Body.init(body, rev, al)};
   }
 
   pub fn new(pattern: *Pattern, guard: ?*Node, body: *Node, rev: bool, al: Allocator) *@This() {
@@ -655,7 +655,7 @@ pub const Case = struct {
 
   pub fn from(self: *@This(), pat: *Pattern, al: Allocator) *@This() {
     const guard = if (self.guard) |guard| guard.clone(al) else self.guard;
-    return util.box(Case, @This(){.pattern = pat, .guard = guard, .body = self.body.clone(al)}, al);
+    return util.box(Case, .{.pattern = pat, .guard = guard, .body = self.body.clone(al)}, al);
   }
 
   pub fn clone(self: *@This(), al: Allocator) *@This() {
@@ -700,7 +700,7 @@ pub const MatchCompiler = struct {
     case: *Case,
 
     pub fn init(removed: bool, case: *Case) @This() {
-      return @This(){.removed = removed, .case = case};
+      return .{.removed = removed, .case = case};
     }
   };
 
@@ -731,7 +731,7 @@ pub const MatchCompiler = struct {
     };
 
     fn init(al: Allocator) @This() {
-      return @This(){
+      return .{
         .row = RowMap.init(al),
         .col = ColumnMap.init(al),
         .disamb = std.StringHashMap(u32).init(al)
@@ -866,7 +866,7 @@ pub const MatchCompiler = struct {
   };
 
   pub fn init(diag: *Diagnostic, al: Allocator) @This() {
-    return @This() {
+    return .{
       .allocator = al,
       .diag = diag,
       .failure = ds.ArrayHashMapUnmanaged(*Node, FailStatus).init(),

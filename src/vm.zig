@@ -59,7 +59,7 @@ pub const VM = struct {
     err: *ObjClass,
 
     pub fn init() @This() {
-      return @This(){
+      return .{
         .string = undefined,
         .list = undefined,
         .map = undefined,

@@ -87,7 +87,7 @@ pub const BasicBlock = struct {
   ex_mdiag: bool = false,
 
   pub fn init(nodes: NodeListU) @This() {
-    return @This(){.nodes = nodes};
+    return .{.nodes = nodes};
   }
 
   pub inline fn len(self: *@This()) usize {
@@ -249,7 +249,7 @@ pub const FlowGraph = struct {
     var succs = ds.ArrayListUnmanaged(NeighbourList).initCapacity(3, al);
     preds.appendSliceAssumeCapacity(&[_]NeighbourList{NeighbourList.init(), NeighbourList.init(), NeighbourList.init()});
     succs.appendSliceAssumeCapacity(&[_]NeighbourList{NeighbourList.init(), NeighbourList.init(), NeighbourList.init()});
-    return util.box(FlowGraph, @This() { .data = data, .preds = preds, .succs = succs}, al);
+    return util.box(FlowGraph, .{ .data = data, .preds = preds, .succs = succs}, al);
   }
 
   pub inline fn getEntry(self: *@This()) *FlowData {
@@ -324,7 +324,7 @@ pub const CompUnit = struct {
   program: *FlowGraph,
 
   pub fn init(al: Allocator) @This() {
-    return @This() {
+    return .{
       .funcs = ds.ArrayList(*FlowGraph).init(al),
       .classes = ds.ArrayList(*FlowGraph).init(al),
       .program = undefined,
@@ -582,7 +582,7 @@ pub const CFGBuilder = struct {
   
   fn linkBlock(self: *Self, node: *Node, prev: FlowList, edge: FlowEdge, bb: ?NodeListU) FlowList {
     if (edge == .EFalse and node.block().nodes.len == 0) {
-      node.block().append(Node.new(.{.NdEmpty = tir.EmptyNode.init(node.getToken())}, self.alloc), self.alloc);
+      node.block().append(Node.new(.{.NdEmpty = tir.SymNode.init(node.getToken())}, self.alloc), self.alloc);
     }
     return self.linkNodeList(node.block().nodes, prev, edge, bb);
   }

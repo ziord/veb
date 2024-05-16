@@ -72,7 +72,7 @@ pub const Desugar = struct {
     var nd = &node.NdMatch;
     const token = nd.expr.getToken().tkFrom(self.namegen.generate("$d", .{}), .TkIdent);
     const token2 = token.tkFrom("", .TkIdent);
-    const val = self.newNode(.{.NdEmpty = tir.EmptyNode.init(token2)});
+    const val = self.newNode(.{.NdEmpty = tir.SymNode.init(token2)});
     const decl = self.newNode(.{.NdVarDecl = tir.VarDeclNode.init(token, val, null)});
     const ident = self.newNode(.{.NdTVar = tir.TVarNode.init(token)});
     for (nd.cases) |case| {
@@ -117,7 +117,7 @@ pub const Desugar = struct {
     const ident = self.newNode(.{.NdTVar = tir.TVarNode.init(token)});
     // result id
     const token2 = node.ok.getToken().tkFrom(self.namegen.generate("$r", .{}), .TkIdent);
-    const val = self.newNode(.{.NdEmpty = tir.EmptyNode.init(token)});
+    const val = self.newNode(.{.NdEmpty = tir.SymNode.init(token)});
     const decl2 = self.newNode(.{.NdVarDecl = tir.VarDeclNode.init(token2, val, null)});
     const ident2 = self.newNode(.{.NdTVar = tir.TVarNode.init(token2)});
     
@@ -207,9 +207,154 @@ pub const Desugar = struct {
     return self.newNode(.{.NdTVar = tir.TVarNode.init(vartk2)});
   }
 
+  inline fn subPipeHolderItems(self: *Desugar, sub: *Node, nodes: NodeItems) bool {
+    var is_sub = false;
+    for (nodes) |elem| {
+      if (self.subPipeHolder(sub, elem)) {
+        is_sub = true;
+      }
+    }
+    return is_sub;
+  }
+
+  /// substitute `sub` into `expr` - if expr contains a pipe placeholder
+  fn subPipeHolder(self: *Desugar, sub: *Node, expr: *Node) bool {
+    switch (expr.*) {
+      .NdPipeHolder => {
+        expr.* = sub.clone(self.al).*;
+        return true;
+      },
+      .NdUnary => |*nd| {
+        return self.subPipeHolder(sub, nd.expr);
+      },
+      .NdBinary => |*nd| {
+        if (nd.op_tkty == .TkPipeGthan) {
+          expr.* = self.desPipe(nd).*;
+          return false;
+        }
+        const is_sub = self.subPipeHolder(sub, nd.left);
+        return self.subPipeHolder(sub, nd.right) or is_sub;
+      },
+      .NdSubscript => |*nd| {
+        const is_sub = self.subPipeHolder(sub, nd.expr);
+        return self.subPipeHolder(sub, nd.index) or is_sub;
+      },
+      .NdList, .NdTuple => |*nd| {
+        return self.subPipeHolderItems(sub, nd.elems);
+      },
+      .NdMap => |*nd| {
+        var is_sub = false;
+        for (nd.pairs) |itm| {
+          if (self.subPipeHolder(sub, itm.key)) is_sub = true;
+          if (self.subPipeHolder(sub, itm.value)) is_sub = true;
+        }
+        return is_sub;
+      },
+      .NdDotAccess => |*nd| {
+        const is_sub = self.subPipeHolder(sub, nd.lhs);
+        return self.subPipeHolder(sub, nd.rhs) or is_sub;
+      },
+      .NdDeref => |*nd| {
+        return self.subPipeHolder(sub, nd.expr);
+      },
+      .NdCast => |*nd| {
+        return self.subPipeHolder(sub, nd.expr);
+      },
+      .NdBasicCall => |*nd| {
+        const is_sub = self.subPipeHolder(sub, nd.expr);
+        return self.subPipeHolderItems(sub, nd.args()) or is_sub;
+      },
+      .NdGenericCall => |*nd| {
+        return self.subPipeHolder(sub, nd.call);
+      },
+      .NdError => |*nd| {
+        return self.subPipeHolder(sub, nd.expr);
+      },
+      .NdLblArg => |*nd| {
+        return self.subPipeHolder(sub, nd.value);
+      },
+      .NdOrElse => |*nd| {
+        const is_sub = self.subPipeHolder(sub, nd.ok);
+        return self.subPipeHolder(sub, nd.err) or is_sub;
+      },
+      .NdBasicFun => |*nd| {
+        return self.subPipeHolder(sub, nd.data.body);
+      },
+      .NdMatch => |*nd| {
+        var is_sub = self.subPipeHolder(sub, nd.expr);
+        for (nd.cases) |case| {
+          if (case.guard) |gd| {
+            if (self.subPipeHolder(sub, gd)) {
+              is_sub = true;
+            }
+          }
+          if (self.subPipeHolder(sub, case.body.node)) {
+            is_sub = true;
+          }
+          if (case.body.decls.len() > 0) {
+            logger.debug(
+              "[subPipeHolder] case.body.decls > 0: {}",
+              .{case.body.decls.len()}
+            );
+          }
+        }
+        return is_sub;
+      },
+      // statements producible from a transformed expr
+      .NdVarDecl => |*nd| {
+        return self.subPipeHolder(sub, nd.value);
+      },
+      .NdBlock => |*nd| {
+        return self.subPipeHolderItems(sub, nd.nodes);
+      },
+      .NdExprStmt => |*nd| {
+        return self.subPipeHolder(sub, nd.expr);
+      },
+      .NdWhile => |*nd| {
+        const is_sub = self.subPipeHolder(sub, nd.cond);
+        return self.subPipeHolder(sub, nd.then) or is_sub;
+      },
+      .NdSimpleIf => |*nd| {
+        const is_sub1 = self.subPipeHolder(sub, nd.cond);
+        const is_sub2 = self.subPipeHolder(sub, nd.then);
+        return self.subPipeHolder(sub, nd.els) or is_sub1 or is_sub2;
+      },
+      .NdRet => |*nd| {
+        return if (nd.expr) |_expr| self.subPipeHolder(sub, _expr) else false;
+      },
+      else => {
+        logger.debug("[subPipeHolder] node: {}", .{expr});
+        return false;
+      }
+    }
+  }
+
+  fn desPipe(self: *Desugar, node: *tir.BinaryNode) *Node {
+    // substitue lhs into rhs - if pipe placeholder is found
+    // if not, turn rhs into call, and pass lhs as its sole argument
+    if (self.subPipeHolder(node.left, node.right)) {
+      if (util.getMode() == .Debug) {
+        node.right.render(0, &self.u8w) catch {};
+        logger.debug("pipeline:\n{s}", .{self.u8w.items()});
+      }
+      return node.right;
+    }
+    var args = util.allocSlice(*Node, 1, self.al);
+    args[0] = node.left;
+    var res = self.newNode(.{.NdBasicCall = tir.BasicCallNode.init(node.right, args)});
+    if (util.getMode() == .Debug) {
+      res.render(0, &self.u8w) catch {};
+      logger.debug("pipeline:\n{s}", .{self.u8w.items()});
+    }
+    return res;
+  }
+
   fn desExpr(self: *Desugar, node: *Node) *Node {
     switch (node.*) {
       .NdBinary => |*nd| {
+        if (nd.op_tkty == .TkPipeGthan) {
+          return self.desExpr(self.desPipe(nd));
+        }
         nd.left = self.desExpr(nd.left);
         nd.right = self.desExpr(nd.right);
       },
@@ -265,9 +410,9 @@ pub const Desugar = struct {
       .NdBlock => |*nd| return self._desugarBlockExpr(nd.nodes),
       .NdMatch => return self.desMatchExpr(node),
       .NdNumber, .NdString, .NdBool, .NdTVar, .NdType, .NdMCondition => {},
-      .NdBasicFun => return node,
+      .NdBasicFun, .NdPipeHolder => return node,
       else => {
-        std.debug.print("node: {}\n", .{node});
+        logger.debug("[desExpr] node: {}", .{node});
         unreachable;
       },
     }

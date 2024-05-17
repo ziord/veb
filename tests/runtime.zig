@@ -4323,6 +4323,20 @@ test "pipelines .8" {
   try doRuntimeTest(src);
 }
 
+test "pipelines .9 <statefulness>" {
+  const src =
+  \\ let x = 0
+  \\ def stateful()
+  \\  x += 1
+  \\  return x
+  \\ end
+  \\
+  \\ let j = stateful() |> (*, *, *, *)
+  \\ assert(x == 1, 'should be 1')
+  ;
+  try doRuntimeTest(src);
+}
+
 test "string" {
   const src =
   \\ let j = (1, 2, "a")

@@ -115,6 +115,12 @@ pub const NumberNode = struct {
     return std.fmt.allocPrint(al, "{}", .{self.value}) catch self.token.lexeme();
   }
 
+  pub fn clone(self: *@This(), al: Allocator) *Node {
+    return Node.new(.{.NdNumber = .{
+      .token = self.token, .value = self.value, .typ = self.typ
+    }}, al);
+  }
+
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = try u8w.writer().write(
@@ -1858,6 +1864,18 @@ pub const Node = union(NodeType)  {
     return switch (node.*) {
       .NdNumber, .NdString, .NdBool, .NdAlias,
       .NdEmpty, .NdControl, .NdFailMarker, .NdGenericFun,
+      .NdRedunMarker, .NdScope, .NdDiagStartMarker, .NdPipeHolder => node,
+      .NdBinary, .NdAssign => |*nd| nd.clone(node, al),
+      .NdList, .NdTuple => |*nd| nd.clone(node, al),
+      inline else => |*nd| nd.clone(al),
+    };
+  }
+
+  pub fn forceClone(node: *Node, al: Allocator) *Node {
+    return switch (node.*) {
+      .NdString => |*nd| Node.new(.{.NdString = .{.token = nd.token, .typ = nd.typ}}, al),
+      .NdBool => |*nd| Node.new(.{.NdBool = .{.token = nd.token, .typ = nd.typ}}, al),
+      .NdAlias, .NdEmpty, .NdControl, .NdFailMarker, .NdGenericFun,
       .NdRedunMarker, .NdScope, .NdDiagStartMarker, .NdPipeHolder => node,
       .NdBinary, .NdAssign => |*nd| nd.clone(node, al),
       .NdList, .NdTuple => |*nd| nd.clone(node, al),

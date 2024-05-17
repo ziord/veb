@@ -543,5 +543,9 @@ pub fn ArrayHashMapUnmanaged(comptime K: type, comptime V: type) type {
     pub inline fn get(self: *@This(), k: K) ?V {
       return self.map.get(k);
     }
+
+    pub inline fn getPtr(self: *@This(), k: K) ?*V {
+      return self.map.getPtr(k);
+    }
   };
 }

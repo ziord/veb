@@ -3,6 +3,7 @@ const ks = @import("constants.zig");
 const tir = @import("tir.zig");
 const util = @import("util.zig");
 const ptn = @import("pattern.zig");
+const ds = @import("ds.zig");
 const diagnostics = @import("diagnostics.zig");
 
 const Node = tir.Node;
@@ -20,6 +21,7 @@ pub const Desugar = struct {
   block: NodeList,
   mc: MatchCompiler,
   u8w: util.U8Writer,
+  pipesubs: ds.ArrayHashMapUnmanaged(*Node, ds.ArrayListUnmanaged(*Node)),
 
   pub fn init(namegen: util.NameGen, diag: *Diagnostic) Desugar {
     return .{
@@ -28,6 +30,7 @@ pub const Desugar = struct {
       .block = undefined,
       .mc = MatchCompiler.init(diag, namegen.al),
       .u8w = util.U8Writer.init(namegen.al),
+      .pipesubs = ds.ArrayHashMapUnmanaged(*Node, ds.ArrayListUnmanaged(*Node)).init(),
     };
   }
 
@@ -222,6 +225,7 @@ pub const Desugar = struct {
     switch (expr.*) {
       .NdPipeHolder => {
         expr.* = sub.clone(self.al).*;
+        self.addSub(sub, expr);
         return true;
       },
       .NdUnary => |*nd| {
@@ -329,10 +333,37 @@ pub const Desugar = struct {
     }
   }
 
+  fn addSub(self: *Desugar, sub: *Node, expr: *Node) void {
+    if (self.pipesubs.getPtr(sub)) |lst| {
+      lst.append(expr, self.al);
+    } else {
+      var lst = ds.ArrayListUnmanaged(*Node).initCapacity(1, self.al);
+      lst.appendAssumeCapacity(expr);
+      self.pipesubs.set(sub, lst, self.al);
+    }
+  }
+
+  fn deduplicateSubs(self: *Desugar, sub: *Node) void {
+    if (self.pipesubs.getPtr(sub)) |lst| {
+      if (lst.len() > 1) {
+        // lift sub -> expr to vardecl
+        const token = sub.getToken().tkFrom(self.namegen.generate("$d", .{}), .TkIdent);
+        const ident = self.newNode(.{.NdTVar = tir.TVarNode.init(token)});
+        self.block.append(self.newNode(.{
+          .NdVarDecl = tir.VarDeclNode.init(token, lst.itemAt(0).forceClone(self.al), null)
+        }));
+        for (lst.items()) |expr| {
+          expr.* = ident.clone(self.al).*;
+        }
+      }
+    }
+  }
+
   fn desPipe(self: *Desugar, node: *tir.BinaryNode) *Node {
     // substitue lhs into rhs - if pipe placeholder is found
     // if not, turn rhs into call, and pass lhs as its sole argument
     if (self.subPipeHolder(node.left, node.right)) {
+      self.deduplicateSubs(node.left);
       if (util.getMode() == .Debug) {
         node.right.render(0, &self.u8w) catch {};
         logger.debug("pipeline:\n{s}", .{self.u8w.items()});

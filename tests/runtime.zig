@@ -595,7 +595,7 @@ test "if statement" {
   \\  case Str(t) => if t == 'fox'
   \\    w /= 2
   \\  end
-  \\  case _ => panic('bad')
+  \\  case _ => @panic('bad')
   \\ end
   \\ assert(w == 61.5, 'should be 61.5')
   ;
@@ -1000,7 +1000,7 @@ test "narrowing-20" {
   \\ def fun
   \\  let p = 10
   \\  if p < 5
-  \\    exit(2)
+  \\    @exit(2)
   \\  else
   \\    assert(true, 'oops')
   \\  end
@@ -2012,13 +2012,13 @@ test "functions-25.<void/never/return>" {
 test "builtin-functions" {
   const src =
   \\ assert(true, 'ok')
-  \\ assert(!!exit, 'exit')
+  \\ assert(!!@exit, '@exit')
   \\ assert(!!assert, 'assert')
-  \\ # assert(!!panic, 'panic')
+  \\ # assert(!!@panic, '@panic')
   \\ assert(!!print, 'print')
   \\ assert(!!println, 'println')
-  \\ assert(!!string, 'string')
-  \\ (exit, assert)
+  \\ assert(!!@string, '@string')
+  \\ (@exit, assert)
   ;
   try doRuntimeTest(src);
 }
@@ -2030,6 +2030,12 @@ test "builtin-functions-override" {
   \\ end
   \\
   \\ assert(exit(10) == 8, 'okay')
+  \\
+  \\ def panic(x: num)
+  \\  return x - 2
+  \\ end
+  \\
+  \\ assert(panic(10) == 8, 'okay')
   \\
   \\ let check = assert
   \\ def assert{T}(t: T)
@@ -2079,7 +2085,7 @@ test "errors-1" {
   \\    case Error(t) => assert(t == 'foo', 'value should be foo')
   \\  end
   \\  let j = try fun(3)
-  \\  let k = fun(3) orelse |e| panic(e)
+  \\  let k = fun(3) orelse |e| @panic(e)
   \\  println(j, k)
   \\ end
   \\
@@ -2095,7 +2101,7 @@ test "errors-1" {
   \\   case Error(t) => assert(t == 'foo', 'value should be foo')
   \\ end
   \\ let j = try fun(3)
-  \\ let k = fun(3) orelse |e| panic(e)
+  \\ let k = fun(3) orelse |e| @panic(e)
   \\ println(j, k)
   ;
   try doRuntimeTest(src);
@@ -4355,9 +4361,9 @@ test "pipelines .9 <statefulness>" {
 test "string" {
   const src =
   \\ let j = (1, 2, "a")
-  \\ string(j) |> assert(* == "(1, 2, 'a')", 'should be same')
+  \\ @string(j) |> assert(* == "(1, 2, 'a')", 'should be same')
   \\ let j = (1, 2, "a", [None as Maybe{num}, Just(5)], Just('oops'))
-  \\ string(j) |> assert(* == "(1, 2, 'a', [None, Just(5)], Just('oops'))", 'should be same')
+  \\ @string(j) |> assert(* == "(1, 2, 'a', [None, Just(5)], Just('oops'))", 'should be same')
   ;
   try doRuntimeTest(src);
 }
@@ -4377,11 +4383,11 @@ test "str concat .1" {
 test "str concat .2" {
   const src =
   \\ let j = (1, 2, "a", [None as Maybe{num}, Just(5)], Just('oops'))
-  \\ (string(j) <> " something " <> string(0xff)) |> println
+  \\ (@string(j) <> " something " <> @string(0xff)) |> println
   \\ (
-  \\  string(j)
+  \\  @string(j)
   \\  <> " something "
-  \\  <> string(0xff)
+  \\  <> @string(0xff)
   \\  |> assert(
   \\    * == "(1, 2, 'a', [None, Just(5)], Just('oops')) something 255",
   \\    'should be same',)
@@ -4392,7 +4398,7 @@ test "str concat .2" {
 
 test "str concat .3" {
   const src =
-  \\ (5 |> string) <> ", yeah" |> * == "5, yeah" |> assert(*, 'should be same')
+  \\ (5 |> @string) <> ", yeah" |> * == "5, yeah" |> assert(*, 'should be same')
   ;
   try doRuntimeTest(src);
 }

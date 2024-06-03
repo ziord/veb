@@ -51,7 +51,6 @@ pub const Keywords = std.ComptimeStringMap(TokenType, .{
   .{ks.MaybeVar, .TkMaybe},
   .{ks.ResultVar, .TkResult},
   .{ks.ListVar, .TkList},
-  .{ks.PanicVar, .TkPanic},
   .{ks.ErrorVar, .TkError},
   .{ks.AnyVar, .TkAny},
   .{ks.TupleVar, .TkTuple},
@@ -134,7 +133,6 @@ pub const TokenType = enum (u8) {
   TkFalse,          // false
   TkMatch,          // match
   TkMaybe,          // maybe
-  TkPanic,          // panic
   TkTuple,          // tuple
   TkWhere,          // where
   TkWhile,          // while
@@ -272,7 +270,6 @@ pub const TokenType = enum (u8) {
       .TkJust => ks.JustVar,
       .TkNone => ks.NoneVar,
       .TkList => ks.ListVar,
-      .TkPanic => ks.PanicVar,
       .TkSelf => ks.SelfVar,
       .TkVoid => ks.VoidVar,
       .TkFalse => ks.FalseVar,
@@ -898,7 +895,7 @@ pub const Lexer = struct {
     if (std.ascii.isDigit(ch)) {
       return self.lexNum(ch);
     }
-    if (std.ascii.isAlphabetic(ch) or ch == '_') {
+    if (std.ascii.isAlphabetic(ch) or ch == '_' or ch == '@') {
       return self.lexIdent();
     }
     return switch(ch) {

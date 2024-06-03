@@ -175,7 +175,6 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkFalse
     .{.bp = .None, .prefix = Self.matchExpr, .infix = null},            // TkMatch
     .{.bp = .None, .prefix = null, .infix = null},                      // TkMaybe
-    .{.bp = .None, .prefix = Self.variable, .infix = null},             // TkPanic
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkTuple
     .{.bp = .None, .prefix = null, .infix = null},                      // TkWhere
     .{.bp = .None, .prefix = null, .infix = null},                      // TkWhile
@@ -310,7 +309,7 @@ pub const Parser = struct {
 
   fn match(self: *Self, ty: lex.TokenType) bool {
     if (self.check(ty)) {
-      self.advance() catch unreachable;
+      self.advance() catch {};
       return true;
     }
     return false;
@@ -344,6 +343,11 @@ pub const Parser = struct {
         .{tty.str(), self.current_tok.ty.str()}
       );
     }
+  }
+
+  inline fn consumeIdent(self: *Self) !void {
+    try self.consume(.TkIdent);
+    self.assertBuiltinIdentNotInUse(self.previous_tok);
   }
 
   inline fn consumeNlOrEof(self: *Self) !void {
@@ -444,6 +448,16 @@ pub const Parser = struct {
       if (token.valueEql(typ.variable().tokens.getLast())) {
         return self.softErrMsg(token, "redefinition of type parameter");
       }
+    }
+  }
+
+  fn assertBuiltinIdentNotInUse(self: *Self, token: Token) void {
+    const lxm = token.lexeme();
+    if (lxm.len > 0 and lxm[0] == '@') {
+      self.softErrMsg(
+        token, "cannot use an identifier marked with '@' in this context.\n"
+        ++ "  Consider eliminating '@'."
+      );
     }
   }
 
@@ -636,14 +650,12 @@ pub const Parser = struct {
 
   fn variable(self: *Self, assignable: bool) !*Node {
     if (!self.matchBuiltinTag()) {
-      if (!self.match(.TkIdent)) {
-        try self.consume(.TkPanic);
-      }
+      try self.consume(.TkIdent);
     }
     const ident = self.previous_tok;
     return try self.handleAugAssign(
       self.newNode(.{.NdTVar = tir.TVarNode.init(ident)}),
-      assignable
+      (ident.lexeme()[0] != '@' and assignable)
     );
   }
 
@@ -959,7 +971,7 @@ pub const Parser = struct {
       // panic in top-level code
       const panic = self.newNode(.{
         .NdTVar = tir.TVarNode.init(
-          token.tkFrom("panic", .TkIdent)
+          token.tkFrom("@panic", .TkIdent)
         )});
       _err = self.newNode(.{.NdBasicCall = tir.BasicCallNode.init(panic, self.toSlice(evar))});
     } else {
@@ -989,7 +1001,7 @@ pub const Parser = struct {
     try self.consume(.TkOrElse);
     var _evar: ?*tir.TVarNode = null;
     if (self.match(.TkPipe)) {
-      try self.consume(.TkIdent);
+      try self.consumeIdent();
       _evar = tir.TVarNode.init(self.previous_tok).box(self.allocator);
       try self.consume(.TkPipe);
     }
@@ -1002,7 +1014,7 @@ pub const Parser = struct {
 
   fn aliasParam(self: *Self, can_have_bounds: bool) !Type {
     const debug = self.current_tok;
-    try self.consume(.TkIdent);
+    try self.consumeIdent();
     var typ = Type.newVariableWToken(debug, self.allocator);
     if (self.check(.TkDot)) {
       return self.errMsg(self.current_tok, "expected single identifier, found multiple");
@@ -1054,7 +1066,7 @@ pub const Parser = struct {
     // AbstractType   :=  TypeName
     // TypeName       :=  Ident AbsTypeParams?
     // AbsTypeParams  :=  "{" Ident ( "," Ident )* "}"
-    try self.consume(.TkIdent);
+    try self.consumeIdent();
     var typ = Type.newVariableWToken(self.previous_tok, self.allocator);
     return (
       if (!self.check(.TkLCurly)) typ
@@ -1087,10 +1099,10 @@ pub const Parser = struct {
   }
 
   fn refType(self: *Self) !Type {
-    try self.consume(.TkIdent);
+    try self.consumeIdent();
     var typ = Type.newVariableWToken(self.previous_tok, self.allocator);
     while (self.match(.TkDot)) {
-      try self.consume(.TkIdent);
+      try self.consumeIdent();
       typ.variable().appendTok(self.previous_tok, self.allocator);
     }
     return typ;
@@ -1264,6 +1276,7 @@ pub const Parser = struct {
     // TaggedTypeParam := (ID ":")? TaggedType
     if (self.check(.TkIdent)) {
       const id = self.current_tok;
+      self.assertBuiltinIdentNotInUse(id);
       const tok = self.lexer.getTentativeToken();
       if (tok.ty == .TkColon) {
         try self.advance(); // skip TkIdent
@@ -1281,10 +1294,10 @@ pub const Parser = struct {
       // we only allow definition of Just & None in builtin-mode
       if (self.inBuiltinMode()) {
         if (!self.matchBuiltinTag()) {
-          try self.consume(.TkIdent);
+          try self.consumeIdent();
         }
-      } else try self.consume(.TkIdent);
-    } else try self.consume(.TkIdent);
+      } else try self.consumeIdent();
+    } else try self.consumeIdent();
     var typ = Type.newTag(id.lexeme(), id.ty);
     var disamb = self.getDisambiguator(u32);
     if (self.match(.TkLBracket)) {
@@ -1418,7 +1431,7 @@ pub const Parser = struct {
 
   fn varDecl(self: *Self) !*Node {
     // let var (: type)? = expr
-    try self.consume(.TkIdent);
+    try self.consumeIdent();
     const ident = self.previous_tok;
     var anot_ty: ?*Type = null;
     if (self.match(.TkColon)) {
@@ -1507,7 +1520,7 @@ pub const Parser = struct {
         if (params.isNotEmpty()) {
           try self.consume(.TkComma);
         }
-        try self.consume(.TkIdent);
+        try self.consumeIdent();
         const ident = self.previous_tok;
         if (disamb.get(ident.lexeme())) |_| {
           self.softErrMsg(
@@ -1616,7 +1629,7 @@ pub const Parser = struct {
     try self.consume(.TkDef);
     const prev_func = self.meta.func;
     const name = if (!lambda) blk: {
-      if (!self.inBuiltinMode() or !self.match(.TkPanic)) try self.consume(.TkIdent);
+      if (!self.inBuiltinMode()) try self.consumeIdent() else try self.consume(.TkIdent);
       break :blk self.previous_tok;
     } else null;
     var func = self.newNode(.{
@@ -1720,7 +1733,8 @@ pub const Parser = struct {
     // rest_pattern := '..'
     if (self.match(.Tk2Dot)) {
       cons.rested = true;
-      if (cons.tag == .List and self.match(.TkIdent)) {
+      if (cons.tag == .List and self.check(.TkIdent)) {
+        self.consumeIdent() catch {};
         cons.node = self.newNode(.{.NdTVar = tir.TVarNode.init(self.previous_tok)});
       }
       _ = self.match(.TkComma);
@@ -1861,13 +1875,16 @@ pub const Parser = struct {
         // literal_pattern
         .TkNumber, .TkTrue, .TkFalse, .TkString, .TkMinus, => try self._pattern(),
         // constant_pattern := attr := name_or_attr
-        .TkIdent => (
+        .TkIdent => blk: {
+          self.assertBuiltinIdentNotInUse(tok);
+          break :blk (
             Pattern.init( // use capture pattern for now
               ptn.Variable.init(try self._capturePattern()).toVariant(self.allocator),
               tok,
               .{}
             ).box(self.allocator)
-          ),
+          );
+        },
         else => blk: {
           self.softErrMsg(self.current_tok, "invalid mapping pattern");
           break :blk try self._pattern();
@@ -1899,6 +1916,7 @@ pub const Parser = struct {
         ).box(self.allocator)
       );
     }
+    self.assertBuiltinIdentNotInUse(self.current_tok);
     const id = try self.variable(false);
     const token = id.NdTVar.token;
     if (!self.check(.TkLBracket) and !self.check(.TkLCurly)) {
@@ -2169,9 +2187,9 @@ pub const Parser = struct {
     switch (self.current_tok.ty) {
       .TkList, .TkError, .TkTuple, .TkMap, .TkStr => (
         if (self.inBuiltinMode()) try self.advance()
-        else try self.consume(.TkIdent)
+        else try self.consumeIdent()
       ),
-      else => try self.consume(.TkIdent)
+      else => try self.consumeIdent()
     }
     const ident = self.previous_tok;
     var tparams: ?*TypeList = null;
@@ -2197,7 +2215,7 @@ pub const Parser = struct {
         self.rewind(ss);
         break;
       }
-      try self.consume(.TkIdent);
+      try self.consumeIdent();
       const value = self.previous_tok.lexeme();
       if (disamb.get(value)) |tok| {
         self.softErrMsg(self.previous_tok, "illegal duplicate field");
@@ -2271,7 +2289,7 @@ pub const Parser = struct {
     const prev_cls = self.meta.class;
     defer self.meta.class = prev_cls;
     self.meta.class = @constCast(&@as(Node, .{.NdEmpty = tir.SymNode.init(self.previous_tok)}));
-    try self.consume(.TkIdent);
+    try self.consumeIdent();
     const ident = self.previous_tok;
     var tparams: ?*TypeList = null;
     if (self.check(.TkLCurly)) {

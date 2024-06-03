@@ -5,16 +5,20 @@ pub const BuiltinsSrc =
 \\
 \\ alias never = never
 \\
+\\ def @exit(code: num): noreturn
+\\    #[[internal]]
+\\ end
+\\
+\\ def @panic{T}(msg: T): noreturn
+\\   #[[internal]]
+\\ end
+\\
+\\ def @string(val: any): str
+\\   #[[internal]]
+\\ end
+\\
 \\ def assert(arg: bool, msg: str): void
 \\    #[[internal]]
-\\ end
-\\
-\\ def exit(code: num): noreturn
-\\    #[[internal]]
-\\ end
-\\
-\\ def panic{T}(msg: T): noreturn
-\\   #[[internal]]
 \\ end
 \\
 \\ def print(args*: any): void
@@ -22,10 +26,6 @@ pub const BuiltinsSrc =
 \\ end
 \\
 \\ def println(args*: any): void
-\\   #[[internal]]
-\\ end
-\\
-\\ def string(val: any): str
 \\   #[[internal]]
 \\ end
 \\

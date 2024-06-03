@@ -11,8 +11,8 @@ const VarArgC = 256;
 
 pub const NativeFns = [_][]const u8 {
   "assert",
-  "exit",
-  "panic",
+  "@exit",
+  "@panic",
   "print",
   "append",
   "len",
@@ -30,7 +30,7 @@ pub const NativeFns = [_][]const u8 {
   "println",
   "slice",
   "concat",
-  "string",
+  "@string",
 };
 
 
@@ -394,11 +394,11 @@ pub fn addBuiltins(vm: *VM) void {
   // Add builtin functions
   //** VM, fn-name, fn-name-index, arity, fn-exec **//
   addNativeFn(vm, "assert", 0, 2, fnAssert);
-  addNativeFn(vm, "exit", 1, 1, fnExit);
-  addNativeFn(vm, "panic", 2, 1, fnPanic);
+  addNativeFn(vm, "@exit", 1, 1, fnExit);
+  addNativeFn(vm, "@panic", 2, 1, fnPanic);
   addNativeFn(vm, "print", 3, VarArgC, fnPrint);
   addNativeFn(vm, "println", 17, VarArgC, fnPrintln);
-  addNativeFn(vm, "string", 20, 1, fnString);
+  addNativeFn(vm, "@string", 20, 1, fnString);
 }
 
 pub fn addNames(vm: *VM) void {

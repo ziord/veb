@@ -590,7 +590,7 @@ test "dca-3" {
   \\  end
   \\  return 0
   \\ end
-  \\ exit(5)
+  \\ @exit(5)
   \\ bin()
   \\
   ;
@@ -604,9 +604,9 @@ test "dca-4" {
   const src =
   \\ def bin
   \\  if 1 > 2
-  \\    exit(5)
+  \\    @exit(5)
   \\  else
-  \\    panic('oops')
+  \\    @panic('oops')
   \\  end
   \\  return 0
   \\ end
@@ -2692,17 +2692,6 @@ test "match <statement in expr>" {
   });
 }
 
-test "builtin-functions-override" {
-  const src =
-  \\ def panic(x: num)
-  \\  return x - 2
-  \\ end
-  ;
-  try doErrorTest(src, 1, [_][]const u8{
-    "expected token '<ident>' but found 'panic'",
-  });
-}
-
 test "traits <required methods .1>" {
   const src =
   \\ trait Display
@@ -3620,5 +3609,79 @@ test "traits <match patterns>" {
   try doErrorTest(src, 2, [_][]const u8{
     "bad/ambiguous pattern constructor: 'Display'",
     "bad/ambiguous pattern constructor: 'Clone'",
+  });
+}
+
+test "builtin @ <vardecl, match>" {
+  const src =
+  \\ let @foo = 5
+  \\ let j = @string(5)
+  \\ match 5 
+  \\  case {@j: @q} => 5
+  \\  case @Foo() => 10
+  \\ end
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+  });
+}
+
+test "builtin @ <match, orelse>" {
+  const src =
+  \\ match 5 
+  \\  case [@a, @b] => 5
+  \\  case (@c, @d) => 10
+  \\ end
+  \\ let j = foo orelse |@j| pooh
+  ;
+  try doErrorTest(src, 5, [_][]const u8{
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+  });
+}
+
+test "builtin @ <type, alias, function, class, trait>" {
+  const src =
+  \\ type @Foo = Bar | @Bad
+  \\ type Foo = Bar(@fox)
+  \\ alias @T = @Foo
+  \\ def @oops()
+  \\  return "oops"
+  \\ end
+  \\ class @Bad
+  \\  pub def @nooo(): str
+  \\    return "yep"
+  \\  end
+  \\ end
+  \\ trait @NotGood
+  \\  pub def @yeah(): str;
+  \\ end
+  ;
+  try doErrorTest(src, 10, [_][]const u8{
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+    "cannot use an identifier marked with '@' in this context.",
+  });
+}
+
+test "builtin @ <assignment>" {
+  const src =
+  \\ @box = 5
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "expected token '<newline>' but found '='",
   });
 }

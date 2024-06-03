@@ -86,7 +86,7 @@ test "functions.<never>" {
 test "functions.<noreturn>" {
   var src =
   \\ def foo()
-  \\  exit(1)
+  \\  @exit(1)
   \\ end
   \\ let j:noreturn = foo()
   ;

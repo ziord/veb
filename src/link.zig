@@ -409,10 +409,16 @@ pub const TypeLinker = struct {
       self.delTVar(gen.base);
       return ret;
     }
-    if (typ.isClass()) {
+    if (typ.isClassOrTrait()) {
       // Resolve the tparams which may be Variable or some interesting type
-      for (typ.klass().getSlice()) |param| {
+      var kot = typ.klassOrTrait();
+      for (kot.getSlice()) |param| {
         if (try self.resolveTypeAbs(param, debug)) {
+          return true;
+        }
+      }
+      if (kot.data.trait) |ty| {
+        if (try self.resolveTypeAbs(ty, debug)) {
           return true;
         }
       }
@@ -491,10 +497,10 @@ pub const TypeLinker = struct {
         // complete the ouroboros
         typ.* = eqn.*;
         return eqn;
-      } else if (eqn.isClass()) {
+      } else if (eqn.isClassOrTrait()) {
         // create a temp generic type and validate if this generic substitution matches
         var tparams = TypeList.init();
-        tparams.appendSlice(eqn.klass().tparams.?, al);
+        tparams.appendSlice(eqn.klassOrTrait().tparams.?, al);
         var tmp = Type.init(.{.Generic = .{.tparams = tparams, .base = eqn}});
         try self.assertGenericAliasSubMatches(&tmp, typ, debug);
         var alias = eqn.alias orelse &tmp;
@@ -512,7 +518,7 @@ pub const TypeLinker = struct {
         for (alias_gen.getSlice(), resolved_params.items()) |tvar, tsub| {
           self.insert(tvar.variable().getFirstLexeme(), tsub);
         }
-        var slice = eqn.klass().getSlice();
+        var slice = eqn.klassOrTrait().getSlice();
         for (0..slice.len) |i| {
           slice[i] = try self.resolveType(tparams.itemAt(i), debug, al);
         }
@@ -553,9 +559,10 @@ pub const TypeLinker = struct {
       self.delTVar(gen.base);
       return sol;
     }
-    if (typ.isClass()) {
-      for (typ.klass().getSlice(), 0..) |param, i| {
-        typ.klass().tparams.?[i] = try self.resolveType(param, debug, al);
+    if (typ.isClassOrTrait()) {
+      var slice = typ.klassOrTrait().getSlice();
+      for (slice, 0..) |param, i| {
+        slice[i] = try self.resolveType(param, debug, al);
       }
       return typ;
     }
@@ -779,7 +786,7 @@ pub const TypeLinker = struct {
     }
   }
 
-  fn linkGenericCall(self: *Self, node: *tir.GenericCallNode) !void {
+  pub fn linkGenericCall(self: *Self, node: *tir.GenericCallNode) !void {
     for (node.targs) |typ| {
       typ.* = (try self._linkType(typ, node.call.getToken())).*;
     }
@@ -804,7 +811,7 @@ pub const TypeLinker = struct {
     try self.link(node.fun);
   }
 
-  pub fn linkClass(self: *Self, node: *tir.ClassNode, token: Token, allow_generic: bool) !void {
+  pub fn linkClass(self: *Self, node: *tir.StructNode, token: Token, allow_generic: bool) !void {
     if (!node.data.builtin) {
       var typ = Type.newClass(node.name.lexeme(), .TkIdent, self.ctx.allocator()).box(self.ctx.allocator());
       // use tparams. fields and methods are resolved by the type checker
@@ -815,8 +822,8 @@ pub const TypeLinker = struct {
       if (!allow_generic) return;
       self.ban_alias = node.data.params;
     }
-    if (node.protos) |protos| {
-      node.protos = try self.resolveType(protos, token, self.ctx.allocator());
+    if (node.trait) |trait| {
+      node.trait = try self.resolve(trait, token);
     }
     for (node.data.fields) |field| {
       if (field.isField()) {
@@ -828,6 +835,23 @@ pub const TypeLinker = struct {
     for (node.data.methods) |method| {
       try self.linkBasicFun(&method.NdBasicFun, null);
     }
+  }
+
+  pub fn linkTrait(self: *Self, node: *tir.StructNode, allow_generic: bool) !void {
+    if (!node.data.builtin) {
+      var typ = Type.newTrait(node.name.lexeme(), .TkIdent, self.ctx.allocator()).box(self.ctx.allocator());
+      // use tparams. fields and methods are resolved by the type checker
+      typ.trait().tparams = node.data.params;
+      self.insert(node.name.lexeme(), typ);
+    }
+    if (node.isParameterized()) {
+      if (!allow_generic) return;
+      self.ban_alias = node.data.params;
+    }
+    for (node.data.methods) |method| {
+      try self.linkBasicFun(&method.NdBasicFun, null);
+    }
+    std.debug.assert(node.data.fields.len == 0);
   }
 
   inline fn linkRet(self: *Self, node: *tir.RetNode) !void {
@@ -896,6 +920,7 @@ pub const TypeLinker = struct {
       .NdBasicFun => |*nd| self.linkBasicFun(nd, null),
       .NdGenericFun => |*nd| self.linkGenericFun(nd, false),
       .NdClass => |*nd| self.linkClass(nd, node.getToken(), false),
+      .NdTrait => |*nd| self.linkTrait(nd, false),
       .NdRet => |*nd| self.linkRet(nd),
       .NdProgram => |*nd| self.linkProgram(nd),
       .NdNumber, .NdString, .NdBool, .NdControl, .NdScope,

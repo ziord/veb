@@ -2594,6 +2594,21 @@ test "generic-classes-5" {
   try doRuntimeTest(src);
 }
 
+test "generic call linking" {
+  const src =
+  \\ class Bar
+  \\ end
+  \\
+  \\ def format{A, B, C}(a: A, b: B, c: C): str
+  \\  return "oops"
+  \\ end
+  \\
+  \\ let x = Bar()
+  \\ format{Bar, Bar, Bar}(x, x, x) == "oops" |> assert(*, "should be same")
+  ;
+  try doRuntimeTest(src);
+}
+
 test "labeled-argument" {
   const src =
   \\ def fun(x: str, y: num, a: List{num}, b: Result{void, str})
@@ -4378,6 +4393,492 @@ test "str concat .2" {
 test "str concat .3" {
   const src =
   \\ (5 |> string) <> ", yeah" |> * == "5, yeah" |> assert(*, 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <required methods>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\ end
+  \\ assert(Foo().fmt() == "Foo()", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <default methods>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\  pub def to_string()
+  \\    return "NotImplemented"
+  \\  end
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\ end
+  \\ assert(Foo().to_string() == "NotImplemented", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <multiple traits>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone
+  \\  pub def clone(): Clone;
+  \\ end
+  \\
+  \\ class Foo: Display | Clone
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Foo()
+  \\  end
+  \\ end
+  \\
+  \\ let f1 = Foo()
+  \\ assert(f1.fmt() == "Foo()", 'should be same')
+  \\ let f2 = f1.clone()
+  \\ assert(f2 is Foo and f2 != f1, 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <covariance .1>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\ end
+  \\
+  \\ let f: Display = Foo() # covariance
+  \\ assert(f.fmt() == "Foo()", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <covariance .2>" {
+  const src =
+  \\ type Ordering = Lt | Gt | Eq
+  \\ alias String = str
+  \\ 
+  \\ trait Fmt
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Comparable
+  \\  pub def cmp(other: any): Ordering ;
+  \\
+  \\  pub def sum()
+  \\    return 5
+  \\  end
+  \\ end
+  \\
+  \\ class Stuff: Comparable | Fmt
+  \\  pub def cmp(x: any): Ordering
+  \\    return Ordering.Eq
+  \\  end
+  \\
+  \\  pub def fmt()
+  \\    return "Stuff" <> "(" <> ")"
+  \\  end
+  \\
+  \\  pub def fox()
+  \\  end
+  \\ end
+  \\
+  \\ def compare(a: Stuff, b: Comparable)
+  \\  a.fox()
+  \\  return a.cmp(b)
+  \\ end
+  \\
+  \\ let s: Comparable = Stuff()
+  \\ assert(compare(Stuff(), s) == Ordering.Eq, 'should be same')
+  \\ let j: List{Fmt} = [Stuff(), Stuff()] # covariance
+  \\ j[-1].fmt() <> "oops" == "Stuff()oops" |> assert(*, 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <trait-extension .1>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait DisplayExt{T: Display}
+  \\  pub def show(): String;
+  \\ end
+  \\
+  \\ class Bar : Display
+  \\  pub def fmt()
+  \\    return "Bar()"
+  \\  end
+  \\ end
+  \\
+  \\ class Foo: DisplayExt{Bar}
+  \\  pub def show()
+  \\    return "MyShow!"
+  \\  end
+  \\ end
+  \\
+  \\ let f1 = Foo()
+  \\ assert(f1.show() == "MyShow!", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <trait-extension .2>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait DisplayExt{T: Display}
+  \\  pub def show(): String;
+  \\ end
+  \\
+  \\ class Foo: Display | DisplayExt{Foo}
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\
+  \\  pub def show()
+  \\    return "MyShow!"
+  \\  end
+  \\ end
+  \\
+  \\ let f1 = Foo()
+  \\ assert(f1.fmt() == "Foo()", 'should be same')
+  \\ assert(f1.show() == "MyShow!", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <default-method-override>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\  pub def to_string()
+  \\    return "NotImplemented"
+  \\  end
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\
+  \\  pub def to_string()
+  \\    return "Foo_string"
+  \\  end
+  \\ end
+  \\
+  \\ assert(Foo().to_string() == "Foo_string", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <generic .1>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Clone{T}
+  \\  pub def clone(): T;
+  \\ end
+  \\
+  \\ trait Fmt{T}
+  \\  pub def fmt(x: T): String;
+  \\ end
+  \\
+  \\ class Stuff: Fmt{num} | Clone{Stuff}
+  \\  pub def fmt(x: num)
+  \\    return "Stuff" <> "(" <> ")"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Stuff()
+  \\  end
+  \\ end
+  \\
+  \\ let s = Stuff()
+  \\ let j = s.clone()
+  \\ assert(s != j and j is Stuff, 'should be Stuff')
+  \\ let k = j.clone()
+  \\ assert(k != j and k is Stuff, 'should be Stuff')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <generic .2>" {
+  const src =
+  \\ trait Shifts{T}
+  \\  pub def shift(x: T): T;
+  \\ end
+  \\
+  \\ class Stuff: Shifts{num}
+  \\    x = 12
+  \\  pub def shift(shr: num)
+  \\    return self.x >> shr
+  \\  end
+  \\ end
+  \\
+  \\
+  \\ let s = Stuff()
+  \\ assert(s.shift(2) == 3, 'should be 3')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <generic .3>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Clone{T}
+  \\  pub def clone(): T;
+  \\ end
+  \\ 
+  \\ trait Shifts{T}
+  \\  pub def shift(x: T): T;
+  \\ end
+  \\
+  \\ class Stuff: Shifts{num} | Clone{Stuff}
+  \\    x = 12
+  \\  pub def clone()
+  \\    return Stuff()
+  \\  end
+  \\  pub def shift(shr: num)
+  \\    return self.x >> shr
+  \\  end
+  \\ end
+  \\
+  \\
+  \\ let s = Stuff()
+  \\ let j = s.clone()
+  \\ assert(j is Stuff and j != s, 'should be true')
+  \\ assert(j.shift(2) == 3, 'should be 3')
+  \\ assert(j.clone().shift(2) == 3, 'should be 3')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <function-bounds>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ def format(t: Display, v: Display)
+  \\  return t.fmt() <> " $ " <> v.fmt()
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\ end
+  \\
+  \\ class Bar: Display
+  \\  pub def fmt()
+  \\    return "Bar()"
+  \\  end
+  \\ end
+  \\
+  \\ let r = format(Foo(), Bar())
+  \\ assert(r == "Foo() $ Bar()", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <generic-function-bounds>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone
+  \\  pub def clone(): Clone;
+  \\ end
+  \\
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\  where
+  \\    B: Display + Clone,
+  \\    C: Display + Clone,
+  \\  return a.fmt() <> " $ " <> b.fmt() <> " $ " <> (c.clone() as C).fmt()
+  \\ end
+  \\
+  \\ class Foo: Display | Clone
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Foo()
+  \\  end
+  \\ end
+  \\
+  \\ class Bar: Clone | Display
+  \\  pub def fmt()
+  \\    return "Bar()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Bar()
+  \\  end
+  \\ end
+  \\
+  \\ let r = format(Foo(), Bar(), Foo())
+  \\ assert(r == "Foo() $ Bar() $ Foo()", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <self-referencing-generic-function-bounds>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone{T}
+  \\  pub def clone(): T;
+  \\ end
+  \\
+  \\ class Foo: Display | Clone{Foo}
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Foo()
+  \\  end
+  \\ end
+  \\
+  \\ def fun{P, U}(x: P)
+  \\  where P: Display + Clone{P}
+  \\  return x.clone().fmt()
+  \\ end
+  \\
+  \\ assert(fun{Foo, Foo}(Foo()) == "Foo()", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <class-bounds>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\ end
+  \\
+  \\ class Bar
+  \\  pub x: Display
+  \\  pub def init(x: Display)
+  \\    self.x = x
+  \\  end
+  \\ end
+  \\
+  \\ let r = Bar(Foo())
+  \\ assert(r.x.fmt() == "Foo()", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <generic-class-bounds .1>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone
+  \\  pub def clone(): Clone;
+  \\ end
+  \\
+  \\ class Foo: Display | Clone
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\  pub def clone()
+  \\    return self
+  \\  end
+  \\ end
+  \\
+  \\ class Bar{T, V}
+  \\  where
+  \\    T: Display,
+  \\    V: Clone,
+  \\ end
+  \\ assert(!!Bar{Foo, Foo}(), 'should not error')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <generic-class-bounds .2>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ class Foo{X: Display}
+  \\  x: X
+  \\  def init(x: X)
+  \\    self.x = x
+  \\  end
+  \\  pub def fmt()
+  \\    return self.x.fmt()
+  \\  end
+  \\ end
+  \\
+  \\ class Bar : Display
+  \\  pub def fmt()
+  \\    return "Bar()"
+  \\  end
+  \\ end
+  \\
+  \\ let f1 = Foo(Bar())
+  \\ assert(f1.fmt() == "Bar()", 'should not error')
   ;
   try doRuntimeTest(src);
 }

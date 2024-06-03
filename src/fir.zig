@@ -491,7 +491,12 @@ pub const CFGBuilder = struct {
             // the nodes after this while has both the while's condition and it's body (ETrue path)
             // as their predecessors, so we include both for `_prev`
             _prev = frm_then;
-            _prev.extend(&frm_cnd, self.alloc);
+            // when linking nd.then, if the block is empty, _prev (frm_cnd) would be returned,
+            // in such case, extending _prev (frm_then) here implies extending the list with itself
+            // which is UB because extend invalidates pointers.
+            if (_prev.list.items.ptr != frm_cnd.list.items.ptr) {
+              _prev.extend(&frm_cnd, self.alloc);
+            }
             atomic = false;
           },
           .NdControl => {
@@ -623,21 +628,6 @@ pub const CFGBuilder = struct {
       nodes.appendAssumeCapacity(Node.new(.{.NdParam = param.*}, self.alloc));
     }
     nodes.appendSliceAssumeCapacity(fun.data.body.block().nodes);
-    const _prev = self.linkNodeList(nodes.items(), self.toList(self.graph.entry()), .ESequential, null);
-    self.connectVertices(_prev, self.graph.exit());
-    // save node for future lookup()s
-    self.graph.getEntry().bb.appendNode(node, self.alloc);
-    return self.graph;
-  }
-
-  pub fn buildClass(self: *Self, node: *Node) *FlowGraph {
-    // build the cfg of cls
-    assert(!node.NdClass.isParameterized());
-    self.newGraph();
-    const cls = &node.NdClass;
-    var nodes = NodeListU.initCapacity(cls.data.fields.len + cls.data.methods.len, self.alloc);
-    nodes.appendSliceAssumeCapacity(cls.data.fields, self.alloc);
-    nodes.appendSliceAssumeCapacity(cls.data.methods, self.alloc);
     const _prev = self.linkNodeList(nodes.items(), self.toList(self.graph.entry()), .ESequential, null);
     self.connectVertices(_prev, self.graph.exit());
     // save node for future lookup()s

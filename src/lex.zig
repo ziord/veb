@@ -11,6 +11,7 @@ pub const Keywords = std.ComptimeStringMap(TokenType, .{
   .{"else", .TkElse},
   .{"elif", .TkElif},
   .{"for", .TkFor},
+  .{"where", .TkWhere},
   .{"while", .TkWhile},
   .{"and", .TkAnd},
   .{"let", .TkLet},
@@ -32,6 +33,7 @@ pub const Keywords = std.ComptimeStringMap(TokenType, .{
   .{"break", .TkBreak},
   .{"with", .TkWith},
   .{"class", .TkClass},
+  .{"trait", .TkTrait},
   .{"orelse", .TkOrElse},
   .{"continue", .TkContinue},
   .{ks.OkVar, .TkOk},
@@ -127,12 +129,14 @@ pub const TokenType = enum (u8) {
   TkSelf,           // self
   TkWith,           // with
   TkClass,          // class
+  TkTrait,          // trait
   TkBreak,          // break
   TkFalse,          // false
   TkMatch,          // match
   TkMaybe,          // maybe
   TkPanic,          // panic
   TkTuple,          // tuple
+  TkWhere,          // where
   TkWhile,          // while
   TkResult,         // result
   TkOrElse,         // orelse
@@ -255,6 +259,7 @@ pub const TokenType = enum (u8) {
       .TkCase => "case",
       .TkWith => "with",
       .TkClass => "class",
+      .TkTrait => "trait",
       .TkBreak => "break",
       .TkOk => ks.OkVar,
       .TkTrue => ks.TrueVar,
@@ -276,6 +281,7 @@ pub const TokenType = enum (u8) {
       .TkMaybe => ks.MaybeVar,
       .TkResult => ks.ResultVar,
       .TkMatch => "match",
+      .TkWhere => "where",
       .TkWhile => "while",
       .TkOrElse => "orelse",
       .TkReturn => "return",

@@ -59,6 +59,7 @@ pub const NodeType = enum {
   NdGenericFun,
   NdDotAccess,
   NdClass,
+  NdTrait,
   NdLblArg,
   NdMatch,
   NdFailMarker,
@@ -186,25 +187,18 @@ pub const BinaryNode = struct {
   }
 
   pub fn clone(self: *@This(), node: *Node, al: Allocator) *Node {
+    const data: BinaryNode = .{
+      .left = self.left.clone(al),
+      .right = self.right.clone(al),
+      .op_tkty = self.op_tkty,
+      .op_offset = self.op_offset,
+      .op_origin = self.op_origin,
+      .allow_rested = self.allow_rested,
+      .allow_consts = self.allow_consts,
+    };
     return switch (node.*) {
-      .NdBinary => Node.new(.{.NdBinary = .{
-        .left = self.left.clone(al),
-        .right = self.right.clone(al),
-        .op_tkty = self.op_tkty,
-        .op_offset = self.op_offset,
-        .op_origin = self.op_origin,
-        .allow_rested = self.allow_rested,
-        .allow_consts = self.allow_consts,
-      }}, al),
-      .NdAssign => Node.new(.{.NdAssign = .{
-        .left = self.left.clone(al),
-        .right = self.right.clone(al),
-        .op_tkty = self.op_tkty,
-        .op_offset = self.op_offset,
-        .op_origin = self.op_origin,
-        .allow_rested = self.allow_rested,
-        .allow_consts = self.allow_consts,
-      }}, al),
+      .NdBinary => Node.new(.{.NdBinary = data}, al),
+      .NdAssign => Node.new(.{.NdAssign = data}, al),
       else => unreachable,
     };
   }
@@ -537,17 +531,13 @@ pub const VarDeclNode = struct {
 pub const BlockNode = struct {
   nodes: NodeItems,
   checked: bool = false,
-  scoped: bool = false,
 
   pub inline fn init(nodes: NodeItems) @This() {
     return .{.nodes = nodes};
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
-    return Node.new(.{.NdBlock = .{
-      .nodes = cloneNodeItems(self.nodes, al),
-      .scoped = self.scoped}
-    }, al);
+    return Node.new(.{.NdBlock = .{.nodes = cloneNodeItems(self.nodes, al)}}, al);
   }
 
   pub inline fn getLast(self: *@This()) *Node {
@@ -670,7 +660,7 @@ pub const AliasNode = struct {
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    _ = try u8w.writer().write("<type alias>");
+    _ = try u8w.writer().write("<type alias>\n");
   }
 };
 
@@ -1099,6 +1089,10 @@ pub const FunData = struct {
   /// whether all attributes (aspec public/private) can
   /// be accessed within this function without errors
   allow_all_aspec: bool = false,
+  /// whether this is a trait function
+  trait_fun: bool = false,
+  /// whether this is a trait function with no default implementation
+  empty_trait_fun: bool = false,
 
   pub inline fn init(name: ?Token, body: *Node, ret: ?*Type, is_builtin: bool, variadic: bool, publ: bool) @This() {
     return .{
@@ -1117,6 +1111,8 @@ pub const FunData = struct {
       .variadic = self.variadic,
       .public = self.public,
       .allow_all_aspec = self.allow_all_aspec,
+      .trait_fun = self.trait_fun,
+      .empty_trait_fun = self.empty_trait_fun,
     }), al);
   }
 };
@@ -1193,13 +1189,13 @@ pub const GenericFunNode = struct {
   }
 };
 
-/// NdClass
-pub const ClassNode = struct {
+/// NdClass, NdTrait
+pub const StructNode = struct {
   name: IdentToken,
-  data: *ClassData,
-  protos: ?*Type,
+  data: *StructData,
+  trait: ?*Type,
 
-  pub const ClassData = struct {
+  pub const StructData = struct {
     fields: NodeItems,
     methods: NodeItems,
     params: ?TypeItems,
@@ -1218,7 +1214,7 @@ pub const ClassNode = struct {
       };
     }
 
-    pub fn clone(self: *ClassData, al: Allocator) *ClassData {
+    pub fn clone(self: *StructData, al: Allocator) *StructData {
       var params: ?TypeItems = null;
       if (self.params) |_params| {
         params = util.allocSlice(*Type, _params.len, al);
@@ -1226,7 +1222,7 @@ pub const ClassNode = struct {
           params.?[i] = ty.clone(al);
         }
       }
-      return util.box(ClassData, @as(ClassData, .{
+      return util.box(StructData, @as(StructData, .{
         .fields = cloneNodeItems(self.fields, al),
         .methods = cloneNodeItems(self.methods, al),
         .params = params,
@@ -1235,17 +1231,24 @@ pub const ClassNode = struct {
         .tktype = self.tktype,
       }), al);
     }
+
+    pub fn addMethod(self: *StructData, node: *Node, al: Allocator) void {
+      const items = util.allocSlice(*Node, self.methods.len + 1, al);
+      @memcpy(items[0..self.methods.len], self.methods);
+      items[self.methods.len] = node;
+      self.methods = items;
+    }
   };
 
   pub inline fn init(
-    name: Token, protos: ?*Type, fields: NodeItems, methods: NodeItems,
+    name: Token, trait: ?*Type, fields: NodeItems, methods: NodeItems,
     params: ?TypeItems, checked: bool, builtin: bool, al: Allocator
   ) @This() {
     return .{
       .name = IdentToken.init(name),
-      .protos = protos, 
+      .trait = trait, 
       .data = util.box(
-        ClassData, ClassData.init(
+        StructData, StructData.init(
           fields, methods, params, checked, builtin, name.ty
         ), al
       )
@@ -1258,14 +1261,17 @@ pub const ClassNode = struct {
 
   pub const isGeneric = isParameterized;
 
-  pub fn clone(self: *@This(), al: Allocator) *Node {
-    return Node.new(.{
-      .NdClass = .{
-        .name = self.name,
-        .data = self.data.clone(al),
-        .protos = if (self.protos) |protos| protos.clone(al) else null,
-      }
-    }, al);
+  pub fn clone(self: *@This(), node: *Node, al: Allocator) *Node {
+    const data: StructNode = .{
+      .name = self.name,
+      .data = self.data.clone(al),
+      .trait = if (self.trait) |trait| trait.clone(al) else null,
+    };
+    return switch (node.*) {
+      .NdClass => Node.new(.{.NdClass = data}, al),
+      .NdTrait => Node.new(.{.NdTrait = data}, al),
+      else => unreachable,
+    };
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
@@ -1468,7 +1474,8 @@ pub const Node = union(NodeType)  {
   NdBasicFun: BasicFunNode,
   NdGenericFun: GenericFunNode,
   NdDotAccess: DotAccessNode,
-  NdClass: ClassNode,
+  NdClass: StructNode,
+  NdTrait: StructNode,
   NdLblArg: LblArgNode,
   NdMatch: MatchNode,
   NdFailMarker: MarkerNode,
@@ -1555,6 +1562,13 @@ pub const Node = union(NodeType)  {
   pub inline fn isClass(self: *const @This()) bool {
     return switch (self.*) {
       .NdClass => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isTrait(self: *const @This()) bool {
+    return switch (self.*) {
+      .NdTrait => true,
       else => false,
     };
   }
@@ -1867,6 +1881,7 @@ pub const Node = union(NodeType)  {
       .NdRedunMarker, .NdScope, .NdDiagStartMarker, .NdPipeHolder => node,
       .NdBinary, .NdAssign => |*nd| nd.clone(node, al),
       .NdList, .NdTuple => |*nd| nd.clone(node, al),
+      .NdClass, .NdTrait => |*nd| nd.clone(node, al),
       inline else => |*nd| nd.clone(al),
     };
   }
@@ -1879,6 +1894,7 @@ pub const Node = union(NodeType)  {
       .NdRedunMarker, .NdScope, .NdDiagStartMarker, .NdPipeHolder => node,
       .NdBinary, .NdAssign => |*nd| nd.clone(node, al),
       .NdList, .NdTuple => |*nd| nd.clone(node, al),
+      .NdClass, .NdTrait => |*nd| nd.clone(node, al),
       inline else => |*nd| nd.clone(al),
     };
   }
@@ -1922,7 +1938,7 @@ pub const Node = union(NodeType)  {
       .NdField => |*nd| nd.name.toToken(),
       .NdPubField => |*nd| nd.name.toToken(),
       .NdTVar => |*nd| nd.token,
-      .NdClass => |*nd| nd.name.toToken(),
+      .NdClass, .NdTrait => |*nd| nd.name.toToken(),
       .NdBasicFun => |*nd| {
         if (nd.data.name) |name| {
           return name;
@@ -2025,8 +2041,8 @@ pub const Node = union(NodeType)  {
       .NdWhile, .NdControl, .NdScope, .NdLblArg,
       .NdFailMarker, .NdRedunMarker,
       .NdEmpty, .NdDiagStartMarker,
-      .NdProgram, .NdClass, .NdMatch,
-      .NdPipeHolder => null,
+      .NdProgram, .NdClass, .NdTrait,
+      .NdMatch, .NdPipeHolder => null,
       .NdBasicCall => |*nd| nd.typ,
       .NdGenericCall => |*nd| nd.call.getType(),
       inline else => |*nd| nd.typ,
@@ -2128,7 +2144,7 @@ pub const Node = union(NodeType)  {
         }
         return false;
       },
-      .NdClass => |*nd| {
+      .NdClass, .NdTrait => |*nd| {
         for (nd.data.methods) |itm| {
           if (itm.hasSugar()) {
             return true;
@@ -2220,6 +2236,7 @@ pub const TypeInfo = union(enum) {
   Generic: Generic,
   Function: Function,
   Class: Class,
+  Trait: Trait,
   Instance: Instance,
   Recursive: Recursive,
   TagOrClass: TagOrClass,
@@ -2408,9 +2425,12 @@ pub const Type = struct {
       },
       .Class => |*cls| {
         if (map.get(self)) |ty| return ty;
-        var fields =  ds.ArrayListUnmanaged(*Node).initCapacity(cls.data.fields.capacity(), al);
-        var methods = TypeList.initCapacity(cls.data.methods.capacity(), al);
-        var ret = Type.init(.{.Class = Class.init(cls.data.name, cls.tktype, fields, methods, null, cls.data.node, cls.empty, cls.builtin, al)}).box(al);
+        var fields =  ds.ArrayListUnmanaged(*Node).initCapacity(cls.data.fields.len(), al);
+        var methods = TypeList.initCapacity(cls.data.methods.len(), al);
+        var ret = Type.init(.{.Class = Class.init(
+          cls.data.name, cls.tktype, fields, methods, null,
+          cls.data.node, cls.empty, cls.builtin, null, al
+        )}).box(al);
         map.set(self, ret, al);
         for (cls.data.fields.items()) |itm| {
           fields.appendAssumeCapacity(itm.clone(al));
@@ -2425,13 +2445,47 @@ pub const Type = struct {
           }
           ret.klass().tparams = new_tparams.items();
         }
+        if (cls.data.trait) |trt| {
+          ret.klass().data.trait = trt._clone(map, al);
+        }
         ret.klass().immutable = cls.immutable;
+        ret.klass().data.methods = methods;
+        ret.setRestFields(self);
+        return ret;
+      },
+      .Trait => |*trt| {
+        if (map.get(self)) |ty| return ty;
+        var fields =  ds.ArrayListUnmanaged(*Node).initCapacity(trt.data.fields.len(), al);
+        var methods = TypeList.initCapacity(trt.data.methods.len(), al);
+        var ret = Type.init(.{.Trait = Class.init(
+          trt.data.name, trt.tktype, fields, methods, null,
+          trt.data.node, trt.empty, trt.builtin, null, al
+        )}).box(al);
+        map.set(self, ret, al);
+        for (trt.data.fields.items()) |itm| {
+          fields.appendAssumeCapacity(itm.clone(al));
+        }
+        for (trt.data.methods.items()) |itm| {
+          methods.appendAssumeCapacity(itm._clone(map, al));
+        }
+        if (trt.tparams) |tp| {
+          var new_tparams = TypeList.initCapacity(tp.len, al);
+          for (tp) |ty| {
+            new_tparams.appendAssumeCapacity(ty._clone(map, al));
+          }
+          ret.trait().tparams = new_tparams.items();
+        }
+        if (trt.data.trait) |t| {
+          ret.trait().data.trait = t._clone(map, al);
+        }
+        ret.trait().immutable = trt.immutable;
+        ret.trait().data.methods = methods;
         ret.setRestFields(self);
         return ret;
       },
       .Generic => |*gen| {
         var new = Generic.init(gen.base._clone(map, al));
-        new.tparams.ensureTotalCapacity(gen.tparams.capacity(), al);
+        new.tparams.ensureTotalCapacity(gen.tparams.len(), al);
         for (gen.tparams.items()) |ty| {
           new.tparams.appendAssumeCapacity(ty._clone(map, al));
         }
@@ -2455,7 +2509,7 @@ pub const Type = struct {
         map.set(self, ret, al);
         var params: ?*Tag.TagFieldList = null;
         if (tg.fields) |prms| {
-          var new_params = Tag.TagFieldList.initCapacity(prms.capacity(), al).box(al);
+          var new_params = Tag.TagFieldList.initCapacity(prms.len(), al).box(al);
           for (prms.items()) |prm| {
             new_params.appendAssumeCapacity(prm.clone(al, map));
           }
@@ -2586,6 +2640,10 @@ pub const Type = struct {
 
   pub inline fn newClass(name: []const u8, tktype: TokenType, allocator: Allocator) Self {
     return Self.init(.{.Class = Class.initWithDefault(name, tktype, allocator)});
+  }
+
+  pub inline fn newTrait(name: []const u8, tktype: TokenType, allocator: Allocator) Self {
+    return Self.init(.{.Trait = Trait.initWithDefault(name, tktype, allocator)});
   }
 
   pub inline fn newTag(name: []const u8, ty: TokenType) Self {
@@ -2777,6 +2835,22 @@ pub const Type = struct {
   pub inline fn isClass(self: *Self) bool {
     return switch (self.info) {
       .Class => true,
+      else => false,
+    };
+  }
+
+  /// a class type
+  pub inline fn isTrait(self: *Self) bool {
+    return switch (self.info) {
+      .Trait => true,
+      else => false,
+    };
+  }
+
+  /// a class or trait type
+  pub inline fn isClassOrTrait(self: *Self) bool {
+    return switch (self.info) {
+      .Trait, .Class => true,
       else => false,
     };
   }
@@ -3007,6 +3081,14 @@ pub const Type = struct {
     return &self.info.Class;
   }
 
+  pub inline fn trait(self: *Self) *Trait {
+    return &self.info.Trait;
+  }
+
+  pub inline fn klassOrTrait(self: *Self) *Class {
+    return if (self.isClass()) &self.info.Class else &self.info.Trait;
+  }
+
   pub inline fn recursive(self: *Self) Recursive {
     return self.info.Recursive;
   }
@@ -3017,11 +3099,11 @@ pub const Type = struct {
 
   /// check if a class type contains a recursive type (param)
   pub fn hasRecursive(self: *Self) bool {
-    for (self.klass().getSlice()) |ty| {
+    for (self.klassOrTrait().getSlice()) |ty| {
       if (ty.isRecursive() or ty.isLikeXTy(isRecursive)) {
         return true;
       }
-      if (ty.isClass() and ty.hasRecursive()) {
+      if (ty.isClassOrTrait() and ty.hasRecursive()) {
         return true;
       }
     }
@@ -3051,6 +3133,14 @@ pub const Type = struct {
       .Tag => |*tg| {
         for (tg.fieldSlice()) |prm| {
           if (prm.typ.hasVariable()) {
+            return true;
+          }
+        }
+        return false;
+      },
+      .Union => |*uni| {
+        for (uni.variants.values()) |ty| {
+          if (ty.hasVariable()) {
             return true;
           }
         }
@@ -3204,8 +3294,25 @@ pub const Type = struct {
           if (nd.getFieldType()) |typ| {
             self.tid += typ.typeid();
           } else {
-            const lxm = nd.getFieldLexeme();
-            for (lxm) |ch| {
+            for (nd.getFieldLexeme()) |ch| {
+              self.tid += @as(u8, ch);
+            }
+          }
+        }
+      },
+      .Trait => |*trt| {
+        self.tid = 19 << ID_SEED;
+        for (trt.data.name) |ch| {
+          self.tid += @as(u8, ch);
+        }
+        for (trt.getSlice()) |typ| {
+          self.tid += typ.typeid();
+        }
+        for (trt.data.fields.items()) |nd| {
+          if (nd.getFieldType()) |typ| {
+            self.tid += typ.typeid();
+          } else {
+            for (nd.getFieldLexeme()) |ch| {
               self.tid += @as(u8, ch);
             }
           }
@@ -3313,7 +3420,7 @@ pub const Type = struct {
           param._unfoldRecursive(step + 1, list, al, visited);
         }
       },
-      .Class => |*cls| {
+      .Class, .Trait => |*cls| {
         // name
         list.append(Type.newVariableAToken(deriveToken(cls.data.name), al), al);
         // tparams
@@ -3366,7 +3473,7 @@ pub const Type = struct {
           param._unfold(list, al);
         }
       },
-      .Class => |*cls| {
+      .Class, .Trait => |*cls| {
         // name
         list.append(Type.newVariableAToken(deriveToken(cls.data.name), al), al);
         // tparams
@@ -3383,6 +3490,7 @@ pub const Type = struct {
         for (cls.data.methods.items()) |mth| {
           mth._unfold(list, al);
         }
+        // TODO: unfold data.trait?
       },
       .Union => |*uni| {
         for (uni.variants.values()) |ty| {
@@ -3435,6 +3543,8 @@ pub const Type = struct {
     // this.     &.      other.     ctx
     if (this == other) return true;
     switch (this.info) {
+      .Class => |*t| return t.isClassRelatedTo(other, ctx, al),
+      .Trait => |*t| return t.isTraitRelatedTo(other, ctx, al),
       inline else => |*tyk| return tyk.isRelatedTo(other, ctx, al),
     }
     unreachable;
@@ -3633,7 +3743,7 @@ pub const Type = struct {
           _ = try writer.write("}");
         }
       },
-      .Class => |*cls| {
+      .Class, .Trait => |*cls| {
         const name = cls.data.name;
         if (cls.tparams == null) {
           _ = try u8w.writer().write(name);
@@ -3906,7 +4016,7 @@ pub const Type = struct {
         return Self.compressTaggedTypes(&new_uni, null, allocator);
       },
       .Constant, .Concrete, .Generic, .Variable, .Top,
-      .Function, .Class, .Instance, .Tag, .TagOrClass => return error.Negation,
+      .Function, .Class, .Trait, .Instance, .Tag, .TagOrClass => return error.Negation,
       .Recursive => return t1,
     }
   }
@@ -3949,6 +4059,11 @@ pub const Type = struct {
           }
         }
       },
+      .Trait => |*trt| {
+        if (t2.isTrait() and trt.eql(t2.trait())) {
+          return t1;
+        }
+      },
       .Union => |*uni| {
         for (uni.variants.values()) |ty| {
           if (is(ty, t2, al)) |typ| {
@@ -3968,17 +4083,13 @@ pub const Type = struct {
         }
       },
       .Variable => |*vr| {
-        if (t2.isVariable()) {
-          if (vr.eql(t2.variable())) {
-            return t1;
-          }
+        if (t2.isVariable() and vr.eql(t2.variable())) {
+          return t1;
         }
       },
       .Function => |*fun| {
-        if (t2.isFunction()) {
-          if (fun.eql(t2.function())) {
-            return t1;
-          }
+        if (t2.isFunction() and fun.eql(t2.function(), al)) {
+          return t1;
         }
       },
       .Instance => |*inst| {
@@ -4053,7 +4164,7 @@ pub const Concrete = struct {
         }
         return false;
       },
-      .Generic, .Variable, .Recursive, .Function,
+      .Generic, .Variable, .Recursive, .Function, .Trait,
       .Top, .Instance, .Tag, .TaggedUnion, .TagOrClass => return false,
     }
     return false;
@@ -4099,7 +4210,7 @@ pub const Constant = struct {
         return false;
       },
       .Union, .Generic, .Variable, .Recursive, .Function,
-      .Top, .Instance, .Tag, .TaggedUnion, .TagOrClass => return false,
+      .Top, .Instance, .Tag, .TaggedUnion, .TagOrClass, .Trait => return false,
     }
     return false;
   }
@@ -4115,6 +4226,10 @@ pub const Union = struct {
 
   pub inline fn toType(self: Union, al: Allocator) Type {
     return Type.compressTypes(@constCast(&self.variants), null, al).*;
+  }
+
+  pub inline fn toTypeBoxed(self: Union, al: Allocator) *Type {
+    return Type.compressTypes(@constCast(&self.variants), null, al);
   }
 
   pub inline fn isBoolUnionTy(self: *Union) bool {
@@ -4173,7 +4288,8 @@ pub const Union = struct {
         }
         return true;
       },
-      .Constant, .Concrete, .Generic, .Variable, .Recursive, .Function, .Class, .Top, .Instance, .TagOrClass => {
+      .Constant, .Concrete, .Generic, .Variable, .Recursive,
+      .Function, .Class, .Top, .Instance, .TagOrClass, .Trait, => {
         if (this.isBoolUnionTy() and other.isBoolTy()) return true;
         if (ctx == .RCTypeParams) return false;
         // related if there exists a variant of T1 that is related to T2
@@ -4293,7 +4409,8 @@ pub const TaggedUnion = struct {
           return i;
         }
       },
-      .Constant, .Concrete, .Generic, .Variable, .Function, .Class, .Top, .Instance, .Tag, .TagOrClass => {
+      .Constant, .Concrete, .Generic, .Variable, .Function,
+      .Class, .Top, .Instance, .Tag, .TagOrClass, .Trait => {
         if (ctx == .RCTypeParams) return null;
         // related if there exists a variant of T1 that is related to T2
         for (this.variants.items(), 0..) |variant, i| {
@@ -4354,7 +4471,7 @@ pub const Generic = struct {
         return true;
       },
       .Concrete, .Constant, .Union, .Variable,
-      .Recursive, .Function, .Class, .Top,
+      .Recursive, .Function, .Class, .Top, .Trait,
       .Instance, .Tag, .TaggedUnion, .TagOrClass => return false,
     }
     return false;
@@ -4363,6 +4480,7 @@ pub const Generic = struct {
 
 pub const Variable = struct {
   tokens: TokenList,
+  bounds: ?*Type = null,
 
   pub const TokenList = ds.ArrayListUnmanaged(Token);
 
@@ -4409,7 +4527,7 @@ pub const Variable = struct {
     return switch (other.info) {
       .Variable => |*vr| this.eql(vr),
       .Constant, .Concrete, .Union, .Recursive,
-      .Function, .Generic, .Class, .Top,
+      .Function, .Generic, .Class, .Top, .Trait,
       .Instance, .Tag, .TaggedUnion, .TagOrClass => false,
     };
   }
@@ -4446,7 +4564,7 @@ pub const Function = struct {
     return if (self.tparams) |tp| tp.len else 0;
   }
 
-  pub fn eql(self: *@This(), other: *@This()) bool {
+  pub fn eql(self: *@This(), other: *@This(), al: Allocator) bool {
     if (self.tparams) |tp1| {
       if (other.tparams) |tp2| {
         if (tp1.len != tp2.len) {
@@ -4457,7 +4575,7 @@ pub const Function = struct {
       return false;
     }
     if (self.data.params.len != other.data.params.len) return false;
-    if (!self.data.ret.typeidEql(other.data.ret)) return false;
+    if (!self.data.ret.isRelatedTo(other.data.ret, .RCAny, al)) return false;
     for (self.data.params, other.data.params) |a, b| {
       if (!a.typeidEql(b)) return false;
     }
@@ -4465,12 +4583,11 @@ pub const Function = struct {
   }
 
   pub fn isRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, al: Allocator) bool {
-    _ = al;
     _ = ctx;
     return switch (other.info) {
-      .Function => |*fun| this.eql(fun),
+      .Function => |*fun| this.eql(fun, al),
       .Variable, .Constant, .Concrete, .Union,
-      .Recursive, .Generic, .Class, .Top,
+      .Recursive, .Generic, .Class, .Top, .Trait,
       .Instance, .Tag, .TaggedUnion, .TagOrClass => false,
     };
   }
@@ -4490,11 +4607,12 @@ pub const Class = struct {
     fields: ds.ArrayListUnmanaged(*Node),
     methods: TypeList,
     node: ?*Node,
+    trait: ?*Type,
   };
 
   pub inline fn init(
     name: []const u8, tktype: TokenType, fields: ds.ArrayListUnmanaged(*Node), methods: TypeList,
-    tparams: ?[]*Type, node: ?*Node, empty: bool, builtin: bool, al: Allocator
+    tparams: ?[]*Type, node: ?*Node, empty: bool, builtin: bool, trait: ?*Type, al: Allocator
   ) @This() {
     return .{
       .empty = empty,
@@ -4506,6 +4624,7 @@ pub const Class = struct {
         .fields = fields,
         .methods = methods,
         .node = node,
+        .trait = trait,
       }, al), 
     };
   }
@@ -4522,7 +4641,7 @@ pub const Class = struct {
       name, tktype,
       ds.ArrayListUnmanaged(*Node).init(),
       TypeList.init(),
-      null, null, false, false, al
+      null, null, false, false, null, al
     );
     cls.immutable = tktype.is(.TkTuple);
     cls.builtin = isBuiltin(tktype);
@@ -4579,7 +4698,11 @@ pub const Class = struct {
     return Type.init(.{.Class = self});
   }
 
-  pub fn eql(self: *@This(), other: *@This()) bool {
+  pub inline fn toTraitType(self: @This()) Type {
+    return Type.init(.{.Trait = self});
+  }
+
+  pub inline fn eql(self: *@This(), other: *@This()) bool {
     return std.mem.eql(u8, self.data.name, other.data.name);
   }
 
@@ -4620,7 +4743,8 @@ pub const Class = struct {
 
   pub fn getMethod(self: *@This(), name: []const u8) ?*Node {
     if (self.data.node) |_node| {
-      for (_node.NdClass.data.methods) |mth| {
+      const data = if (_node.isClass()) _node.NdClass.data else _node.NdTrait.data;
+      for (data.methods) |mth| {
         if (mth.NdBasicFun.data.name.?.valueEql(name)) {
           return mth;
         }
@@ -4631,7 +4755,8 @@ pub const Class = struct {
 
   pub fn getMethodIndex(self: *@This(), name: []const u8) ?usize {
     if (self.data.node) |_node| {
-      for (_node.NdClass.data.methods, 0..) |mth, i| {
+      const data = if (_node.isClass()) _node.NdClass.data else _node.NdTrait.data;
+      for (data.methods, 0..) |mth, i| {
         if (mth.NdBasicFun.data.name.?.valueEql(name)) {
           return i;
         }
@@ -4649,29 +4774,24 @@ pub const Class = struct {
     return null;
   }
 
-  pub fn isRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, al: Allocator) bool {
+  /// `this` is Class Type
+  pub fn isClassRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, al: Allocator) bool {
     return switch (other.info) {
       .Class => |*oth| {
-        if (!std.mem.eql(u8, this.data.name, oth.data.name)) return false;
+        if (!this.eql(oth)) return false;
         // less specific to specific, for ex: lex x = []; x = [1, 2, 3]
         if (oth.empty and ctx == .RCConst) return true;
         // expr is Type
-        if (this.tparamsLen() != oth.tparamsLen()) {
+        const slice1 = this.getSlice();
+        const slice2 = oth.getSlice();
+        if (slice1.len != slice2.len) {
           return ctx == .RCIs;
         }
-        if (this.tparams) |tparams1| {
-          if (oth.tparams) |tparams2| {
-            const _ctx = if (ctx != .RCIs) .RCTypeParams else ctx;
-            for (tparams1, tparams2) |tp1, tp2| {
-              if (!tp1.isRelatedTo(tp2, _ctx, al)) {
-                return false;
-              }
-            }
-          } else {
+        const _ctx = if (ctx != .RCIs) .RCTypeParams else ctx;
+        for (slice1, slice2) |tp1, tp2| {
+          if (!tp1.isRelatedTo(tp2, _ctx, al)) {
             return false;
           }
-        } else if (oth.tparams != null) {
-          return false;
         }
         if (this.builtin) {
           return oth.builtin;
@@ -4682,7 +4802,7 @@ pub const Class = struct {
         if (ctx == .RCIs) return tg.nameEql(this.data.name);
         return false;
       },
-      .Instance => this.isRelatedTo(other.instance().cls, ctx, al),
+      .Instance => this.isClassRelatedTo(other.instance().cls, ctx, al),
       .Constant => |*cons| {
         return this.isStringClass() and cons.kind == .TyString;
       },
@@ -4690,10 +4810,66 @@ pub const Class = struct {
         return this.isStringClass() and conc.kind == .TyString;
       },
       .Variable, .Union, .Recursive, .Function,
-      .Generic, .Top, .Tag, .TaggedUnion, => false,
+      .Generic, .Top, .Tag, .TaggedUnion, .Trait => false,
+    };
+  }
+
+  /// `this` is Trait Type
+  pub fn isTraitRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, al: Allocator) bool {
+    return switch (other.info) {
+      .Trait => |*oth| {
+        if (this == oth) return true;
+        if (!this.eql(oth)) {
+          // if `other` is a subtype of `this`, then return true
+          if (oth.data.trait) |trait| {
+            if (this.isTraitRelatedTo(trait, ctx, al)) {
+              return true;
+            }
+          }
+          return false;
+        }
+        const slice1 = this.getSlice();
+        const slice2 = oth.getSlice();
+        if (slice1.len != slice2.len) {
+          return false;
+        }
+        for (slice1, slice2) |tp1, tp2| {
+          if (!tp1.isRelatedTo(tp2, ctx, al)) {
+            return false;
+          }
+        }
+        if (this.data.methods.len() != oth.data.methods.len()) {
+          return false;
+        }
+        for (this.data.methods.items(), this.data.methods.items()) |m1, m2| {
+          if (!m1.isRelatedTo(m2, ctx, al)) {
+            return false;
+          }
+        }
+        return true;
+      },
+      .Class => |*oth| {
+        if (oth.data.trait) |trait| {
+          return this.isTraitRelatedTo(trait, ctx, al);
+        }
+        return false;
+      },
+      .Instance => this.isTraitRelatedTo(other.instance().cls, ctx, al),
+      .Union => |*uni| {
+        for (uni.variants.values()) |ty| {
+          if (this.isTraitRelatedTo(ty, ctx, al)) {
+            return true;
+          }
+        }
+        return false;
+      },
+      .TagOrClass, .Constant, .Concrete, .Variable,
+      .Recursive, .Function, .Generic, .Top, .Tag, .TaggedUnion, => false,
     };
   }
 };
+
+pub const Trait = Class;
 
 pub const Tag = struct {
   name: []const u8,
@@ -4870,7 +5046,7 @@ pub const Instance = struct {
       .Class => if (ctx == .RCIs) this.cls.isRelatedTo(other, ctx, al) else false,
       .TagOrClass => if (ctx == .RCIs) this.cls.isRelatedTo(other, ctx, al) else false,
       .Function, .Variable, .Constant, .Concrete, .Union,
-      .Recursive, .Generic, .Top, .Tag, .TaggedUnion, => false,
+      .Recursive, .Generic, .Top, .Tag, .TaggedUnion, .Trait, => false,
     };
   }
 };

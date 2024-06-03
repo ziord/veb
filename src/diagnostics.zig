@@ -53,26 +53,30 @@ pub const Diagnostic = struct {
     return false;
   }
 
-  fn pushData(self: *Self, level: DiagLevel, token: Token, comptime fmt: []const u8, args: anytype)
+  fn pushData(self: *Self, level: DiagLevel, token: Token, depth: u32, comptime fmt: []const u8, args: anytype)
   !void {
     const allocator = self.data.allocator;
     const col = token.column(self.src.*);
-    const msg = try std.fmt.allocPrint(allocator, fmt ++ "\n", args);
+    const msg = try std.fmt.allocPrint(allocator, fmt ++ "\n\n", args);
     if (self.alreadyIn(token, msg)) return;
     try self.data.append(.{.level = level, .msg = msg, .token = token});
+    for (0..depth) |_| {
+      try self.data.append(.{.level = level, .msg = " ", .token = token});
+    }
     try self.data.append(
       .{
         .level = level,
         .token = token,
-        .msg = try std.fmt.allocPrint(
-          allocator, "{s}.{}:{}:\n\t{s}\n",
-          .{self.filename.*, token.line, col, token.getLine(self.src.*)}
-        )
+        .msg = try std.fmt.allocPrint(allocator, "{s}.{}:{}:\n", .{self.filename.*, token.line, col})
       }
     );
-    try self.data.append(.{.level = level, .msg = "\t", .token = token});
+    for (0..depth + 2) |_| {
+      try self.data.append(.{.level = level, .msg = " ", .token = token});
+    }
+    try self.data.append(.{.level = level, .msg = token.getLine(self.src.*), .token = token});
+    try self.data.append(.{.level = level, .msg = "\n", .token = token});
     const lexeme = token.lexeme();
-    var i = if (col >= lexeme.len) col - lexeme.len else lexeme.len - col;
+    var i = (depth + 2) + if (col >= lexeme.len) col - lexeme.len else lexeme.len - col;
     while (i > 0) {
       try self.data.append(.{.level = level, .msg = " ", .token = token});
       i -= 1;
@@ -136,7 +140,13 @@ pub const Diagnostic = struct {
   }
 
   pub fn addDiagnostics(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) void {
-    self.pushData(self.getLevel(), token, fmt, args) catch |e| {
+    self.pushData(self.getLevel(), token, 2, fmt, args) catch |e| {
+      std.debug.print("Could not add diagnostic: {}", .{e});
+    };
+  }
+
+  pub fn addDiagnosticsWithDepth(self: *Self, token: Token, depth: u32, comptime fmt: []const u8, args: anytype) void {
+    self.pushData(self.getLevel(), token, depth, fmt, args) catch |e| {
       std.debug.print("Could not add diagnostic: {}", .{e});
     };
   }
@@ -147,8 +157,16 @@ pub const Diagnostic = struct {
     };
   }
 
+  pub fn addDiagnosticsSliceDirect(self: *Self, token: Token, msgs: []const []const u8) void {
+    for (msgs) |msg| {
+      self.data.append(.{.level = self.getLevel(), .msg = msg, .token = token}) catch |e| {
+        std.debug.print("Could not add diagnostic: {}", .{e});
+      };
+    }
+  }
+
   pub fn addDiagnosticsWithLevel(self: *Self, level: DiagLevel, token: Token, comptime fmt: []const u8, args: anytype) void {
-    self.pushData(level, token, fmt, args) catch |e| {
+    self.pushData(level, token, 2, fmt, args) catch |e| {
       std.debug.print("Could not add diagnostic: {}", .{e});
     };
   }

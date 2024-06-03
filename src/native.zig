@@ -400,3 +400,7 @@ pub fn addBuiltins(vm: *VM) void {
   addNativeFn(vm, "println", 17, VarArgC, fnPrintln);
   addNativeFn(vm, "string", 20, 1, fnString);
 }
+
+pub fn addNames(vm: *VM) void {
+  vm.names.init = vl.createString(vm, &vm.strings, ks.InitVar, false);
+}

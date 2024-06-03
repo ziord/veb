@@ -235,7 +235,7 @@ test "conditionals" {
     "Expected condition expression to be of type 'bool' but found 'num'",
     "Expected condition expression to be of type 'bool' but found 'List{Map{any, any}}'",
     "Expected type instance in lhs of `is` operator but found 'Type'",
-    "Expected type 'Type' in rhs of `is` operator but found type 'false'\n\tHelp: For constant types, consider using '==' or '!=' operator instead.",
+    "Expected type 'Type' in rhs of `is` operator but found type 'false'\n    Help: For constant types, consider using '==' or '!=' operator instead.",
   });
 }
 
@@ -2403,8 +2403,8 @@ test "typing.<type param and tag collision>" {
   \\ 1 / ''
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "type variable is used as a tag in its type definition.\n\t"
-    ++ "If this is a mistake, consider renaming the type parameter.",
+    "type variable is used as a tag in its type definition.\n"
+    ++ "    If this is a mistake, consider renaming the type parameter.",
   });
 }
 
@@ -2467,8 +2467,8 @@ test "aspec.<fields 1>" {
   \\ j.x + j.y
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "access of private field 'x' outside its defining class method",
-    "access of private field 'y' outside its defining class method",
+    "access of private field 'x' outside its defining class",
+    "access of private field 'y' outside its defining class",
   });
 }
 
@@ -2500,7 +2500,7 @@ test "aspec.<fields 2>" {
   \\ Fish().fox()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "access of private field 'x' outside its defining class method",
+    "access of private field 'x' outside its defining class",
   });
 }
 
@@ -2525,7 +2525,7 @@ test "aspec.<fields 3>" {
   \\ Fish().fox()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "access of private field 'j' outside its defining class method",
+    "access of private field 'j' outside its defining class",
   });
 }
 
@@ -2550,7 +2550,7 @@ test "aspec.<fields 4>" {
   \\ Fish().fox()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "access of private field 'j' outside its defining class method",
+    "access of private field 'j' outside its defining class",
   });
 }
 
@@ -2565,7 +2565,7 @@ test "aspec.<methods 1>" {
   \\ j.fun()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "access of private method 'fun' outside its defining class method",
+    "access of private method 'fun' outside its defining class",
   });
 }
 
@@ -2591,7 +2591,7 @@ test "aspec.<methods 2>" {
   \\ Fish()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "access of private method 'fox' outside its defining class method",
+    "access of private method 'fox' outside its defining class",
   });
 }
 
@@ -2700,5 +2700,925 @@ test "builtin-functions-override" {
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "expected token '<ident>' but found 'panic'",
+  });
+}
+
+test "traits <required methods .1>" {
+  const src =
+  \\ trait Display
+  \\  pub def fmt(): str;
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\ end
+  \\ Foo()
+  ;
+  try doErrorTest(src, 5, [_][]const u8{
+    "type 'Foo' does not satisfy the trait constraint(s) of 'Display':",
+    "The following method(s) are not implemented:",
+    "fmt", " : ", "fn (): str",
+  });
+}
+
+test "traits <required methods .2>" {
+  const src =
+  \\ trait Display
+  \\  pub def fmt(): str;
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return 5
+  \\  end
+  \\ end
+  \\ Foo()
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "Expected method 'fn (): str' but found 'fn (): num'",
+    "pub def fmt()",
+  });
+}
+
+test "traits <required methods .3>" {
+  const src =
+  \\ trait Display
+  \\  pub def fmt(): str
+  \\    return "NotImplemented"
+  \\  end
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return 5
+  \\  end
+  \\ end
+  \\ Foo()
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "Expected method 'fn (): str' but found 'fn (): num'",
+    "pub def fmt()",
+  });
+}
+
+test "traits <required methods .3.5>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Clone{T}
+  \\  pub def clone(): T;
+  \\ end
+  \\ 
+  \\ trait Shifts{T}
+  \\  pub def shift(x: T): T;
+  \\ end
+  \\
+  \\ class Stuff: Shifts{num} | Clone{Stuff}
+  \\    x = 12
+  \\  pub def clone()
+  \\    return 'Stuff()'
+  \\  end
+  \\  pub def shift(shr: num)
+  \\    return self.x >> shr
+  \\  end
+  \\ end
+  \\
+  \\
+  \\ let s = Stuff()
+  \\ println(s.shift(2))
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "Expected method 'fn (): Stuff' but found 'fn (): str",
+    "pub def clone()",
+    "This error was triggered from here:",
+    "class Stuff: Shifts{num} | Clone{Stuff}"
+  });
+}
+
+test "traits <required methods .4>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone
+  \\  pub def clone(): Clone;
+  \\ end
+  \\
+  \\ class Foo: Display | Clone
+  \\ end
+  \\ Foo()
+  ;
+  try doErrorTest(src, 8, [_][]const u8{
+    "type 'Foo' does not satisfy the trait constraint(s) of 'Display & Clone':",
+    "The following method(s) are not implemented:",
+    "fmt", " : ", "fn (): str",
+    "clone", " : ", "fn (): Clone",
+  });
+}
+
+test "traits <required methods .5>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone{T}
+  \\  pub def clone(): T;
+  \\ end
+  \\
+  \\ class Foo: Display | Clone{Foo}
+  \\ end
+  \\ Foo()
+  ;
+  try doErrorTest(src, 8, [_][]const u8{
+    "type 'Foo' does not satisfy the trait constraint(s) of 'Display & Clone{Foo}':",
+    "The following method(s) are not implemented:",
+    "fmt", " : ", "fn (): str",
+    "clone", " : ", "fn (): Foo",
+  });
+}
+
+test "traits <required methods .6>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone{T}
+  \\  pub def clone(): T;
+  \\ end
+  \\
+  \\ class Foo: Display | Clone{Foo}
+  \\  pub def fmt()
+  \\    return "Oops"
+  \\  end
+  \\ end
+  \\ Foo()
+  ;
+  try doErrorTest(src, 5, [_][]const u8{
+    "type 'Foo' does not satisfy the trait constraint(s) of 'Display & Clone{Foo}':",
+    "The following method(s) are not implemented:",
+    "clone", " : ", "fn (): Foo",
+  });
+}
+
+test "traits <required methods .7>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait DisplayExt{T: Display}
+  \\  pub def show(): String;
+  \\ end
+  \\
+  \\ class Foo: Display | DisplayExt{Foo}
+  \\ end
+  \\
+  \\ let f1 = Foo()
+  ;
+  try doErrorTest(src, 8, [_][]const u8{
+    "type 'Foo' does not satisfy the trait constraint(s) of 'Display & DisplayExt{Foo}':",
+    "The following method(s) are not implemented:",
+    "fmt", " : ", "fn (): str",
+    "show", " : ", "fn (): str",
+  });
+}
+
+test "traits <required methods .8>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait DisplayExt{T: Display}
+  \\  pub def show(): String;
+  \\ end
+  \\
+  \\ class Foo: Display | DisplayExt{Foo}
+  \\  pub def show()
+  \\    return "MyShow!"
+  \\  end
+  \\ end
+  \\
+  \\ let f1 = Foo()
+  ;
+  try doErrorTest(src, 5, [_][]const u8{
+    "type 'Foo' does not satisfy the trait constraint(s) of 'Display & DisplayExt{Foo}':",
+    "The following method(s) are not implemented:",
+    "fmt", " : ", "fn (): str",
+  });
+}
+
+test "traits <required methods .9>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait DisplayExt{T: Display}
+  \\  pub def show(): String;
+  \\ end
+  \\
+  \\ class Foo: Display | DisplayExt{Foo}
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\ end
+  \\
+  \\ let f1 = Foo()
+  ;
+  try doErrorTest(src, 5, [_][]const u8{
+    "type 'Foo' does not satisfy the trait constraint(s) of 'Display & DisplayExt{Foo}':",
+    "The following method(s) are not implemented:",
+    "show", " : ", "fn (): str",
+  });
+}
+
+test "traits <required methods .10>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait DisplayExt{T: Display}
+  \\  pub def show(): String;
+  \\ end
+  \\
+  \\ class Bar
+  \\  pub def fmt()
+  \\    return "Bar()"
+  \\  end
+  \\ end
+  \\
+  \\ class Foo: Display | DisplayExt{Bar}
+  \\  pub def show()
+  \\    return "MyShow!"
+  \\  end
+  \\ end
+  \\
+  \\ let f1 = Foo()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "type 'Bar' does not implement the trait 'Display'",
+  });
+}
+
+test "traits <visibility .1>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\ end
+  \\ assert(Foo().fmt() == "Foo()", 'should be same')
+  ;
+  try doErrorTest(src, 3, [_][]const u8{
+    "method 'fmt' has a visibility different from its trait specification",
+    "Trait method specified here:",
+    "pub def fmt(): String;",
+  });
+}
+
+test "traits <visibility .2>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Clone{T}
+  \\  def clone(): T;
+  \\ end
+  \\ 
+  \\ trait Shifts{T}
+  \\  pub def shift(x: T): T;
+  \\ end
+  \\
+  \\ class Stuff: Shifts{num} | Clone{Stuff}
+  \\    x = 12
+  \\  pub def clone()
+  \\    return Stuff()
+  \\  end
+  \\  pub def shift(shr: num)
+  \\    return self.x >> shr
+  \\  end
+  \\ end
+  \\
+  \\
+  \\ let s = Stuff()
+  ;
+  try doErrorTest(src, 3, [_][]const u8{
+    "method 'clone' has a visibility different from its trait specification",
+    "Trait method specified here:",
+    "def clone(): T;",
+  });
+}
+
+test "traits <contravariance .1>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\ end
+  \\
+  \\ let f: Display = Foo()
+  \\ let g: Foo = f # contravariance
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Cannot initialize type 'Foo' with type 'Display'",
+  });
+}
+
+test "traits <contravariance .2>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\ end
+  \\
+  \\ let f: List{Display} = [Foo()]
+  \\ let g: List{Foo} = f # contravariance
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Cannot initialize type 'List{Foo}' with type 'List{Display}'",
+  });
+}
+
+test "traits <duplicate methods spec>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\ end
+  \\
+  \\ let f: List{Display} = [Foo()]
+  \\ let g: List{Foo} = f # contravariance
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "illegal duplicate method",
+    "pub def fmt(): String;",
+    "Method also declared here",
+    "pub def fmt(): String;"
+  });
+}
+
+test "traits <duplicate methods trait-chain>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone
+  \\  pub def fmt(): num;
+  \\ end
+  \\
+  \\ class Foo: Clone | Display
+  \\  pub def fmt()
+  \\    return 5
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Foo()
+  \\  end
+  \\ end
+  \\
+  \\ let f1 = Foo()
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "duplicate trait method 'fmt'",
+    "pub def fmt(): String;",
+    "Method already defined here:",
+    "pub def fmt(): num;"
+  });
+}
+
+test "traits <function-bounds>" {
+  const src =
+  \\ alias String = str
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ def format(t: Display, v: Display)
+  \\  return t.fmt() <> " $ " <> v.fmt()
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\ end
+  \\
+  \\ class Bar
+  \\  pub def fmt()
+  \\    return "Bar()"
+  \\  end
+  \\ end
+  \\
+  \\ let r = format(Foo(), Bar())
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Argument type mismatch. Expected type 'Display' but found 'Bar instance'"
+  });
+}
+
+test "traits <generic-function-bounds .1>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone
+  \\  pub def clone(): Clone;
+  \\ end
+  \\
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\  where
+  \\    B: Display + Clone,
+  \\    C: Display + Clone,
+  \\  return a.fmt() <> " $ " <> b.fmt() <> " $ " <> c.clone().fmt()
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Foo()
+  \\  end
+  \\ end
+  \\
+  \\ class Bar: Clone
+  \\  pub def fmt()
+  \\    return "Bar()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Bar()
+  \\  end
+  \\ end
+  \\
+  \\ let r = format(Foo(), Bar(), Foo())
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "type 'Bar' does not implement the trait 'Display'",
+    "class Bar: Clone",
+    "This error was triggered from here:",
+    "let r = format(Foo(), Bar(), Foo())",
+  });
+}
+
+test "traits <generic-function-bounds .2>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone
+  \\  pub def clone(): Clone;
+  \\ end
+  \\
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\  where
+  \\    B: Display + Clone,
+  \\    C: Display + Clone,
+  \\  return a.fmt() <> " $ " <> b.fmt() <> " $ " <> c.clone().fmt()
+  \\ end
+  \\
+  \\ class Bar: Clone
+  \\  pub def fmt()
+  \\    return "Bar()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Bar()
+  \\  end
+  \\ end
+  \\
+  \\ let b = Bar()
+  \\ let r = format(b, b, b)
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "type 'Bar' does not implement the trait 'Display'",
+    "class Bar: Clone",
+    "This error was triggered from here:",
+    "let r = format(b, b, b)",
+  });
+}
+
+test "traits <generic-function-bounds .3>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone
+  \\  pub def clone(): Clone;
+  \\ end
+  \\
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\  where
+  \\    B: Display + Clone,
+  \\    C: Display + Clone,
+  \\  return a.fmt() <> " $ " <> b.fmt() <> " $ " <> c.clone().fmt()
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Foo()
+  \\  end
+  \\ end
+  \\
+  \\ class Bar: Clone
+  \\  pub def fmt()
+  \\    return "Bar()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Bar()
+  \\  end
+  \\ end
+  \\
+  \\ let r = format(Foo(), Bar(), Foo())
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "type 'Bar' does not implement the trait 'Display'",
+    "class Bar: Clone",
+    "This error was triggered from here:",
+    "let r = format(Foo(), Bar(), Foo())",
+  });
+}
+
+test "traits <generic-function-bounds .4>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone
+  \\  pub def clone(): Clone;
+  \\ end
+  \\
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\  where
+  \\    B: Display + Clone,
+  \\    C: Display + Clone,
+  \\  return a.fmt() <> " $ " <> b.fmt() <> " $ " <> c.clone().fmt()
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Foo()
+  \\  end
+  \\ end
+  \\
+  \\ class Bar: Clone | Display
+  \\  pub def fmt()
+  \\    return "Bar()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Bar()
+  \\  end
+  \\ end
+  \\
+  \\ let f = Foo()
+  \\ let r = format(f, f, f)
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "type 'Foo' does not implement the trait 'Clone'",
+    "class Foo: Display",
+    "This error was triggered from here:",
+    "let r = format(f, f, f)",
+  });
+}
+
+test "traits <generic-function-bounds .5>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone
+  \\  pub def clone(): Clone;
+  \\ end
+  \\
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\  where
+  \\    B: Display + Clone,
+  \\    C: Display + Clone,
+  \\  return a.fmt() <> " $ " <> b.fmt() <> " $ " <> c.clone().fmt()
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Foo()
+  \\  end
+  \\ end
+  \\
+  \\ class Bar: Clone
+  \\  pub def fmt()
+  \\    return "Bar()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Bar()
+  \\  end
+  \\ end
+  \\
+  \\ let r = format(Foo(), Bar(), Foo())
+  ;
+  try doErrorTest(src, 7, [_][]const u8{
+    "type 'Bar' does not implement the trait 'Display'",
+    "class Bar: Clone",
+    "This error was triggered from here:",
+    "let r = format(Foo(), Bar(), Foo())",
+    "type 'Foo' does not implement the trait 'Clone'",
+    "class Foo: Display",
+    "type 'Clone' has no property 'fmt'",
+  });
+}
+
+test "traits <generic-function-bounds .6>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone
+  \\  pub def clone(): Clone;
+  \\ end
+  \\
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\  where
+  \\    B: Display + Clone,
+  \\    C: Display + Clone,
+  \\  return a.clone().fmt() <> " $ " <> b.fmt() <> " $ " <> c.clone().fmt()
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Foo()
+  \\  end
+  \\ end
+  \\
+  \\ class Bar: Clone | Display
+  \\  pub def fmt()
+  \\    return "Bar()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Bar()
+  \\  end
+  \\ end
+  \\
+  \\ let r = format(Foo(), Bar(), Bar())
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "type 'Display' has no property 'clone'",
+    "return a.clone().fmt() <> \" $ \" <> b.fmt() <> \" $ \" <> c.clone().fmt()"
+  });
+}
+
+test "traits <generic-function-bounds .7>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone
+  \\  pub def clone(): Clone;
+  \\ end
+  \\
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\  where
+  \\    B: Display + Clone,
+  \\    C: Display + Clone,
+  \\  return a.fmt() <> " $ " <> b.fmt() <> " $ " <> (c.clone() as A).fmt()
+  \\ end
+  \\
+  \\ class Foo: Display | Clone
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Foo()
+  \\  end
+  \\ end
+  \\
+  \\ class Bar: Clone | Display
+  \\  pub def fmt()
+  \\    return "Bar()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Bar()
+  \\  end
+  \\ end
+  \\
+  \\ let r = format(Foo(), Bar(), Foo())
+  \\ assert(r == "Foo() $ Bar() $ Foo()", 'should be same')
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Cannot cast from type 'Clone' to type 'Display'"
+  });
+}
+
+test "traits <generic without type params .1>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Clone{K}
+  \\  def clone(): K;
+  \\ end
+  \\ 
+  \\ trait Shifts{T}
+  \\  pub def shift(x: T): T;
+  \\ end
+  \\
+  \\ class Stuff: Shifts{num} | Clone
+  \\    x = 12
+  \\  pub def shift(shr: num)
+  \\    return self.x >> shr
+  \\  end
+  \\ end
+  \\
+  \\
+  \\ let s = Stuff()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "could not resolve type with name: 'K'",
+  });
+}
+
+test "traits <generic without type params .2>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Clone{T}
+  \\  def clone(): T;
+  \\ end
+  \\ 
+  \\ trait Shifts{T}
+  \\  pub def shift(x: T): T;
+  \\ end
+  \\
+  \\ class Stuff: Shifts{num} | Clone
+  \\    x = 12
+  \\  pub def shift(shr: num)
+  \\    return self.x >> shr
+  \\  end
+  \\ end
+  \\
+  \\
+  \\ let s = Stuff()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "could not resolve type with name: 'T'",
+  });
+}
+
+test "traits <generic missing traits>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone{T}
+  \\  pub def clone(): T;
+  \\ end
+  \\
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\  where
+  \\    B: Display + Clone{B},
+  \\    C: Display + Clone{C},
+  \\  return a.fmt() #<> " $ " <> b.fmt() <> " $ " <> c.clone().fmt()
+  \\ end
+  \\
+  \\ class Foo: Display
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Foo()
+  \\  end
+  \\ end
+  \\
+  \\ class Bar: Clone{Bar} | Display
+  \\  pub def fmt()
+  \\    return "Bar()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Bar()
+  \\  end
+  \\ end
+  \\
+  \\ let r = format{Foo, Bar, Foo}(Foo(), Bar(), Foo())
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "type 'Foo' does not implement the trait 'Clone{C}'",
+    "class Foo: Display",
+    "This error was triggered from here:",
+    "let r = format{Foo, Bar, Foo}(Foo(), Bar(), Foo())",
+  });
+}
+
+test "traits <match patterns>" {
+  const src =
+  \\ alias String = str
+  \\
+  \\ trait Display
+  \\  pub def fmt(): String;
+  \\ end
+  \\
+  \\ trait Clone
+  \\  pub def clone(): Clone;
+  \\ end
+  \\
+  \\ class Foo: Display | Clone
+  \\  pub def fmt()
+  \\    return "Foo()"
+  \\  end
+  \\
+  \\  pub def clone()
+  \\    return Foo()
+  \\  end
+  \\ end
+  \\
+  \\ let f = Foo()
+  \\ match f
+  \\  case Display() => "oops"
+  \\  case Clone() => "oops"
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "bad/ambiguous pattern constructor: 'Display'",
+    "bad/ambiguous pattern constructor: 'Clone'",
   });
 }

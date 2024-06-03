@@ -379,13 +379,17 @@ pub const ObjClass = extern struct {
   name: *const ObjString,
   methods: [*]Value,
 
-  pub inline fn getInitMethod(self: *@This()) ?Value {
+  pub inline fn getMethodWithName(self: *@This(), name: *const ObjString) ?Value {
     for (self.methods[0..self.mlen]) |mtd| {
-      if (std.mem.eql(u8, asClosure(mtd).fun.getName(), "init")) {
+      if (asClosure(mtd).fun.name == name) {
         return mtd;
       }
     }
     return null;
+  }
+
+  pub inline fn getInitMethod(self: *@This(), vm: *VM) ?Value {
+    return @call(.always_inline, ObjClass.getMethodWithName, .{self, vm.names.init});
   }
 
   pub inline fn nameStr(self: *const @This()) []const u8 {

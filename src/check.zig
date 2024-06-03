@@ -231,6 +231,8 @@ pub const TypeChecker = struct {
   matchmeta: MatchMeta,
   /// current function/method being type checked
   current_fn: ?*Node = null,
+  /// manage missing methods arising from trait impls
+  missing_tmtds: ds.ArrayList(TraitInfo),
   /// cached types
   void_ty: *Type,
   str_ty: *Type,
@@ -299,6 +301,9 @@ pub const TypeChecker = struct {
     synth_name: Token,
   };
 
+  /// name, typename, token
+  pub const TraitInfo = struct{[]const u8, []const u8, Token};
+
   pub fn init(allocator: Allocator, diag: *Diagnostic, namegen: util.NameGen) Self {
     var self = Self {
       .ctx = TContext.init(allocator),
@@ -314,6 +319,7 @@ pub const TypeChecker = struct {
       .bprelude = undefined,
       .des = Desugar.init(namegen, diag),
       .matchmeta = MatchMeta.init(allocator),
+      .missing_tmtds = ds.ArrayList(TraitInfo).init(allocator),
       .str_ty = undefined,
       .void_ty = Type.newVoid().box(allocator),
       .tvar_ty = getTVarType(ks.GeneratedTypeVar, allocator),
@@ -389,6 +395,19 @@ pub const TypeChecker = struct {
 
   pub fn softErrorFrom(self: *Self, node: *Node, comptime fmt: []const u8, args: anytype) void {
     self.diag.addDiagnostics(node.getToken(), "TypeError: " ++ fmt, args);
+  }
+
+  pub fn softErrorFmt(self: *Self, token: Token, diag_depth: u32, comptime spaces: u32, comptime fmt: []const u8, args: anytype) void {
+    comptime var space = @as([]const u8, "");
+    inline for(0..spaces) |_| {
+      space = space ++ @as([]const u8, " ");
+    }
+    self.diag.addDiagnosticsWithDepth(token, diag_depth, space ++ fmt, args);
+  }
+
+  pub fn errorFmt(self: *Self, token: Token, diag_depth: u32, comptime spaces: u32, comptime fmt: []const u8, args: anytype) TypeCheckError {
+    self.softErrorFmt(token, diag_depth, spaces, fmt, args);
+    return error.CheckError;
   }
 
   inline fn warn(self: *Self, emit: bool, token: Token, comptime fmt: []const u8, args: anytype) void {
@@ -1522,7 +1541,7 @@ pub const TypeChecker = struct {
                 if (sorted) |dbg| {
                   self.softError(
                     dbg, "The field '{s}' was found in a wrong position." ++
-                    "\n\tHelp: Consider rearranging the order of arguments to the type constructor.",
+                    "\n    Help: Consider rearranging the order of arguments to the type constructor.",
                     .{dbg.lexeme()}
                   );
                 }
@@ -1596,7 +1615,7 @@ pub const TypeChecker = struct {
                 if (sorted) |dbg| {
                   self.softError(
                     dbg, "The tag field '{s}' was found in a wrong position." ++
-                    "\n\tHelp: Consider rearranging the order of arguments to the type constructor.",
+                    "\n    Help: Consider rearranging the order of arguments to the type constructor.",
                     .{dbg.lexeme()}
                   );
                 }
@@ -1674,8 +1693,7 @@ pub const TypeChecker = struct {
     _ = self.diag.popLevel();
     if (self.matchmeta.missing_ptns.count() > 0) {
       // some tokens are generated ($) and won't be displayed, so we make a fresh token 
-      const _token = self.matchmeta.missing_ptns.values()[0];
-      const token = _token.tkFrom(ks.UnderscoreVar, .TkIdent);
+      const token = self.matchmeta.missing_ptns.values()[0];
       self.softError(token, "inexhaustive pattern match.", .{});
       var prompt = false;
       for (self.matchmeta.missing_ptns.keys()) |msg| {
@@ -1686,9 +1704,7 @@ pub const TypeChecker = struct {
           self.diag.addDiagnosticsDirect(token, "  Remaining pattern type(s):\n");
           prompt = true;
         }
-        self.diag.addDiagnosticsDirect(token, "\t");
-        self.diag.addDiagnosticsDirect(token, msg,);
-        self.diag.addDiagnosticsDirect(token, "\n");
+        self.diag.addDiagnosticsSliceDirect(token, &[_][]const u8{"    ", msg, "\n"});
       }
       self.diag.addDiagnosticsDirect(token, "\n");
       self.matchmeta.missing_ptns.clearRetainingCapacity();
@@ -1764,10 +1780,13 @@ pub const TypeChecker = struct {
         }
       },
       .NdClass => {
-        if (flo.isEntryNode()) {
-          try self.flowInferEntry(flo);
-        } else if (flo.get().res.isUnresolved()) {
+        if (flo.get().res.isUnresolved()) {
           _ = try self.inferClassPartial(node);
+        }
+      },
+      .NdTrait => {
+        if (flo.get().res.isUnresolved()) {
+          _ = try self.inferTraitPartial(node);
         }
       },
       else => try self.flowInferNode(flo, node),
@@ -1833,8 +1852,8 @@ pub const TypeChecker = struct {
   fn resolveUserClassType(self: *Self, typ: *Type, debug: *Node) TypeCheckError!void {
     if (self.findType(typ.klass().data.name)) |_ty| {
       self.resolving.append(typ, self.ctx.allocator());
-      const ty = if (_ty.isTop()) _ty.top().child else _ty;
-      typ.* = (try self.synthInferClsType(typ, ty, debug)).*;
+      assert(!_ty.isTop());
+      typ.* = (try self.synthInferClsType(typ, _ty, debug)).*;
       if (typ.isClass()) {
         typ.klass().setAsResolved();
       } else {
@@ -1858,9 +1877,66 @@ pub const TypeChecker = struct {
     }
   }
 
+  fn resolveTrait(self: *Self, trait: *Type, debug: Token) !*Type {
+    if (trait.isUnion()) {
+      const al = self.ctx.allocator();
+      var new = Type.newUnion();
+      for (trait.union_().variants.values()) |_ty| {
+        new.union_().set(try self.resolveTrait(_ty, debug), al);
+      }
+      return new.union_().toTypeBoxed(al);
+    }
+    if (trait.isVariable()) {
+      return try self.resolveTrait(try self.linker.resolve(trait, trait.variable().getFirst()), debug);
+    }
+    if (trait.isGeneric()) {
+      return try self.linker.resolve(trait, debug);
+    }
+    if (trait.isTrait()) {
+      if (trait.trait().resolved) {
+        return trait;
+      }
+      if (trait.trait().data.trait) |trt| {
+        trait.trait().data.trait = try self.resolveTrait(trt, debug);
+      }
+    }
+    return trait;
+  }
+
+  fn resolveUserTraitType(self: *Self, typ: *Type, debug: Token) TypeCheckError!void {
+    if (self.findType(typ.trait().data.name)) |_ty| {
+      self.resolving.append(typ, self.ctx.allocator());
+      assert(!_ty.isTop());
+      typ.* = (try self.synthInferTraitType(typ, _ty, debug)).*;
+      typ.trait().setAsResolved();
+      _ = self.resolving.pop();
+    }
+  }
+
+  fn resolveTraitType(self: *Self, typ: *Type, debug: Token) !*Type {
+    var ty = try self.resolveTrait(typ, debug);
+    if (ty.isTrait()) {
+      if (!ty.trait().resolved and !self.resolving.contains(ty, Type.ptrEql)) {
+        try self.resolveUserTraitType(ty, debug);
+      }
+    } else if (ty.isUnion()) {
+      for (ty.union_().variants.values()) |_ty| {
+        if (_ty.trait().resolved) {
+          continue;
+        } else if (self.resolving.contains(_ty, Type.ptrEql)) {
+          continue;
+        } else {
+          try self.resolveUserTraitType(_ty, debug);
+        }
+      }
+    }
+    return ty;
+  }
+
   fn resolveType(self: *Self, typ: *Type, debug: *Node, al: Allocator) TypeCheckError!void {
     return switch (typ.info) {
       .Class => self.resolveClassType(typ, debug),
+      .Trait => _ = try self.resolveTraitType(typ, debug.getToken()),
       .Union => |*uni| {
         var tset = TypeHashSet.init();
         for (uni.variants.values()) |ty| {
@@ -1887,7 +1963,7 @@ pub const TypeChecker = struct {
       if (user_ty.hasRecursive()) return user_ty;
       if (!user_cls.isParameterized()) {
         return self.errorFrom(
-          true, debug, "type '{s}' is generic but used without generic parameters",
+          true, debug, "type '{s}' is generic but used without type parameters",
           .{self.getTypename(user_ty)}
         );
       }
@@ -1924,15 +2000,80 @@ pub const TypeChecker = struct {
         old_cls_idx,
         new_node,
         boxSynthName(old_cls_idx.getToken(), synth_name),
-        typ
+        typ,
       );
       return typ;
     }
     // non-generic
     if (core_cls.data.node) |cls_node| {
-      const is_cyclic = self.cycles.contains(cls_node, Node.eql);
-      if (!is_cyclic and !cls_node.NdClass.data.checked) {
+      if (!self.cycles.contains(cls_node, Node.eql) and !cls_node.NdClass.data.checked) {
         return try self.inferClass(cls_node, core_ty);
+      }
+    }
+    return core_ty;
+  }
+
+  fn synthInferTraitType(self: *Self, user_ty: *Type, core_ty: *Type, debug: Token) !*Type {
+    self.ctx.enterScope();
+    defer self.ctx.leaveScope();
+    var core_trt = core_ty.trait();
+    var user_trt = user_ty.trait();
+    // generic
+    if (core_trt.isParameterized()) {
+      // FIXME: this is a hack. see synthInferClsType()
+      if (user_ty.hasRecursive()) return user_ty;
+      if (!user_trt.isParameterized()) {
+        return self.error_(
+          true, debug, "type '{s}' is generic but used without type parameters",
+          .{self.getTypename(user_ty)}
+        );
+      }
+      // if any type params in core_trt is already substituted, just return user_ty because
+      // it means user_ty is already undergoing monomorphization from an earlier call
+      if (!core_trt.getSlice()[0].isVariable()) {
+        return user_ty;
+      }
+      const ctparams = core_trt.tparams.?;
+      const tparams = user_trt.tparams.?;
+      // resolve the provided type params (user_ty's)
+      var call: Node = .{.NdGenericCall = tir.GenericCallNode.init(undefined, tparams)};
+      try self.linkAndCheckCallTypeParams(&call);
+      // insert tvar substitutions into scope before resolving for traits.
+      for (ctparams, tparams) |tvar, t| {
+        self.insertType(tvar, t);
+      }
+      const al = self.ctx.allocator();
+      for (ctparams, tparams) |tvar, t| {
+        if (try self.checkTraitForCall(tvar, t, debug, al)) |_bty| {
+          self.insertType(tvar, _bty);
+        }
+      }
+      const synth_name = self.createSynthName(core_trt.data.name, core_trt.builtin, tparams, null);
+      const old_trt_idx = core_trt.data.node.?;
+      if (self.findGenInfo(old_trt_idx, synth_name)) |info| {
+        return info.typ;
+      }
+      var new_node = old_trt_idx.clone(al);
+      // we only link when we're sure core_trt is an unsubstituted generic type
+      try self.linker.linkTrait(&new_node.NdTrait, true);
+      // make trait non-generic to allow inference
+      new_node.NdTrait.data.params = null;
+      user_trt.data.node = new_node;
+      const typ = try self.inferTrait(new_node, user_ty);
+      self.addGenInfo(
+        old_trt_idx,
+        new_node,
+        boxSynthName(old_trt_idx.getToken(), synth_name),
+        typ,
+      );
+      return typ;
+    }
+    // non-generic
+    if (core_trt.data.node) |trt_node| {
+      if (!self.cycles.contains(trt_node, Node.eql) and !trt_node.NdTrait.data.checked) {
+        return try self.inferTrait(trt_node, core_ty);
+      } else if (user_ty.trait().data.methods.len() != core_ty.trait().data.methods.len()) {
+        logger.debug("unequal user_ty and core_ty method sizes", .{});
       }
     }
     return core_ty;
@@ -2064,6 +2205,11 @@ pub const TypeChecker = struct {
     return node.NdClass.data.checked;
   }
 
+  inline fn isCheckedTrait(self: *Self, node: *Node) bool {
+    _ = self;
+    return node.NdTrait.data.checked;
+  }
+
   fn inferVar(self: *Self, node: anytype, emit: bool) !*Type {
     var res = try self.lookupNameWithInfo(node, emit);
     if (!res.ident) {
@@ -2091,17 +2237,21 @@ pub const TypeChecker = struct {
     // since we infer functions by need, we check if this is a reference
     // to a function and try to infer the function if it's not yet fully inferred
     if (typ.isFunction() and !typ.function().isParameterized()) {
-      const fun_ty = typ.function();
-      if (fun_ty.data.node) |nd| {
+      if (typ.function().data.node) |nd| {
         if (!self.isCheckedFun(nd) and !self.cycles.contains(nd, Node.eql)) {
           _ = try self.inferFun(nd, typ);
         }
       }
     } else if (typ.isClass() and !typ.klass().isParameterized()) {
-      const cls_ty = typ.klass();
-      if (cls_ty.data.node) |nd| {
+      if (typ.klass().data.node) |nd| {
         if (!self.isCheckedClass(nd) and !self.cycles.contains(nd, Node.eql)) {
           _ = try self.inferClass(nd, typ);
+        }
+      }
+    } else if (typ.isTrait() and !typ.trait().isParameterized()) {
+      if (typ.trait().data.node) |nd| {
+        if (!self.isCheckedTrait(nd) and !self.cycles.contains(nd, Node.eql)) {
+          _ = try self.inferTrait(nd, typ);
         }
       }
     }
@@ -2158,7 +2308,7 @@ pub const TypeChecker = struct {
     } else if (!rhsTy.isTop() and !rhsTy.isClass() or (ty.isLikeConstant() and !node.allow_consts)) {
       const help = (
         if (ty.isLikeConstant())
-          "\n\tHelp: For constant types, consider using '==' or '!=' operator instead."
+          "\n    Help: For constant types, consider using '==' or '!=' operator instead."
         else ""
       );
       return self.error_(
@@ -2266,12 +2416,11 @@ pub const TypeChecker = struct {
       }
       // if from an OrElse expr, lookup the potential Result type and select Ok.
       const ty = try self.lookupName(node.value.NdEmpty.token, true);
-      // some tokens are generated ($) and won't be displayed, so we make a fresh token
-      const debug = node.value.NdEmpty.token.tkFrom(ks.UnderscoreVar, .TkIdent);
+      const debug = node.value.NdEmpty.token;
       if (!ty.isErrorTaggedUnion()) {
         const help = (
           if (ty.isTaggedNullable())
-            "\n\tHelp: nullable types take precedence over error types"
+            "\n    Help: nullable types take precedence over error types"
           else ""
         ); 
         return self.error_(
@@ -2589,8 +2738,18 @@ pub const TypeChecker = struct {
           .{self.getTypename(lhs_ty), rhs_tok.lexeme()}
         );
       }
+    } else if (lhs_ty.isUnion()) {
+      // handle Union Traits
+      for (lhs_ty.union_().variants.values()) |_ty| {
+        var is_ok = true;
+        const ret = self.checkDotAccess(node, _ty, rhs_tok, rhs_tok.lexeme(), false) catch b: {
+          is_ok = false;
+          break :b undefined;
+        };
+        if (is_ok) return ret;
+      }
     }
-    if (!lhs_ty.isClass() and !lhs_ty.isInstance()) {
+    if (!lhs_ty.isClass() and !lhs_ty.isInstance() and !lhs_ty.isTrait()) {
       return self.errorFrom(
         true, node.lhs, "type '{s}' has no property '{s}'",
         .{self.getTypename(lhs_ty), rhs_tok.lexeme()}
@@ -2598,7 +2757,7 @@ pub const TypeChecker = struct {
     }
     var cls_ty = lhs_ty.classOrInstanceClass();
     try self.resolveType(cls_ty, node.lhs, self.ctx.allocator());
-    return self.checkDotAccess(node, cls_ty, rhs_tok, rhs_tok.lexeme());
+    return self.checkDotAccess(node, cls_ty, rhs_tok, rhs_tok.lexeme(), true);
   }
 
   fn inferRet(self: *Self, node: *tir.RetNode) !*Type {
@@ -2746,6 +2905,31 @@ pub const TypeChecker = struct {
     }
   }
 
+  inline fn checkTraitForCall(self: *Self, tvar: *Type, on_typ: *Type, token: Token, al: Allocator) !?*Type {
+    if (tvar.variable().bounds) |bounds| {
+      const trait = try self.resolveTraitType(bounds.clone(al), tvar.variable().getFirst());
+      try self.checkTrait(on_typ, trait, token);
+      return trait;
+    }
+    return null;
+  }
+
+  /// resolve type params on a call node
+  fn linkAndCheckCallTypeParams(self: *Self, node: *Node) !void {
+    const parent = self.ctx.data.parent;
+    defer self.ctx.data.parent = parent;
+    self.ctx.data.parent = node;
+    const al = self.ctx.allocator();
+    for (node.NdGenericCall.targs, 0..) |ty, i| {
+      if (ty.isVariable()) {
+        var ident = tir.TVarNode.init(ty.variable().getFirst());
+        node.NdGenericCall.targs[i] = try self.inferVar(&ident, true);
+      } else {
+        try self.resolveType(ty, node, al);
+      }
+    }
+  }
+
   fn inferCall(self: *Self, node: *tir.CallNode, ast_n: *Node) !*Type {
     // set parent for later type disambiguation
     const parent = self.ctx.data.parent;
@@ -2754,7 +2938,7 @@ pub const TypeChecker = struct {
     var ty = try self.infer(node.expr);
     self.ctx.data.parent = parent;
     if (ty.isClass()) {
-      return try self.inferClsCall(node, ty);
+      return try self.inferClsCall(node, ty, ast_n);
     } else if (ty.isTag()) {
       return try self.inferTagCall(node, ty);
     }
@@ -2818,10 +3002,11 @@ pub const TypeChecker = struct {
     // inferred type arguments must match the generic type params if specified
     // ex: foo{str, num}('a', 5)
     if (node.targs) |targs| {
+      try self.linkAndCheckCallTypeParams(ast_n);
       for (fun.params, 0..) |tvar, tpos| {
         for (bfun.params, 0..) |param, ppos| {
           if (param.typ.typeidEql(tvar)) {
-            if (!targs[tpos].typeidEql(args_inf.itemAt(ppos))) {
+            if (!targs[tpos].typeidEql(args_inf.itemAt(ppos).classOrInstanceClass())) {
               return self.errorFrom(
                 true, node.args[ppos],
                 "Type parameter mismatch. Expected type '{s}' but found '{s}'",
@@ -2831,19 +3016,33 @@ pub const TypeChecker = struct {
           }
         }
       }
-      for (fun_ty.tparams.?, targs) |tvar, _ty| {
+      const tparams = fun_ty.tparams.?;
+      for (tparams, targs) |tvar, _ty| {
         self.insertType(tvar, _ty);
+        _targs.append(_ty, al);
       }
-      _targs.list.items = targs;
+      for (tparams, targs, 0..) |tvar, _ty, i| {
+        if (try self.checkTraitForCall(tvar, _ty, ast_n.getToken(), al)) |_bty| {
+          self.insertType(tvar, _bty);
+          _targs.items()[i] = _bty;
+        }
+      }
     } else {
       const token = node.expr.getToken();
+      const tk = ast_n.getToken();
       for (fun.params) |tvar| {
         var resolved = false;
         for (bfun.params, 0..) |param, ppos| {
           if (param.typ.typeidEql(tvar)) {
+            // NOTE: It's important to use `tvar` instead of `param.typ` because the bounds is literally on `tvar`
             const t = args_inf.itemAt(ppos);
-            self.insertType(tvar, t);
-            _targs.append(t, al);
+            if (try self.checkTraitForCall(tvar, t, tk, al)) |_bty| {
+              self.insertType(tvar, _bty);
+              _targs.append(_bty, al);
+            } else {
+              self.insertType(tvar, t);
+              _targs.append(t, al);
+            }
             resolved = true;
             break;
           } else if (param.typ.hasThisVariable(tvar)) {
@@ -2857,7 +3056,13 @@ pub const TypeChecker = struct {
               break :blk typ;
             };
             _ = try self.inferTypex(token, tvar, param.typ, inf_ty);
-            _targs.append(try self.lookupName(tvar.variable().getFirst(), true), al);
+            const t = try self.lookupName(tvar.variable().getFirst(), true);
+            if (try self.checkTraitForCall(tvar, t, tk, al)) |_bty| {
+              self.insertType(tvar, _bty);
+              _targs.append(_bty, al);
+            } else {
+              _targs.append(t, al);
+            }
             resolved = true;
             break;
           }
@@ -2865,10 +3070,10 @@ pub const TypeChecker = struct {
         if (!resolved) {
           self.softError(
             tvar.variable().getFirst(),
-            "Could not resolve the generic type variable '{s}'. Consider explicitly specifying the type parameter",
+            "Could not resolve the generic type variable '{s}'. Consider explicitly specifying the type parameter.",
             .{self.getTypename(tvar)}
           );
-          return self.errorFrom(true, node.expr, "Called from here:", .{});
+          return self.errorFmt(token, 4, 2, "Called from here:", .{});
         }
       }
     }
@@ -2981,7 +3186,7 @@ pub const TypeChecker = struct {
     }
   }
 
-  fn inferClsCall(self: *Self, node: *tir.CallNode, ty: *Type) TypeCheckError!*Type {
+  fn inferClsCall(self: *Self, node: *tir.CallNode, ty: *Type, ast_n: *Node) TypeCheckError!*Type {
     // insert self into current scope
     self.insertVar(ks.SelfVar, ty);
     defer self.deleteVar(ks.SelfVar);
@@ -3044,17 +3249,19 @@ pub const TypeChecker = struct {
     }
     const old_cls_id = cls_ty.data.node.?;
     const cls = &old_cls_id.NdClass;
+    const tk = ast_n.getToken();
     // store the actual generic type arguments received by this class
     var _targs = TypeList.init();
     // inferred type arguments must match the generic type params if specified
     // ex: Fmt{str, num}('a', 5)
     if (node.targs) |targs| {
+      try self.linkAndCheckCallTypeParams(ast_n);
       if (init_mtd_id) |_nd| {
         const cls_params = _nd.NdBasicFun.params;
         for (cls.data.params.?, 0..) |tvar, tpos| {
           for (cls_params, 0..) |param, ppos| {
             if (param.typ.typeidEql(tvar)) {
-              if (!targs[tpos].typeidEql(args_inf.itemAt(ppos))) {
+              if (!targs[tpos].typeidEql(args_inf.itemAt(ppos).classOrInstanceClass())) {
                 return self.errorFrom(
                   true, node.args[ppos],
                   "Type parameter mismatch. Expected type '{s}' but found '{s}'",
@@ -3065,10 +3272,17 @@ pub const TypeChecker = struct {
           }
         }
       }
-      for (cls_ty.tparams.?, targs) |tvar, t| {
+      const tparams = cls_ty.tparams.?;
+      for (tparams, targs) |tvar, t| {
         self.insertType(tvar, t);
+        _targs.append(t, al);
       }
-      _targs.list.items = targs;
+      for (tparams, targs, 0..) |tvar, t, i| {
+        if (try self.checkTraitForCall(tvar, t, tk, al)) |_bty| {
+          self.insertType(tvar, _bty);
+          _targs.items()[i] = _bty;
+        }
+      }
     } else {
       var cls_params: ?tir.ParamItems = if (init_mtd_id) |_nd| _nd.NdBasicFun.params else null;
       const token = node.expr.getToken();
@@ -3078,8 +3292,13 @@ pub const TypeChecker = struct {
           for (params, 0..) |param, ppos| {
             if (param.typ.typeidEql(tvar)) {
               const t = args_inf.itemAt(ppos);
-              self.insertType(tvar, t);
-              _targs.append(t, al);
+              if (try self.checkTraitForCall(tvar, t, tk, al)) |_bty| {
+                self.insertType(tvar, _bty);
+                _targs.append(_bty, al);
+              } else {
+                self.insertType(tvar, t);
+                _targs.append(t, al);
+              }
               resolved = true;
               break;
             } else if (param.typ.hasThisVariable(tvar)) {
@@ -3093,7 +3312,13 @@ pub const TypeChecker = struct {
                 break :blk typ;
               };
               _ = try self.inferTypex(token, tvar, param.typ, inf_ty);
-              _targs.append(try self.lookupName(tvar.variable().getFirst(), true), al);
+              const t = try self.lookupName(tvar.variable().getFirst(), true);
+              if (try self.checkTraitForCall(tvar, t, tk, al)) |_bty| {
+                self.insertType(tvar, _bty);
+                _targs.append(_bty, al);
+              } else {
+                _targs.append(t, al);
+              }
               resolved = true;
               break;
             }
@@ -3102,10 +3327,10 @@ pub const TypeChecker = struct {
         if (!resolved) {
           self.softError(
             tvar.variable().getFirst(),
-            "Could not resolve the generic type variable '{s}'. Consider explicitly specifying the type parameter",
+            "Could not resolve the generic type variable '{s}'. Consider explicitly specifying the type parameter.",
             .{self.getTypename(tvar)}
           );
-          return self.errorFrom(true, node.expr, "Called from here:", .{});
+          return self.errorFmt(token, 4, 2, "Called from here:", .{});
         }
       }
     }
@@ -3372,7 +3597,7 @@ pub const TypeChecker = struct {
       uni.set(ty, al);
     }
     if (uni.variants.count() == typ.union_().variants.count()) return typ;
-    return uni.toType(al).box(al);
+    return uni.toTypeBoxed(al);
   }
 
   fn returnType(self: *Self, typ: *Type, debug: *Node) *Type {
@@ -3380,8 +3605,8 @@ pub const TypeChecker = struct {
       var ty = excludeNoreturn(typ, self.ctx.allocator());
       if (ty.isUnion()) {
         var all_tags = true;
-        for (ty.union_().variants.values()) |ty_| {
-          if (!ty_.isTag()) {
+        for (ty.union_().variants.values()) |_ty| {
+          if (!_ty.isTag()) {
             all_tags = false;
             break;
           }
@@ -3421,7 +3646,7 @@ pub const TypeChecker = struct {
     } else if (uni.variants.count() == 1) {
       return uni.variants.values()[0];
     }
-    return uni.toType(self.ctx.allocator()).box(self.ctx.allocator());
+    return uni.toTypeBoxed(self.ctx.allocator());
   }
 
   fn inferFunReturnType(self: *Self, node: *Node, graph: *FlowGraph, fun_ty: *Type) !*Type {
@@ -3525,9 +3750,8 @@ pub const TypeChecker = struct {
     if (add_never_ty) uni.set(nvr_ty, al);
     if (has_noreturn_ty) uni.set(&UnitTypes.tyNoReturn, al);
     if (has_void_ty) uni.set(void_ty, al);
-    var inf_ret_ty = if (uni.variants.isNotEmpty()) uni.toType(al) else self.void_ty.*;
-    if (node.NdBasicFun.data.ret) |ret| {
-      var ret_ty = ret;
+    var inf_ret_ty = if (uni.variants.isNotEmpty()) uni.toType(al) else void_ty.*;
+    if (node.NdBasicFun.data.ret) |ret_ty| {
       for (prev_flo_nodes.items()) |ngh| {
         if (ngh.node.get().bb.getNonScopeDiagLast()) |last| {
           if (last.isRet()) {
@@ -3604,7 +3828,11 @@ pub const TypeChecker = struct {
       if (!_fun.data.allow_all_aspec) self.current_fn = node;
       try self.flowInferEntry(graph.entry());
       _ = self.cycles.pop();
-      ty.function().data.ret = try self.inferFunReturnType(node, graph, ty);
+      if (!_fun.data.trait_fun or !_fun.data.empty_trait_fun) {
+        ty.function().data.ret = try self.inferFunReturnType(node, graph, ty);
+      } else {
+        try self.resolveType(ty.function().data.ret, node, self.ctx.allocator());
+      }
       _fun.data.body.block().checked = true;
       try self.analyzer.analyzeDeadCode(graph);
       try self.analyzer.analyzeDeadCodeWithTypes(graph.entry());
@@ -3619,13 +3847,22 @@ pub const TypeChecker = struct {
     return nodes;
   }
 
-  fn createClsType(self: *Self, cls: *tir.ClassNode, node: *Node) *Type {
+  fn createClsType(self: *Self, cls: *tir.StructNode, node: *Node) *Type {
     const al = self.ctx.allocator();
     const methods = TypeList.initCapacity(cls.data.methods.len, al);
     return Class.init(
       cls.name.lexeme(), cls.data.tktype, self.copyClassFields(cls.data.fields), methods,
-      cls.data.params, node, false, cls.data.builtin, al
+      cls.data.params, node, false, cls.data.builtin, cls.trait, al
     ).toType().box(al);
+  }
+
+  fn createTraitType(self: *Self, trt: *tir.StructNode, node: *Node) *Type {
+    const al = self.ctx.allocator();
+    const methods = TypeList.initCapacity(trt.data.methods.len, al);
+    return Class.init(
+      trt.name.lexeme(), trt.data.tktype, self.copyClassFields(trt.data.fields), methods,
+      trt.data.params, node, false, trt.data.builtin, trt.trait, al
+    ).toTraitType().box(al);
   }
 
   fn forbidReturnInInit(self: *Self, node: *Node) void {
@@ -3671,7 +3908,8 @@ pub const TypeChecker = struct {
     var ty = typ orelse try self.lookupName(cls.name.toToken(), true);
     // generic is infer-by-need - performed on call/reference.
     if (!cls.isParameterized()) {
-      self.cycles.append(node, self.ctx.allocator());
+      const al = self.ctx.allocator();
+      self.cycles.append(node, al);
       self.ctx.enterScope();
       defer self.ctx.leaveScope();
       if (!cls.data.builtin) {
@@ -3690,13 +3928,19 @@ pub const TypeChecker = struct {
             } else {
               // otherwise, create one
               fun_ty = try self.inferFunPartial(itm);
-              ty.klass().data.methods.append(fun_ty, self.ctx.allocator());
+              ty.klass().data.methods.append(fun_ty, al);
             }
             ty.klass().data.methods.items()[i] = try self.inferFun(itm, fun_ty);
           }
           if (ty.klass().getMethod(ks.InitVar)) |mtd| {
             self.forbidReturnInInit(mtd);
           }
+        }
+        if (cls.trait) |trait| {
+          const token = node.getToken();
+          const trt = try self.resolveTraitType(trait.clone(al), token); 
+          ty.klass().data.trait = trt;
+          try self.checkTrait(ty, trt, token);
         }
       } else {
         for (cls.data.fields) |itm| {
@@ -3705,13 +3949,74 @@ pub const TypeChecker = struct {
         ty.klass().data.fields = self.copyClassFields(cls.data.fields);
         for (cls.data.methods, 0..) |itm, i| {
           const fun_ty = try self.inferFunPartial(itm);
-          ty.klass().data.methods.append(fun_ty, self.ctx.allocator());
+          ty.klass().data.methods.append(fun_ty, al);
           ty.klass().data.methods.items()[i] = try self.inferFun(itm, fun_ty);
         }
       }
       _ = self.cycles.pop();
       cls.data.checked = true;
       ty.klass().resolved = true;
+    }
+    return ty;
+  }
+
+  fn inferTraitPartial(self: *Self, node: *Node) !*Type {
+    // we need to infer this first to handle recursive classes
+    var trt = &node.NdTrait;
+    var ty = self.createTraitType(trt, node);
+    if (!trt.isParameterized() and !trt.data.builtin) {
+      self.ctx.enterScope();
+      defer self.ctx.leaveScope();
+      if (trt.data.methods.len > 0) {
+        self.insertVar(ks.SelfVar, ty);
+        self.insertTypeWithName(trt.name.lexeme(), ty);
+        defer self.deleteVar(ks.SelfVar);
+        for (trt.data.methods) |itm| {
+          ty.trait().data.methods.append(try self.inferFunPartial(itm), self.ctx.allocator());
+        }
+      }
+    }
+    // set the class's name to it's full type
+    self.insertTypeWithName(trt.name.lexeme(), ty);
+    return ty;
+  }
+
+  fn inferTrait(self: *Self, node: *Node, typ: ?*Type) !*Type {
+    var trt = &node.NdTrait;
+    var ty = typ orelse try self.lookupName(trt.name.toToken(), true);
+    // generic is infer-by-need - performed on call/reference.
+    if (!trt.isParameterized()) {
+      const al = self.ctx.allocator();
+      self.cycles.append(node, al);
+      self.ctx.enterScope();
+      defer self.ctx.leaveScope();
+      ty.trait().data.fields = self.copyClassFields(trt.data.fields);
+      if (trt.data.methods.len > 0) {
+        self.insertVar(ks.SelfVar, ty);
+        defer self.deleteVar(ks.SelfVar);
+        var fun_ty: *Type = undefined;
+        for (trt.data.methods, 0..) |itm, i| {
+          if (ty.trait().data.methods.len() > i) {
+            // use the partially inferred method type if available
+            fun_ty = ty.trait().data.methods.itemAt(i);
+          } else {
+            // otherwise, create one
+            fun_ty = try self.inferFunPartial(itm);
+            ty.trait().data.methods.append(fun_ty, al);
+          }
+          ty.trait().data.methods.items()[i] = try self.inferFun(itm, fun_ty);
+        }
+        if (ty.trait().getMethod(ks.InitVar) != null) {
+          self.softErrorFrom(node,
+            "traits cannot have an `init` method",
+            .{}
+          );
+        }
+        assert(trt.data.fields.len == 0 and trt.trait == null);
+      }
+      _ = self.cycles.pop();
+      trt.data.checked = true;
+      ty.trait().resolved = true;
     }
     return ty;
   }
@@ -3903,7 +4208,7 @@ pub const TypeChecker = struct {
     if (prop_ty.aspec.isPrivate()) {
       if (self.current_fn) |fun| {
         if (fun.getBasicFun().data.name) |name| {
-          if (cls_ty.klass().getMethod(name.lexeme()) != null) {
+          if (cls_ty.klassOrTrait().getMethod(name.lexeme()) != null) {
             return;
           }
         }
@@ -3912,30 +4217,35 @@ pub const TypeChecker = struct {
     const thing = if (is_field) "field" else "method";
     return self.softError(
       token,
-      "access of private {s} '{s}' outside its defining class method.\n\t"
+      "access of private {s} '{s}' outside its defining class.\n    "
       ++ "Consider making this {s} public.",
       .{thing, prop, thing}
     );
   }
 
-  fn checkDotAccess(self: *Self, node: *tir.DotAccessNode, cls_ty: *Type, token: Token, prop: []const u8) !*Type {
-    var cls = cls_ty.klass();
+  inline fn propertyAccessError(self: *Self, token: Token, cls_ty: *Type, prop: []const u8, emit: bool) TypeCheckError {
+    return self.error_(emit, token, "type '{s}' has no property '{s}'", .{self.getTypename(cls_ty), prop});
+  }
+
+  fn checkDotAccess(self: *Self, node: *tir.DotAccessNode, cls_ty: *Type, token: Token, prop: []const u8, emit: bool) !*Type {
+    var cls = cls_ty.klassOrTrait();
     if (!node.rhs.isNumberLiteral()) {
       if (cls.getField(prop)) |field| {
-      const typ = field.getFieldType().?;
-      try self.checkAccessSpecifier(cls_ty, typ, token, prop, true);
-      node.typ = typ;
-      return typ;
-    } else if (cls.getMethodTy(prop)) |mth_ty| {
-      try self.checkAccessSpecifier(cls_ty, mth_ty, token, prop, false);
-      node.typ = mth_ty;
-      return mth_ty;
-    } else {
-      return self.error_(
-        true, token, "type '{s}' has no property '{s}'",
-        .{self.getTypename(cls_ty), prop}
-      );
-    }
+        const typ = field.getFieldType().?;
+        try self.checkAccessSpecifier(cls_ty, typ, token, prop, true);
+        node.typ = typ;
+        return typ;
+      } else if (cls.getMethodTy(prop)) |mth_ty| {
+        try self.checkAccessSpecifier(cls_ty, mth_ty, token, prop, false);
+        node.typ = mth_ty;
+        return mth_ty;
+      } else if (cls_ty.isTrait() and cls.data.trait != null) {
+        // try to look up the property in the trait inheritance chain
+        return self.checkDotAccess(node, cls.data.trait.?, token, prop, false) catch
+          self.propertyAccessError(token, cls_ty, prop, emit);
+      } else {
+        return self.propertyAccessError(token, cls_ty, prop, emit);
+      }
     } else {
       const num: usize = @intFromFloat(node.rhs.NdNumber.value);
       if (node.allow_tag_access and num >= 0 and num < cls_ty.klass().data.fields.len()) {
@@ -3949,10 +4259,7 @@ pub const TypeChecker = struct {
           return typ;
         }
       }
-      return self.error_(
-        true, token, "type '{s}' has no property '{s}'",
-        .{self.getTypename(cls_ty), token.lexeme()}
-      );
+      return self.propertyAccessError(token, cls_ty, token.lexeme(), emit);
     }
   }
 
@@ -3996,6 +4303,130 @@ pub const TypeChecker = struct {
       );
     }
     return ty;
+  }
+
+  fn checkDuplicateTraitMethods(self: *Self, trt1: *tir.Trait, trt2: *tir.Trait) !void {
+    for (trt1.data.methods.items()) |tm| {
+      const name = tm.function().data.node.?.NdBasicFun.data.name.?;
+      if (trt2.getMethod(name.lexeme())) |mth| {
+        self.softError(name, "duplicate trait method '{s}'", .{name.lexeme()});
+        self.softErrorFmt(mth.getToken(), 4, 2, "Method already defined here:", .{});
+      }
+    }
+  }
+
+  fn _checkTrait(self: *Self, ty: *Type, trait: *Type, debug: Token) TypeCheckError!void {
+    // `ty` may be a Class or Trait
+    if (trait.isUnion()) {
+      var disamb = std.StringHashMap(Token).init(self.ctx.allocator());
+      for (trait.union_().variants.values()) |trt| {
+        for (trt.trait().data.methods.items()) |mth| {
+          const token = mth.function().data.node.?.getToken();
+          if (disamb.get(token.lexeme())) |tk| {
+            self.softError(token, "duplicate trait method '{s}'", .{token.lexeme()});
+            self.softErrorFmt(tk, 4, 2, "Method already defined here:", .{});
+          } else {
+            disamb.put(token.lexeme(), token) catch {};
+          }
+        }
+        try self._checkTrait(ty, trt, debug);
+      }
+      return;
+    }
+    if (!trait.isTrait()) {
+      return self.error_(
+        true, debug, "Expected trait type but found '{s}'",
+        .{self.getTypename(trait)}
+      );
+    }
+    if (!trait.trait().isParameterized()) {
+      if (trait.trait().data.node) |nd| {
+        if (!self.isCheckedTrait(nd) and !self.cycles.contains(nd, Node.eql)) {
+          _ = try self.inferTrait(nd, trait);
+        }
+      }
+    }
+    if (ty.isClass()) {
+      const al = self.ctx.allocator();
+      var cls = ty.klass();
+      var trt = trait.trait();
+      const cls_token = cls.data.node.?.getToken();
+      for (trt.data.methods.items()) |tm| {
+        var fun = &tm.function().data.node.?.NdBasicFun;
+        const name = fun.data.name.?.lexeme();
+        var err = false;
+        if (cls.data.trait) |t| {
+          if (t.hasVariable()) {
+            // this type is still being resolved, so skip checks on it
+            continue;
+          } else if (!trait.isRelatedTo(t, .RCAny, al)) {
+            err = true;
+          }
+        } else {
+          err = true;
+        }
+        if (err) {
+          self.softError(cls_token,
+              "type '{s}' does not implement the trait '{s}'.",
+              .{self.getTypename(ty), self.getTypename(trait)}
+            );
+          self.softErrorFmt(debug, 4, 2, "This error was triggered from here:", .{});
+        } else if (cls.getMethodTy(name)) |cm| {
+          const token = cm.function().data.node.?.getToken();
+          _ = self.checkArgumentAssign(tm, cm, token, "Expected method") catch {
+            return self.errorFmt(debug, 4, 2, "This error was triggered from here:", .{});
+          };
+          if (tm.aspec != cm.aspec) {
+            self.softError(token,
+              "method '{s}' has a visibility different from its trait specification.",
+              .{name}
+            );
+            self.softErrorFmt(fun.data.name.?, 4, 2, "Trait method specified here:", .{});
+          }
+        } else if (!fun.data.empty_trait_fun) {
+          cls.data.methods.append(tm.clone(al), al);
+          cls.data.node.?.NdClass.data.addMethod(tm.function().data.node.?, al);
+        } else {
+          self.missing_tmtds.append(.{name, self.getTypename(tm), cls_token});
+        }
+      }
+      assert(trt.data.trait == null);
+    } else if (ty.isTrait()) {
+      try self.checkDuplicateTraitMethods(ty.trait(), trait.trait());
+    } else {
+      return self.error_(
+        true, debug, "Expected trait or class type but found '{s}'",
+        .{self.getTypename(ty)}
+      );
+    }
+  }
+
+  fn checkTrait(self: *Self, ty: *Type, trait: *Type, debug: Token) TypeCheckError!void {
+    self.missing_tmtds.clearRetainingCapacity();
+    var err = false;
+    self._checkTrait(ty.classOrInstanceClass(), trait, debug) catch {
+      err = true;
+    };
+    if (self.missing_tmtds.isEmpty()) {
+      if (err) return error.CheckError;
+      return;
+    }
+    const items = self.missing_tmtds.items();
+    const token = items[0].@"2";
+    const len = self.diag.count();
+    self.softError(token,
+      "type '{s}' does not satisfy the trait constraint(s) of '{s}':",
+      .{self.getTypename(ty), self.getTypename(trait)}
+    );
+    // diag deduplicates error msgs so if this error was encountered before
+    // nothing would be added so just return
+    if (self.diag.count() == len) return;
+    self.diag.addDiagnosticsDirect(token, "  The following method(s) are not implemented:\n");
+    for (items) |item| {
+      self.diag.addDiagnosticsSliceDirect(token, &[_][]const u8{"    ", item.@"0", " : ", item.@"1", "\n"});
+    }
+    self.diag.addDiagnosticsDirect(debug, "\n");
+    self.softErrorFmt(debug, 4, 2, "This error was triggered from here:", .{});
   }
 
   fn infer(self: *Self, node: *Node) TypeCheckError!*Type {

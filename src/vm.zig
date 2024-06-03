@@ -29,6 +29,7 @@ pub const VM = struct {
   globals: StringHashMap,
   objects: ?*vl.Obj,
   classes: BuiltinCls,
+  names: CachedNames,
   mem: Mem,
   gc: GC,
   vsw: ValueStringWriter,
@@ -69,6 +70,14 @@ pub const VM = struct {
     }
   };
 
+  const CachedNames = struct {
+    init: *const vl.ObjString,
+
+    pub fn new() @This() {
+      return .{.init = undefined,};
+    }
+  };
+
   pub fn init(allocator: *VebAllocator) Self {
     const al = allocator.getAllocator();
     var vm = Self {
@@ -81,9 +90,11 @@ pub const VM = struct {
       .globals = StringHashMap.init(),
       .objects = null,
       .classes = BuiltinCls.init(),
+      .names = CachedNames.new(),
       .vsw = ValueStringWriter.init(),
     };
     native.addBuiltins(&vm);
+    native.addNames(&vm);
     return vm;
   }
 
@@ -495,9 +506,9 @@ pub const VM = struct {
           }
           continue;
         },
-        .Jmtdc => {
+        .Jnextc => {
           // super instruction for get mtd & call mtd
-          // jmtdc rx, rk(inst), rk(prop.idx) | call rx, bx
+          // Jnextc rx, rk(inst), rk(prop.idx) | call rx, bx
           var rx: u32 = undefined;
           var rk1: u32 = undefined;
           var idx: u32 = undefined;
@@ -535,6 +546,36 @@ pub const VM = struct {
           const inst = vl.createInstance(self, cls, flen);
           @setRuntimeSafety(false);
           fp.stack[rx] = vl.objVal(inst);
+          continue;
+        },
+        .Jnextcs => {
+          // super instruction for get mtd slow & call mtd
+          // Jnextcs rx, rk(inst), rk(prop.idx) | call rx, bx  {Jnextc slow}
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var idx: u32 = undefined;
+          self.read3Args(code, &rx, &rk1, &idx);
+          const inst = self.RK(rk1, fp);
+          const prop = self.readConst(idx, fp);
+          if (vl.isInstance(inst)) {
+            const closure = vl.asClosure(vl.asObj(inst).cls.?.getMethodWithName(vl.asString(prop)).?);
+            const next = @call(.always_inline, Self.readWord, .{self, fp});
+            self.read2Args(next, &rx, &rk1);
+            fiber.appendFrame(closure, fp.stack + rx);
+            @setRuntimeSafety(false);
+            fp.stack[rx] = inst;
+            fp = fiber.fp;
+          } else {
+            var func = vl.asNativeFn(vl.asObj(inst).cls.?.getMethodWithName(vl.asString(prop)).?);
+            const next = @call(.always_inline, Self.readWord, .{self, fp});
+            self.read2Args(next, &rx, &rk1);
+            fp.stack[rx] = inst;
+            const res = func.fun(self, rk1, rx);
+            if (self.has_error) return error.RuntimeError;
+            @setRuntimeSafety(false);
+            fp.stack[rx] = res;
+            fp = fiber.fp;
+          }
           continue;
         },
         .Ret => {
@@ -768,7 +809,7 @@ pub const VM = struct {
           var tmp: u32 = undefined;
           self.read2Args(code, &rx, &tmp);
           try self.ensureFrameCapacity(&fp, &fiber);
-          const init_mtd = vl.asObj(fp.stack[rx]).cls.?.getInitMethod().?;
+          const init_mtd = vl.asObj(fp.stack[rx]).cls.?.getInitMethod(self).?;
           fiber.appendFrame(vl.asClosure(init_mtd), fp.stack + rx);
           fp = fiber.fp;
           continue;
@@ -837,6 +878,24 @@ pub const VM = struct {
           @setRuntimeSafety(false);
           const val = self.RK(rk, fp);
           fp.stack[rx] = if (vl.isStruct(val)) vl.asStruct(self.RK(rk, fp)).methods[idx] else vl.asError(val).val;
+          continue;
+        },
+        .Gmtds => {
+          // gmtds rx, rk(inst), rk(prop.idx) {gmtd slow}
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var idx: u32 = undefined;
+          self.read3Args(code, &rx, &rk1, &idx);
+          const prop = self.readConst(idx, fp);
+          const inst = self.RK(rk1, fp);
+          const mtd = (
+            if (vl.isInstance(inst)) 
+              vl.createBoundUserMethod(self, inst, vl.asClosure(vl.asObj(inst).cls.?.getMethodWithName(vl.asString(prop)).?))
+            else 
+              vl.createBoundNativeMethod(self, inst, vl.asNativeFn(vl.asObj(inst).cls.?.getMethodWithName(vl.asString(prop)).?))
+          );
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.objVal(mtd);
           continue;
         },
         .Nerr => {

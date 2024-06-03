@@ -170,12 +170,14 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = Self.selfExpr, .infix = null},             // TkSelf
     .{.bp = .None, .prefix = null, .infix = null},                      // TkWith
     .{.bp = .None, .prefix = null, .infix = null},                      // TkClass
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkTrait
     .{.bp = .None, .prefix = null, .infix = null},                      // TkBreak
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkFalse
     .{.bp = .None, .prefix = Self.matchExpr, .infix = null},            // TkMatch
     .{.bp = .None, .prefix = null, .infix = null},                      // TkMaybe
     .{.bp = .None, .prefix = Self.variable, .infix = null},             // TkPanic
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkTuple
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkWhere
     .{.bp = .None, .prefix = null, .infix = null},                      // TkWhile
     .{.bp = .None, .prefix = null, .infix = null},                      // TkResult
     .{.bp = .Term, .prefix = null, .infix = Self.orElseExpr},           // TkOrElse
@@ -222,6 +224,14 @@ pub const Parser = struct {
 
   fn softErrMsg(self: *Self, token: Token, msg: []const u8) void {
     self._errWithArgs(.DiagError, token, "{s}", .{msg});
+  }
+
+  pub fn softErrFmt(self: *Self, token: Token, diag_depth: u32, comptime spaces: u32, comptime fmt: []const u8, args: anytype) void {
+    comptime var space = @as([]const u8, "");
+    inline for(0..spaces) |_| {
+      space = space ++ @as([]const u8, " ");
+    }
+    self.diag.addDiagnosticsWithDepth(token, diag_depth, space ++ fmt, args);
   }
 
   fn errMsg(self: *Self, token: Token, msg: []const u8) ParseError {
@@ -505,8 +515,8 @@ pub const Parser = struct {
 
   fn warnIfGenericParamsMatchesTagNames(self: *Self, abs_ty: *Type, rhs_ty: *Type) void {
     // warn if the type parameters in the abstract type is used as tags in the tagged union
-    const warning = "type variable is used as a tag in its type definition.\n\t" 
-      ++ "If this is a mistake, consider renaming the type parameter.";
+    const warning = "type variable is used as a tag in its type definition.\n" 
+      ++ "    If this is a mistake, consider renaming the type parameter.";
     switch (abs_ty.info) {
       .Generic => |*gen| {
         if (rhs_ty.isTaggedUnion()) {
@@ -863,7 +873,7 @@ pub const Parser = struct {
 
   fn selfExpr(self: *Self, assignable: bool) !*Node {
     if (self.meta.class == null) {
-      self.softErrMsg(self.current_tok, "Use of 'self' outside class statement");
+      self.softErrMsg(self.current_tok, "Use of 'self' outside class or trait statement");
     }
     if (self.meta.func == null) {
       self.softErrMsg(self.current_tok, "Use of 'self' outside method definition");
@@ -933,7 +943,7 @@ pub const Parser = struct {
 
   fn funExpr(self: *Self, assignable: bool) !*Node {
     _ = assignable;
-    return try self.funStmt(true, false, false);
+    return try self.funStmt(true, false, false, false);
   }
 
   fn tryExpr(self: *Self, assignable: bool) !*Node {
@@ -990,12 +1000,24 @@ pub const Parser = struct {
     return try self._parse(.Assignment);
   }
 
-  fn aliasParam(self: *Self) !Type {
+  fn aliasParam(self: *Self, can_have_bounds: bool) !Type {
     const debug = self.current_tok;
     try self.consume(.TkIdent);
     var typ = Type.newVariableWToken(debug, self.allocator);
     if (self.check(.TkDot)) {
       return self.errMsg(self.current_tok, "expected single identifier, found multiple");
+    }
+    if (can_have_bounds and self.match(.TkColon)) {
+      var ty = try self.annotation();
+      if (self.check(.TkPlus)) {
+        var tmp = Union.init();
+        tmp.set(ty, self.allocator);
+        while (self.match(.TkPlus)) {
+          tmp.set(try self.annotation(), self.allocator);
+        }
+        ty = tmp.toTypeBoxed(self.allocator);
+      }
+      typ.variable().bounds = ty;
     }
     return typ;
   }
@@ -1013,12 +1035,12 @@ pub const Parser = struct {
     return list.items();
   }
 
-  fn abstractTypeParams(self: *Self, typ: *Type) !Type {
+  fn abstractTypeParams(self: *Self, typ: *Type, can_have_bounds: bool) !Type {
     try self.consume(.TkLCurly);
     var gen = Generic.init(typ);
     while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
       if (gen.tparams.isNotEmpty()) try self.consume(.TkComma);
-      var param = try self.aliasParam();
+      var param = try self.aliasParam(can_have_bounds);
       self.assertUniqueTParams(&gen, &param);
       gen.append(param.box(self.allocator), self.allocator);
     }
@@ -1028,7 +1050,7 @@ pub const Parser = struct {
     return gen.toType();
   }
 
-  fn abstractType(self: *Self) !Type {
+  fn abstractType(self: *Self, can_have_bounds: bool) !Type {
     // AbstractType   :=  TypeName
     // TypeName       :=  Ident AbsTypeParams?
     // AbsTypeParams  :=  "{" Ident ( "," Ident )* "}"
@@ -1036,7 +1058,7 @@ pub const Parser = struct {
     var typ = Type.newVariableWToken(self.previous_tok, self.allocator);
     return (
       if (!self.check(.TkLCurly)) typ
-      else try self.abstractTypeParams(typ.box(self.allocator))
+      else try self.abstractTypeParams(typ.box(self.allocator), can_have_bounds)
     );
   }
 
@@ -1353,7 +1375,7 @@ pub const Parser = struct {
     // TypeAlias   := "alias" AbstractType "=" ConcreteType
     defer self.meta.in_type_alias = false;
     self.meta.in_type_alias = true;
-    const alias_typ = (try self.abstractType()).box(self.allocator);
+    const alias_typ = (try self.abstractType(false)).box(self.allocator);
     const alias = util.box(
       tir.TypeNode,
       tir.TypeNode.init(alias_typ, self.current_tok),
@@ -1373,7 +1395,7 @@ pub const Parser = struct {
     if (self.inBuiltinMode()) {
       self.builtinTaggedUnionToIdent();
     }
-    const typ_name = (try self.abstractType()).box(self.allocator);
+    const typ_name = (try self.abstractType(false)).box(self.allocator);
     const alias = util.box(tir.TypeNode, tir.TypeNode.init(typ_name, name), self.allocator);
     try self.consume(.TkEqual);
     self.meta.in_type_decl = true;
@@ -1525,12 +1547,74 @@ pub const Parser = struct {
     return params.items();
   }
 
-  fn funStmt(self: *Self, lambda: bool, allow_pub: bool, is_method: bool) !*Node {
+  fn whereClause(self: *Self, tparams: *TypeList) !void {
+    // where T: Foo + Bar, U: Bar
+    //  or
+    // where
+    //  T: Foo + Bar,
+    //  U: Bar
+    try self.consume(.TkWhere);
+    self.skipNewlines();
+    var params = TypeList.init();
+    var disamb = self.getDisambiguator(u32);
+    while (!self.check(.TkEof)) {
+      if (params.isNotEmpty()) {
+        if (self.check(.TkNewline)) {
+          break;
+        }
+        try self.consume(.TkComma);
+        const ss = self.snapshot();
+        self.skipNewlines();
+        if (!self.lexer.getTentativeToken().is(.TkColon)) {
+          self.rewind(ss);
+          break;
+        }
+      }
+      var ty = try self.aliasParam(true);
+      if (disamb.get(ty.variable().getFirstLexeme()) != null) {
+        self.softErrMsg(ty.variable().getFirst(), "duplicate type parameter found");
+      } else {
+        disamb.put(ty.variable().getFirstLexeme(), 1) catch {};
+      }
+      params.append(ty.box(self.allocator), self.allocator);
+    }
+    self.assertMaxTParams(params.len());
+    for (params.items()) |ty| {
+      var resolved = false;
+      for (tparams.items()) |_ty| {
+        if (ty.variable().eql(_ty.variable())) {
+          var typ = _ty.variable();
+          var where_bounds = ty.variable().bounds.?;
+          if (typ.bounds) |bounds| {
+            if (bounds.isUnion()) {
+              bounds.union_().set(where_bounds, self.allocator);
+              typ.bounds = bounds.union_().toTypeBoxed(self.allocator);
+            } else if (where_bounds.isUnion()) {
+              where_bounds.union_().set(bounds, self.allocator);
+              typ.bounds = where_bounds.union_().toTypeBoxed(self.allocator);
+            } else {
+              var uni = Type.newUnion();
+              uni.union_().addSlice(&[_]*Type{bounds, where_bounds}, self.allocator);
+              typ.bounds = uni.union_().toTypeBoxed(self.allocator);
+            }
+          } else {
+            typ.bounds = where_bounds;
+          }
+          resolved = true;
+          break;
+        }
+      }
+      if (!resolved) {
+        self.softErrMsg(ty.variable().getFirst(), "the type used here is not defined");
+      }
+    }
+  }
+
+  fn funStmt(self: *Self, lambda: bool, allow_pub: bool, is_method: bool, trait_fun: bool) !*Node {
     // FunDecl     :=  "def" TypeParams? Params? ReturnSig? NL Body End
-    const is_pub = if (allow_pub) self.match(.TkPub) else false;
+    const is_pub = if (allow_pub) self.match(.TkPub) else if (trait_fun) true else false;
     try self.consume(.TkDef);
     const prev_func = self.meta.func;
-    // var func = self.createNode();
     const name = if (!lambda) blk: {
       if (!self.inBuiltinMode() or !self.match(.TkPanic)) try self.consume(.TkIdent);
       break :blk self.previous_tok;
@@ -1544,14 +1628,33 @@ pub const Parser = struct {
     if (self.check(.TkLCurly)) {
       if (lambda) self.softErrMsg(self.current_tok, "generic lambdas are unsupported");
       if (is_method) self.softErrMsg(self.current_tok, "generic methods are unsupported");
-      var tmp = try self.abstractTypeParams(undefined);
+      var tmp = try self.abstractTypeParams(undefined, !lambda and !is_method);
       tparams = tmp.generic().tparams;
     }
     var variadic = false;
     const params = try self.funParams(&variadic);
-    const ret = if (self.check(.TkColon)) try self.returnSig() else null;
+    const ret = (
+      if (self.check(.TkColon)) try self.returnSig()
+      else if (trait_fun and self.check(.TkSemic)) Type.newVoid().box(self.allocator)
+      else null
+    );
+    const semic = self.current_tok;
     const body: *Node = blk: {
-      if (!lambda) break :blk try self.blockStmt(true, lambda, false);
+      if (trait_fun and self.match(.TkSemic)) {
+        break :blk self.newNode(.{.NdBlock = tir.BlockNode.init(&[_]*Node{})});
+      }
+      if (!lambda) {
+        if (!is_method and tparams != null) {
+          const ss = self.snapshot();
+          self.skipNewlines();
+          if (self.check(.TkWhere)) {
+            try self.whereClause(&tparams.?);
+          } else {
+            self.rewind(ss);
+          }
+        }
+        break :blk try self.blockStmt(true, lambda, false);
+      }
       if (self.match(.TkEqGrt)) {
         const rexp = self.newNode(.{.NdRet = tir.RetNode.init(try self.parseExpr(), self.previous_tok)});
         break :blk self.newNode(.{.NdBlock = tir.BlockNode.init(self.toSlice(rexp))});
@@ -1560,6 +1663,8 @@ pub const Parser = struct {
       }
     };
     func.NdBasicFun.update(params, name, body, ret, false, variadic, is_pub);
+    func.NdBasicFun.data.trait_fun = trait_fun;
+    func.NdBasicFun.data.empty_trait_fun = semic.is(.TkSemic);
     self.meta.func = prev_func;
     if (tparams) |*tp| {
       return self.newNode(.{.NdGenericFun = tir.GenericFunNode.init(tp.items(), func)});
@@ -2037,23 +2142,19 @@ pub const Parser = struct {
       _ = self.match(.TkNewline);
     }
     var node = self.newNode(.{.NdBlock = tir.BlockNode.init(stmts.items())});
-    node.block().scoped = add_scope;
     return node;
   }
 
   fn classTypeAnnotation(self: *Self) !?*Type {
     if (self.match(.TkColon)) {
-      try self.consume(.TkIdent);
-      var ty = Type.newVariableAToken(self.previous_tok, self.allocator);
+      var ty = try self.annotation();
       if (self.check(.TkPipe)) {
         var tmp = Union.init();
         tmp.set(ty, self.allocator);
         while (self.match(.TkPipe)) {
-          try self.consume(.TkIdent);
-          const t = Type.newVariableAToken(self.previous_tok, self.allocator);
-          tmp.set(t, self.allocator);
+          tmp.set(try self.annotation(), self.allocator);
         }
-        ty = tmp.toType(self.allocator).box(self.allocator);
+        ty = tmp.toTypeBoxed(self.allocator);
       }
       return ty;
     }
@@ -2075,12 +2176,16 @@ pub const Parser = struct {
     const ident = self.previous_tok;
     var tparams: ?*TypeList = null;
     if (self.check(.TkLCurly)) {
-      var tmp = try self.abstractTypeParams(undefined);
+      var tmp = try self.abstractTypeParams(undefined, true);
       tparams = tmp.generic().tparams.box(self.allocator);
     }
-    const protos = try self.classTypeAnnotation();
+    const traits = try self.classTypeAnnotation();
     try self.consume(.TkNewline);
     self.skipNewlines();
+    if (self.check(.TkWhere) and tparams != null) {
+      try self.whereClause(tparams.?);
+      self.skipNewlines();
+    }
     // ClassBody
     // ClassFields
     var disamb = self.getDisambiguator(Token);
@@ -2096,7 +2201,7 @@ pub const Parser = struct {
       const value = self.previous_tok.lexeme();
       if (disamb.get(value)) |tok| {
         self.softErrMsg(self.previous_tok, "illegal duplicate field");
-        self.softErrMsg(tok, "field also declared here");
+        self.softErrFmt(tok, 4, 2, "Field also declared here:", .{});
       }
       if (fields.len() > MAX_FIELDS) {
         self.softErrMsg(self.previous_tok, "maximum number of field declarations exceeded");
@@ -2127,7 +2232,7 @@ pub const Parser = struct {
     var mdisamb = self.getDisambiguator(Token);
     var methods = self.getNodeList();
     while (self.check(.TkDef) or self.check(.TkPub)) {
-      const method = try self.funStmt(false, true, true);
+      const method = try self.funStmt(false, true, true, false);
       const token = (
         if (method.isBasicFun()) method.NdBasicFun.data.name.?
         else method.NdGenericFun.fun.NdBasicFun.data.name.?
@@ -2135,11 +2240,11 @@ pub const Parser = struct {
       const value = token.lexeme();
       if (disamb.get(value)) |tok| {
         self.softErrArgs(token, "method conflicts with field '{s}'", .{value});
-        self.softErrMsg(tok, "field declared here");
+        self.softErrFmt(tok, 4, 2, "Field declared here:", .{});
       }
       if (mdisamb.get(value)) |tok| {
         self.softErrMsg(token, "illegal duplicate method");
-        self.softErrMsg(tok, "method also declared here");
+        self.softErrFmt(tok, 4, 2, "Method also declared here:", .{});
       }
       if (method.isGenericFun()) {
         self.softErrMsg(token, "generic methods are unsupported");
@@ -2154,13 +2259,57 @@ pub const Parser = struct {
     self.skipNewlines();
     try self.consume(.TkEnd);
     try self.consumeNlOrEof();
-    return self.newNode(.{
-      .NdClass = tir.ClassNode.init(
-        ident, protos, fields.items(), methods.items(),
+    return self.newNode(.{.NdClass = tir.StructNode.init(
+        ident, traits, fields.items(), methods.items(),
         if (tparams) |tp| tp.items() else null,
         false, false, self.allocator
-      )
-    });
+      )});
+  }
+
+  fn traitStmt(self: *Self) !*Node {
+    // TraitDecl           :=  "trait" Ident TypeParams TypeAnnotation? ";" | TraitBody "end"
+    const prev_cls = self.meta.class;
+    defer self.meta.class = prev_cls;
+    self.meta.class = @constCast(&@as(Node, .{.NdEmpty = tir.SymNode.init(self.previous_tok)}));
+    try self.consume(.TkIdent);
+    const ident = self.previous_tok;
+    var tparams: ?*TypeList = null;
+    if (self.check(.TkLCurly)) {
+      var tmp = try self.abstractTypeParams(undefined, true);
+      tparams = tmp.generic().tparams.box(self.allocator);
+    }
+    // NOTE: Disable trait extension for now
+    // const traits = try self.classTypeAnnotation();
+    try self.consume(.TkNewline);
+    // TraitMethods
+    var mdisamb = self.getDisambiguator(Token);
+    var methods = self.getNodeList();
+    while (self.check(.TkDef) or self.check(.TkPub)) {
+      const method = try self.funStmt(false, true, true, true);
+      const token = (
+        if (method.isBasicFun()) method.NdBasicFun.data.name.?
+        else method.NdGenericFun.fun.NdBasicFun.data.name.?
+      );
+      const value = token.lexeme();
+      if (mdisamb.get(value)) |tok| {
+        self.softErrMsg(token, "illegal duplicate method");
+        self.softErrFmt(tok, 4, 2, "Method also declared here:", .{});
+      }
+      if (methods.len() > MAX_METHODS) {
+        self.softErrMsg(token, "maximum number of method declarations exceeded");
+      }
+      methods.append(method);
+      mdisamb.put(value, token) catch {};
+      self.skipNewlines();
+    }
+    self.skipNewlines();
+    try self.consume(.TkEnd);
+    try self.consumeNlOrEof();
+    return self.newNode(.{.NdTrait = tir.StructNode.init(
+        ident, null, &[_]*Node{}, methods.items(),
+        if (tparams) |tp| tp.items() else null,
+        false, false, self.allocator
+      )});
   }
 
   fn statement(self: *Self) !*Node {
@@ -2181,11 +2330,13 @@ pub const Parser = struct {
     } else if (self.check(.TkBreak) or self.check(.TkContinue)) {
       return self.controlStmt();
     } else if (self.check(.TkDef)) {
-      return self.funStmt(false, false, false);
+      return self.funStmt(false, false, false, false);
     } else if (self.match(.TkReturn)) {
       return self.returnStmt();
     } else if (self.match(.TkClass)) {
       return self.classStmt();
+    } else if (self.match(.TkTrait)) {
+      return self.traitStmt();
     } else if (self.match(.TkMatch)) {
       return self.matchStmt(true);
     }

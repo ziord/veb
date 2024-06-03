@@ -382,11 +382,14 @@ pub const Desugar = struct {
 
   fn desConcat(self: *Desugar, node: *tir.BinaryNode) *Node {
     // foo <> bar -> foo.concat(bar)
-    const ident = self.newNode(.{.NdTVar = tir.TVarNode.init(node.right.getToken().tkFrom("concat", .TkIdent))});
-    const access = self.newNode(.{.NdDotAccess = tir.DotAccessNode.init(node.left, ident)});
+    const token = node.right.getToken();
+    const lhs = self.desExpr(node.left);
+    const rhs = self.desExpr(node.right);
+    const ident = self.newNode(.{.NdTVar = tir.TVarNode.init(token.tkFrom("concat", .TkIdent))});
+    const access = self.newNode(.{.NdDotAccess = tir.DotAccessNode.init(lhs, ident)});
     var args = util.allocSlice(*Node, 1, self.al);
-    args[0] = node.right;
-    return self.desExpr(self.newNode(.{.NdBasicCall = tir.BasicCallNode.init(access, args)}));
+    args[0] = rhs;
+    return self.newNode(.{.NdBasicCall = tir.BasicCallNode.init(access, args)});
   }
 
   fn desExpr(self: *Desugar, node: *Node) *Node {
@@ -484,7 +487,7 @@ pub const Desugar = struct {
         nd.els = self.des(nd.els);
       },
       .NdBasicFun, .NdGenericFun => {},
-      .NdClass => |*nd| {
+      .NdClass, .NdTrait => |*nd| {
         for (nd.data.methods) |mth| {
           self.desugarFun(mth) catch {};
         }

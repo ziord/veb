@@ -952,6 +952,9 @@ pub const Compiler = struct {
     self.optimizeConstRK();
     defer self.deoptimizeConstRK();
     var tmp = node.lhs.getType().?;
+    if (tmp.isTrait() or tmp.isUnion()) {
+      return self.cTraitDotAccess(node, is_call, dst);
+    }
     // qualified tag access using tag union, e.g T.Bar
     if (tmp.isTaggedUnion() or (tmp == node.typ.?)) {
       // the second condition holds if this is a fully qualified tag access like: type T = K ;; T.K
@@ -976,11 +979,19 @@ pub const Compiler = struct {
       op = .Gfd;
     } else if (ty.getMethodIndex(prop.lexeme())) |idx| {
       prop_idx = @intCast(idx);
-      op = if (is_call) .Jmtdc else .Gmtd;
+      op = if (is_call) .Jnextc else .Gmtd;
     } else {
       return self.compileError(prop, "No such field/method '{s}'", .{prop.lexeme()});
     }
     self.fun.code.write3ArgsInst(op, dst, rk_inst, prop_idx, prop.line, self.vm);
+    return dst;
+  }
+
+  fn cTraitDotAccess(self: *Self, node: *tir.DotAccessNode, is_call: bool, dst: u32) !u32 {
+    const prop = node.rhs.getToken(); // should be a VarNode's token
+    const rk_inst = try self.c(node.lhs, dst);
+    const prop_idx = self.storeVar(prop);
+    self.fun.code.write3ArgsInst(if (is_call) .Jnextcs else .Gmtds, dst, rk_inst, prop_idx, prop.line, self.vm);
     return dst;
   }
 
@@ -1520,6 +1531,7 @@ pub const Compiler = struct {
     // - get a register window
     // - compile the call expr
     // - generate the instruction: call r(func), b(argc)
+
     // optimize tuple len call since we know the result at compile time, i.e. tuple.len()
     if (self.isTupleLenMethodCall(node)) {
       const len = node.expr.NdDotAccess.lhs.getType().?.klass().tparamsLen();
@@ -1532,6 +1544,10 @@ pub const Compiler = struct {
     const token = node.expr.getToken();
     var _dst = reg;
     const n: u32 = @intCast(node.args.len);
+    const fun_dst = try self.cDotAccess(&node.expr.NdDotAccess, true, _dst);
+    assert(fun_dst == _dst);
+    const inst = self.fun.code.words.pop();
+    const line = self.fun.code.lines.pop();
     var do_move = false;
     var win = blk: {
       break :blk self.vreg.getRegWindow(reg, n) catch {
@@ -1542,6 +1558,9 @@ pub const Compiler = struct {
     if (do_move) {_dst = win; win += 1;}
     // we need the function to be in a specific position in the register window, along with its args
     // don't optimize this call's arguments
+    if (fun_dst != _dst) {
+      self.fun.code.write3ArgsInst(.Mov, _dst, fun_dst, 0, token.line, self.vm);
+    }
     self.enterNoOpt();
     for (node.args, 0..) |arg, i| {
       const dst = win + @as(u32, @intCast(i));
@@ -1552,13 +1571,8 @@ pub const Compiler = struct {
       }
     }
     self.leaveNoOpt();
-    var fun_dst = try self.cDotAccess(&node.expr.NdDotAccess, true, reg);
-    if (fun_dst != _dst) {
-      self.fun.code.resetBy(1);
-      fun_dst = try self.cDotAccess(&node.expr.NdDotAccess, false, reg);
-      self.fun.code.write3ArgsInst(.Mov, _dst, fun_dst, 0, token.line, self.vm);
-      logger.debug("fun_dst != _dst on method call", .{});
-    }
+    self.fun.code.words.push(inst, self.vm);
+    self.fun.code.lines.push(line, self.vm);
     self.fun.code.write2ArgsInst(.Call, _dst, n, token.line, self.vm);
     if (do_move) {
       self.fun.code.write3ArgsInst(.Mov, reg, _dst, 0, token.line, self.vm);
@@ -1624,7 +1638,7 @@ pub const Compiler = struct {
     return if (std.mem.indexOf(u8, name.lexeme(), ".")) |idx| name.lexeme()[0..idx] else name.lexeme();
   }
 
-  fn cClass(self: *Self, ast_node: *Node, node: *tir.ClassNode, _reg: u32) !u32 {
+  fn cClass(self: *Self, ast_node: *Node, node: *tir.StructNode, _reg: u32) !u32 {
     if (node.isParameterized()) return self.cClassGeneric(ast_node, _reg);
     var reg: u32 = undefined;
     const token = ast_node.getToken();
@@ -1690,7 +1704,8 @@ pub const Compiler = struct {
       .NdBlock => |*nd| self.cBlock(nd, reg),
       .NdType => |*nd| self.cNType(nd, reg),
       .NdAlias, .NdScope, .NdFailMarker,
-      .NdRedunMarker, .NdDiagStartMarker, .NdEmpty, => reg,
+      .NdRedunMarker, .NdDiagStartMarker,
+      .NdEmpty, .NdTrait => reg,
       .NdCast => |*nd| self.cCast(nd, reg),
       .NdSubscript => |*nd| self.cSubscript(nd, reg),
       .NdDeref => |*nd| self.cDeref(nd, reg),

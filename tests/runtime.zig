@@ -78,20 +78,20 @@ test "strings" {
 
 test "lists & tuples" {
   const src = 
-    \\ [1, 2, 3, 4]
-    \\ [Ok(1) as Result{num, num}, Error(2), Ok(3), Error(4)]
-    \\ (1, 'fox', 3, 'cat')
-    \\ [1]
-    \\ []
-    \\ (1, 'fox', 3, 'cat', (1, 'fox', 3, 'cat'))
-    \\ (1, 2, {'a': 'set'})
-    \\ (1, 2, {'a': 'set'},)
-    \\ (1,)
-    \\ ({'abc': 123}, {true: 0xff}, {'obs': 0b101})
-    \\ ()
-    \\ ([1, 2, 3], [5, 5, 5])
-    \\ ('abc',) as Tuple{'abc'}
-    \\ ('x', 'y',)
+    \\ _ = [1, 2, 3, 4]
+    \\ _ = [Ok(1) as Result{num, num}, Error(2), Ok(3), Error(4)]
+    \\ _ = (1, 'fox', 3, 'cat')
+    \\ _ = [1]
+    \\ _ = []
+    \\ _ = (1, 'fox', 3, 'cat', (1, 'fox', 3, 'cat'))
+    \\ _ = (1, 2, {'a': 'set'})
+    \\ _ = (1, 2, {'a': 'set'},)
+    \\ _ = (1,)
+    \\ _ = ({'abc': 123}, {true: 0xff}, {'obs': 0b101})
+    \\ _ = ()
+    \\ _ = ([1, 2, 3], [5, 5, 5])
+    \\ _ = ('abc',) as Tuple{'abc'}
+    \\ _ = ('x', 'y',)
     \\ let x: List{Result{num, num}} = [Ok(1) as Result{num, num}, Error(2), Ok(3), Error(4)]
     \\ println(x, x.len())
   ;
@@ -100,13 +100,13 @@ test "lists & tuples" {
 
 test "maps" {
   const srcs =
-    \\ []
-    \\ {'abc': 123}
+    \\ _ = []
+    \\ _ = {'abc': 123}
     \\ type Key = Str_(str) | Bool_(bool)
-    \\ {Str_('abc') as Key: 123, Bool_(true): 0xff, Str_('obs'): 0b101}
-    \\ {}
-    \\ {24: [1, 2, 3]}
-    \\ {24: [1, 2, 3],}
+    \\ _ = {Str_('abc') as Key: 123, Bool_(true): 0xff, Str_('obs'): 0b101}
+    \\ _ = {}
+    \\ _ = {24: [1, 2, 3]}
+    \\ _ = {24: [1, 2, 3],}
   ;
   try doRuntimeTest(srcs);
 }
@@ -133,7 +133,7 @@ test "vars" {
   \\ let k = 10
   \\ k = 5
   \\ let p = k
-  \\ [p, k]
+  \\ _ = [p, k]
   \\ let y = (
   \\     x - 5
   \\ )
@@ -143,10 +143,10 @@ test "vars" {
   \\     x: y
   \\ }
   \\ ]
-  \\ {123: "foxlike"}
+  \\ _ = {123: "foxlike"}
   \\ #let y = 10
   \\ #[x, y]
-  \\ z
+  \\ _ = z
   ;
   try doRuntimeTest(src);
   const src2 =
@@ -200,7 +200,7 @@ test "types" {
   \\ s[0] = q[0]
   \\ s[1] = q[1]
   \\ s[2] = q[4]
-  \\ (s, q)
+  \\ _ = (s, q)
   ;
   try doRuntimeTest(src);
 }
@@ -352,7 +352,7 @@ test "cast-typecheck" {
   const src =
   \\ let x = 5 as bool
   \\ assert(x, 'should be true')
-  \\ !!x and !!'fox'
+  \\ _ = !!x and !!'fox'
   \\ type NumStr = Num(num) | Str(str)
   \\ type NumStrBool = Num(num) | Str(str) | Bool(bool)
   \\ let p = Just(Num(5) as NumStr) as NumStr?
@@ -411,7 +411,7 @@ test "indexing .1" {
   \\ let r = !!x[2]
   \\ x[-1] <<= 3
   \\ let w = x[-2]
-  \\ (t, r, q, p, x, y, d, w)
+  \\ _ = (t, r, q, p, x, y, d, w)
   \\ # multi type index
   \\ type NumStr = Num(num) | Str(str)
   \\ let _a = Str('fox')
@@ -708,6 +708,22 @@ test "is expression" {
   try doRuntimeTest(src);
 }
 
+test "short-circuit operator (Maybe)" {
+  const src =
+  \\ let t: num? = Just(5)
+  \\ assert(t.? == 5, 'should be 5')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "assert operator (Maybe)" {
+  const src =
+  \\ let t: num? = Just(5)
+  \\ assert(t.?? == 5, 'should be 5')
+  ;
+  try doRuntimeTest(src);
+}
+
 test "narrowing-1" {
   const src =
   \\ type StrNum = Str(str) | Num(num)
@@ -945,7 +961,7 @@ test "narrowing-18" {
   \\    p[0].?? += 12
   \\ end
   \\ assert(p[0].?? == 17, 'should be 17')
-  \\ ()
+  \\ _ = ()
   \\ let t: num = 0
   \\ let v: Tuple{Map{num, num}, Tuple{num, str}} = ({1: 4}, (15, 'abc'))
   \\ if v[1] is Tuple{num, str}
@@ -1430,14 +1446,14 @@ test "functions-6" {
   \\ end
   \\
   \\ let j = 12
-  \\ (def => j * 3)() == 36
-  \\ [(def => j * 3)][0]() + 12 == 48
+  \\ _ = (def => j * 3)() == 36
+  \\ _ = [(def => j * 3)][0]() + 12 == 48
   \\
   \\ do
   \\  let j = 12
   \\  assert((def => j * 3)() == 36, 'should be 36')
-  \\  [(def => j * 3)][0]() + 12 == 48
-  \\  (def => [(def => j * 3)][0]() + 12 == 48)()
+  \\  _ = [(def => j * 3)][0]() + 12 == 48
+  \\  _ = (def => [(def => j * 3)][0]() + 12 == 48)()
   \\ end
   \\ let j = 6
   \\ assert((def => [(def => j * 3)][0]() + 6 == 24)(), 'should be true')
@@ -1543,8 +1559,8 @@ test "functions-8" {
   \\
   \\ do
   \\  let j = 12
-  \\  (def => j * 3)() == 36
-  \\  [(def => j * 3)][0]() + 12 == 48
+  \\  _ = (def => j * 3)() == 36
+  \\  _ = [(def => j * 3)][0]() + 12 == 48
   \\  assert((def => [(def => j * 3)][0]() + 12 == 48)(), 'should be 48')
   \\ end
   \\ let j = 6
@@ -1688,8 +1704,8 @@ test "functions-9" {
   \\  end
   \\ end
   \\ 
-  \\ (def (x: num) => x * x)(12)
-  \\ (def (x: num)
+  \\ _ = (def (x: num) => x * x)(12)
+  \\ _ = (def (x: num)
   \\  return x * x
   \\ end)(12)
   \\
@@ -1868,7 +1884,7 @@ test "functions-17" {
   \\  end
   \\ end
   \\ println(println(), 'jeryr')
-  \\ (def (p*:any) => println(p))(1, 2, 'a', 'b', false, true, None)
+  \\ _ = (def (p*:any) => println(p))(1, 2, 'a', 'b', false, true, None)
   \\ let j: any? = None
   ;
   try doRuntimeTest(src);
@@ -2018,7 +2034,7 @@ test "builtin-functions" {
   \\ assert(!!print, 'print')
   \\ assert(!!println, 'println')
   \\ assert(!!@string, '@string')
-  \\ (@exit, assert)
+  \\ _ = (@exit, assert)
   ;
   try doRuntimeTest(src);
 }
@@ -2387,13 +2403,13 @@ test "method-calls" {
   \\  x.append('oopsy'.len())
   \\  return x
   \\ end
-  \\ let _ = fun{num}([1, 2, 3, 4])
-  \\ println('-->', _, 'oopsy'.len())
+  \\ let _t = fun{num}([1, 2, 3, 4])
+  \\ println('-->', _t, 'oopsy'.len())
   \\ assert('oopsy'.len() == 5, 'should be 5')
-  \\ assert(_[-1] == 5, 'last item should be 5')
+  \\ assert(_t[-1] == 5, 'last item should be 5')
   \\
   \\ let x = []
-  \\ x.len
+  \\ _ = x.len
   \\ x.append(8)
   \\ println(x)
   \\ assert(x.len() == 1, 'len should be 1')
@@ -2500,9 +2516,9 @@ test "generic-classes-2" {
 test "generic-classes-3" {
   const src =
   \\ let j = []
-  \\ let _ = j.append
+  \\ let _t = j.append
   \\ j.append(5)
-  \\ _(1)
+  \\ _t(1)
   \\ assert(j.len() == 2, 'len should be 2')
   \\ let x = j.pop().?
   \\ assert(x == 1, 'x should be 1')
@@ -4259,7 +4275,9 @@ test "pipelines .1" {
   \\ let x = "fox".len()
   \\ let bar = def (n: num) => n * 5
   \\ let foobar = def (k: num, y: num) => k + y
-  \\ let a = foo |> bar |> foobar(x, *)
+  \\ let a = foo 
+  \\  |> bar 
+  \\  |> foobar(x, *)
   \\ a |> println(*, *, *)
   \\ a |> assert(28 == *, 'should be 28')
   ;
@@ -4268,7 +4286,9 @@ test "pipelines .1" {
 
 test "pipelines .2" {
   const src =
-  \\ [1, 2, 3] |> *.len() |> assert(* == 3, 'should be 3')
+  \\ [1, 2, 3] 
+  \\ |> *.len() 
+  \\ |> assert(* == 3, 'should be 3')
   ;
   try doRuntimeTest(src);
 }
@@ -4374,8 +4394,13 @@ test "str concat .1" {
   \\ j.concat("a very beautiful day!") |> println
   \\ j.concat("a very beautiful day!") |> assert(* == "This is a very beautiful day!", 'should be same')
   \\ let j = "the "
-  \\ "quick fox" |> j.concat |> assert(* == "the quick fox", 'should be same')
-  \\ "quick fox" |> j.concat |> (* == "the quick fox") |> assert(*, 'should be same')
+  \\ "quick fox" 
+  \\  |> j.concat 
+  \\  |> assert(* == "the quick fox", 'should be same')
+  \\ "quick fox"
+  \\  |> j.concat 
+  \\  |> (* == "the quick fox") 
+  \\  |> assert(*, 'should be same')
   ;
   try doRuntimeTest(src);
 }
@@ -4383,22 +4408,23 @@ test "str concat .1" {
 test "str concat .2" {
   const src =
   \\ let j = (1, 2, "a", [None as Maybe{num}, Just(5)], Just('oops'))
-  \\ (@string(j) <> " something " <> @string(0xff)) |> println
-  \\ (
+  \\ _ = (@string(j) <> " something " <> @string(0xff)) |> println
+  \\ _ =
   \\  @string(j)
   \\  <> " something "
   \\  <> @string(0xff)
   \\  |> assert(
   \\    * == "(1, 2, 'a', [None, Just(5)], Just('oops')) something 255",
   \\    'should be same',)
-  \\ )
   ;
   try doRuntimeTest(src);
 }
 
 test "str concat .3" {
   const src =
-  \\ (5 |> @string) <> ", yeah" |> * == "5, yeah" |> assert(*, 'should be same')
+  \\ (5 |> @string) <> ", yeah" 
+  \\  |> * == "5, yeah" 
+  \\  |> assert(*, 'should be same')
   ;
   try doRuntimeTest(src);
 }

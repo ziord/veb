@@ -33,6 +33,15 @@ pub fn doRuntimeTest(src: []const u8) !void {
   std.debug.print("\n", .{});
 }
 
+pub fn doParsingTest(src: []const u8) !void {
+  var cna = VebAllocator.init(std.heap.ArenaAllocator.init(std.testing.allocator));
+  defer cna.deinit();
+  const filename = @as([]const u8, "test.veb");
+  var al = cna.getArenaAllocator();
+  var parser = parse.Parser.init(@constCast(&src), &filename, .User, al);
+  _ = try parser.parse(true);
+}
+
 pub fn doStaticTest(src: []const u8) !void {
   var cna = VebAllocator.init(std.heap.ArenaAllocator.init(std.testing.allocator));
   defer cna.deinit();

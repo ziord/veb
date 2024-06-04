@@ -83,7 +83,6 @@ pub const TokenType = enum (u8) {
   TkQMark,          // ?
   Tk2QMark,         // ??
   TkPipeGthan,      // |>
-  TkNewline,        // \n
   TkEqGrt,          // =>
   Tk2Dot,           // ..
   TkGthanLthan,     // <>
@@ -225,7 +224,6 @@ pub const TokenType = enum (u8) {
       .TkQMark => "?",
       .Tk2QMark => "??",
       .TkPipeGthan => "|>",
-      .TkNewline => "<newline>",
       .TkEqGrt => "=>",
       .Tk2Dot => "..",
       .TkGthanLthan => "<>",
@@ -512,7 +510,7 @@ pub const Token = struct {
 
   fn _getLine(self: *const @This(), src: []const u8) []const u8 {
     const start = self.offset;
-    const offset = if ((self.ty == .TkNewline or self.ty == .TkEof) and start > 0) start - 1 else start;
+    const offset = if (self.ty == .TkEof and start > 0) start - 1 else start;
     // walk backwards
     var start_col: usize = offset;
     while (start_col > 0): (start_col -= 1) {
@@ -548,7 +546,6 @@ pub const ParseMode = enum(u8) {
 /// A snapshot of the lexer's state at any point in lexing
 pub const LexSnapShot = struct {
   at_error: bool,
-  allow_nl: usize,
   line: usize,
   column: usize,
   start: usize,
@@ -564,7 +561,6 @@ pub const Lexer = struct {
   at_error: bool,
   src: []const u8,
   allocator: std.mem.Allocator,
-  allow_nl: usize = 0,
   mode: ParseMode,
 
   const Self = @This();
@@ -683,13 +679,8 @@ pub const Lexer = struct {
     while (true) {
       const char = self.peek();
       switch(char) {
-        ' ', '\r', '\t' => self.adv(),
-        '\n' => {
-          if (self.allow_nl > 0) self.adv() else return;
-        },
-        '#' => {
-         self.skipComment();
-        },
+        ' ', '\r', '\t', '\n' => self.adv(),
+        '#' => self.skipComment(),
         else => return,
       }
     }
@@ -860,7 +851,6 @@ pub const Lexer = struct {
 
   pub fn snapshot(self: *Self) LexSnapShot {
     return .{
-      .allow_nl = self.allow_nl,
       .at_error = self.at_error,
       .line = self.line,
       .column = self.column,
@@ -870,7 +860,6 @@ pub const Lexer = struct {
   }
 
   pub fn rewind(self: *Self, ss: LexSnapShot) void {
-    self.allow_nl = ss.allow_nl;
     self.at_error = ss.at_error;
     self.line = ss.line;
     self.column = ss.column;
@@ -916,7 +905,6 @@ pub const Lexer = struct {
       '}' => self.newToken(.TkRCurly),
       '^' => self.newToken(.TkCaret),
       '~' => self.newToken(.TkTilde),
-      '\n' => self.newToken(.TkNewline),
       '"', '\'' => self.lexStr(ch),
       '|' => self.newToken(if (self.match('>')) .TkPipeGthan else .TkPipe),
       '?' => self.newToken(if (self.match('?')) .Tk2QMark else .TkQMark),

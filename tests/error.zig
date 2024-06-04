@@ -3,18 +3,18 @@ const doErrorTest = lib.doErrorTest;
 
 test "binary operators" {
   const src =
-  \\ 'fox' + 5
-  \\ false - 'foobar'
-  \\ [] * ()
-  \\ None / {'x': 5}
-  \\ ~false / {'x': 5}
-  \\ None ^ true
-  \\ 'fin' > true
-  \\ [('1', 2, 'a')] < ('oops')!
-  \\ ([1, 2])! <= ('oops')!
-  \\ false >= None
-  \\ [('1', 2, 'a')] == ('oops')!
-  \\ 'mist' != 6
+  \\ _ = 'fox' + 5
+  \\ _ = false - 'foobar'
+  \\ _ = [] * ()
+  \\ _ = None / {'x': 5}
+  \\ _ = ~false / {'x': 5}
+  \\ _ = None ^ true
+  \\ _ = 'fin' > true
+  \\ _ = [('1', 2, 'a')] < ('oops')!
+  \\ _ = ([1, 2])! <= ('oops')!
+  \\ _ = false >= None
+  \\ _ = [('1', 2, 'a')] == ('oops')!
+  \\ _ = 'mist' != 6
   \\ let q = List{num} + str
   ;
   try doErrorTest(src, 13, [_][]const u8{
@@ -93,12 +93,12 @@ test "builtin generics" {
 test "casting.<regular>" {
   const src =
   \\ let j = (1, 2)
-  \\ j as Tuple{str, num}
+  \\ _ = j as Tuple{str, num}
   \\ let j = {'a': 5} as Map{str, Tuple{num, bool}}
   \\ let t = []
-  \\ t as List{str}
+  \\ _ = t as List{str}
   \\ let j: any = 5
-  \\ (j as num) + 6
+  \\ _ = (j as num) + 6
   ;
   try doErrorTest(src, 4, [_][]const u8{
     "Cannot cast from type 'Tuple{num, num}' to type 'Tuple{str, num}'",
@@ -2347,7 +2347,7 @@ test "typing.<tagged unions 3b>" {
   \\ alias Fox = Foo?
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "expected token '<newline>' but found '?'"
+    "token found at an invalid position"
   });
 }
 
@@ -3682,6 +3682,17 @@ test "builtin @ <assignment>" {
   \\ @box = 5
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "expected token '<newline>' but found '='",
+    "token found at an invalid position",
+  });
+}
+
+test "discard vardecl" {
+  const src =
+  \\ let _ = j.append
+  \\ j.append(5)
+  \\ _(1)
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "cannot use the identifier '_' in this context.",
   });
 }

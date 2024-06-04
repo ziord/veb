@@ -49,7 +49,6 @@ pub const Parser = struct {
   const ParseMeta = struct {
     casts: u32 = 0,
     loops: u32 = 0,
-    parens: u32 = 0,
     sugars: u32 = 0,
     pipes: u32 = 0,
     func: ?*Node = null,
@@ -125,7 +124,6 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkQMark
     .{.bp = .None, .prefix = null, .infix = null},                      // Tk2QMark
     .{.bp = .Pipe, .prefix = null, .infix = Self.pipeline},             // TkPipeGthan
-    .{.bp = .None, .prefix = null, .infix = null},                      // TkNewline
     .{.bp = .None, .prefix = null, .infix = null},                      // TkEqGrt
     .{.bp = .None, .prefix = null, .infix = null},                      // Tk2Dot
     .{.bp = .Term, .prefix = null, .infix = Self.concat},               // TkGthanLthan
@@ -261,16 +259,6 @@ pub const Parser = struct {
    return error.ParseError;
   }
 
-  inline fn incParens(self: *Self) void {
-    self.meta.parens += 1;
-    self.lexer.allow_nl = self.meta.parens;
-  }
-
-  inline fn decParens(self: *Self) void {
-    self.meta.parens -= 1;
-    self.lexer.allow_nl = self.meta.parens;
-  }
-
   inline fn incLoop(self: *Self) void {
     self.meta.loops += 1;
   }
@@ -299,10 +287,6 @@ pub const Parser = struct {
     return self.meta.parens > 0;
   }
 
-  inline fn skipNewlines(self: *Self) void {
-    while (self.match(.TkNewline)) {}
-  }
-
   inline fn check(self: *Self, ty: lex.TokenType) bool {
     return self.current_tok.ty == ty;
   }
@@ -313,6 +297,14 @@ pub const Parser = struct {
       return true;
     }
     return false;
+  }
+
+  fn isDiscardIdent(self: *Self) bool {
+    return (
+      self.check(.TkIdent) and
+      self.current_tok.lexeme().len == 1 and
+      self.current_tok.lexeme()[0] == '_'
+    );
   }
 
   inline fn snapshot(self: *Self) lex.LexSnapShot {
@@ -348,17 +340,6 @@ pub const Parser = struct {
   inline fn consumeIdent(self: *Self) !void {
     try self.consume(.TkIdent);
     self.assertBuiltinIdentNotInUse(self.previous_tok);
-  }
-
-  inline fn consumeNlOrEof(self: *Self) !void {
-    // Try to consume Newline. 
-    // If not, check that the current token is Eof, else error
-    if (!self.match(.TkNewline)) {
-      if (!self.check(.TkEof)) {
-        // error, since we originally expected Newline
-        try self.consume(.TkNewline);
-      }
-    }
   }
 
   inline fn getDisambiguator(self: *Self, comptime T: type) std.StringHashMap(T) {
@@ -457,6 +438,16 @@ pub const Parser = struct {
       self.softErrMsg(
         token, "cannot use an identifier marked with '@' in this context.\n"
         ++ "  Consider eliminating '@'."
+      );
+    }
+  }
+
+  fn assertDiscardIdentNotInUse(self: *Self, token: Token) void {
+    const lxm = token.lexeme();
+    if (lxm.len == 1 and lxm[0] == '_') {
+      self.softErrMsg(
+        token, "cannot use the identifier '_' in this context.\n"
+        ++ "  Consider renaming this identifier."
       );
     }
   }
@@ -596,7 +587,7 @@ pub const Parser = struct {
   fn _parse(self: *Self, bp: BindingPower) !*Node {
     const prefix = ptable[@intFromEnum(self.current_tok.ty)].prefix;
     if (prefix == null) {
-      return self.errMsg(self.current_tok, "token found at an invalid prefix position");
+      return self.errMsg(self.current_tok, "token found at an invalid position");
     }
     const bp_val = @intFromEnum(bp);
     const assignable = bp_val <= @intFromEnum(BindingPower.Assignment);
@@ -604,7 +595,7 @@ pub const Parser = struct {
     while (bp_val < @intFromEnum(ptable[@intFromEnum(self.current_tok.ty)].bp)) {
       const infix = ptable[@intFromEnum(self.current_tok.ty)].infix;
       if (infix == null) {
-        return self.errMsg(self.current_tok, "token found at an invalid infix position");
+        return self.errMsg(self.current_tok, "token found at an invalid position");
       }
       node = try infix.?(self, node, assignable);
     }
@@ -629,9 +620,6 @@ pub const Parser = struct {
       const node = self.newNode(.{.NdAssign = tir.BinaryNode.init(
         if (left.isDeref()) left.NdDeref.expr else left, right, op_eq
       )});
-      // only ascertain that a newline or eof is present, if not, error
-      if (!self.check(.TkNewline) and !self.check(.TkEof)) try self.consumeNlOrEof();
-      // if present, exprStmt() would consume it for us.
       return node;
     } else if (self.match(.TkEqual)) {
       const token = self.previous_tok;
@@ -639,9 +627,6 @@ pub const Parser = struct {
       const node = self.newNode(.{.NdAssign = tir.BinaryNode.init(
         if (left.isDeref()) left.NdDeref.expr else left, value, token
       )});
-      // only ascertain that a newline or eof is present, if not, error
-      if (!self.check(.TkNewline) and !self.check(.TkEof)) try self.consumeNlOrEof();
-      // if present, exprStmt() would consume it for us.
       return node;
     } else {
       return left;
@@ -759,7 +744,6 @@ pub const Parser = struct {
   }
 
   fn grouping(self: *Self, assignable: bool) !*Node {
-    self.incParens();
     try self.consume(.TkLBracket);
     if (self.check(.TkRBracket)) {
       return try self.tupling(assignable, null);
@@ -768,7 +752,6 @@ pub const Parser = struct {
     if (self.match(.TkComma)) {
       return try self.tupling(assignable, node);
     }
-    self.decParens();
     try self.consume(.TkRBracket);
     if (!self.match(.TkExMark)) {
       return node;
@@ -790,7 +773,6 @@ pub const Parser = struct {
         if (self.check(.TkRBracket)) break;
       }
     }
-    self.decParens();
     self.assertMaxElements(items.len(), "tuple elements");
     try self.consume(.TkRBracket);
     return self.newNode(.{.NdTuple = tir.ListNode.init(items.items())});
@@ -799,7 +781,6 @@ pub const Parser = struct {
   fn listing(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     var items = self.getNodeList();
-    self.incParens();
     try self.consume(.TkLSqrBracket);
     while (!self.check(.TkEof) and !self.check(.TkRSqrBracket)) {
       if (items.isNotEmpty()) {
@@ -810,7 +791,6 @@ pub const Parser = struct {
       }
       items.append(try self.parseExpr());
     }
-    self.decParens();
     self.assertMaxElements(items.len(), "list elements");
     try self.consume(.TkRSqrBracket);
     return self.newNode(.{.NdList = tir.ListNode.init(items.items())});
@@ -818,7 +798,6 @@ pub const Parser = struct {
 
   fn mapping(self: *Self, assignable: bool) !*Node {
     _ = assignable;
-    self.incParens();
     try self.consume(.TkLCurly);
     var pairs = ds.ArrayList(tir.MapNode.Pair).init(self.allocator);
     while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
@@ -833,7 +812,6 @@ pub const Parser = struct {
       const val = try self.parseExpr();
       pairs.append(.{.key = key, .value = val});
     }
-    self.decParens();
     self.assertMaxElements(pairs.len() << 1, "map elements");
     try self.consume(.TkRCurly);
     return self.newNode(
@@ -842,10 +820,8 @@ pub const Parser = struct {
   }
 
   fn indexing(self: *Self, left: *Node, assignable: bool) !*Node {
-    self.incParens();
     try self.consume(.TkLSqrBracket);
     const index = try self.parseExpr();
-    self.decParens();
     try self.consume(.TkRSqrBracket);
     return try self.handleAugAssign(
       self.newNode(.{.NdSubscript = tir.SubscriptNode.init(left, index)}),
@@ -854,14 +830,16 @@ pub const Parser = struct {
   }
 
   fn dotderef(self: *Self, left: *Node, assignable: bool) !*Node {
-    // expr.?
+    // expr.? | expr.??
     const token = self.current_tok;
     try self.consume(.TkDot);
     if (self.match(.TkQMark)) {
+      // expr.? -> short-circuits
       self.meta.sugars += 1;
       const node = self.newNode(.{.NdDeref = tir.DerefNode.init(left, token)});
       return try self.handleAugAssign(node, assignable);
     } else if (self.match(.Tk2QMark)) {
+      // expr.?? -> asserts
       const num = self.newNode(.{.NdNumber = tir.NumberNode.init(self.previous_tok, 0)});
       const deref = self.newNode(.{.NdDeref = tir.DerefNode.initAssertion(left, token)});
       const node = self.newNode(.{.NdDotAccess = tir.DotAccessNode.init(deref, num)});
@@ -906,7 +884,6 @@ pub const Parser = struct {
     if (self.match(.TkLCurly)) {
       targs = try self.typeParams();
     }
-    self.incParens();
     try self.consume(.TkLBracket);
     var args = self.getNodeList();
     var start: Token = undefined;
@@ -930,7 +907,6 @@ pub const Parser = struct {
         args.append(arg);
       }
     }
-    self.decParens();
     try self.consume(.TkRBracket);
     self.assertMaxArgs(args.len(), "arguments");
     self.validateMaybeTagCall(left, &args);
@@ -944,7 +920,6 @@ pub const Parser = struct {
   }
 
   fn blockExpr(self: *Self) !*Node {
-    _ = self.match(.TkNewline);
     var nodes = self.getNodeList();
     while (!self.check(.TkEof) and !self.check(.TkEnd)) {
       try self.addStatement(&nodes);
@@ -1333,16 +1308,13 @@ pub const Parser = struct {
 
   fn taggedUnion(self: *Self) !Type {
     // Union := TaggedPrimary ( “|” TaggedPrimary )*
-    const stepped = self.match(.TkNewline);
-    if (stepped) _ = self.match(.TkPipe);
+    _ = self.match(.TkPipe);
     var typ = try self.taggedPrimary();
-    if (stepped) _ = self.match(.TkNewline);
     if (self.check(.TkPipe)) {
       var disamb = self.getDisambiguator(u32);
       if (typ.isTag()) disamb.put(typ.tag().name, 1) catch {};
       var uni = TaggedUnion.init();
       uni.set(typ.box(self.allocator), self.allocator);
-      var ss = @as(lex.LexSnapShot, undefined);
       while (self.match(.TkPipe)) {
         typ = try self.taggedPrimary();
         if (typ.isTag()) {
@@ -1353,10 +1325,7 @@ pub const Parser = struct {
           }
         }
         uni.set(typ.box(self.allocator), self.allocator);
-        ss = self.snapshot();
-        if (stepped) _ = self.match(.TkNewline);
       }
-      if (self.previous_tok.ty == .TkNewline) self.rewind(ss);
       return uni.toType(self.allocator);
     }
     return typ;
@@ -1398,7 +1367,6 @@ pub const Parser = struct {
     const aliasee = try self.typingTypeNode();
     // check that generic type variable parameters in `AbstractType` are not generic in `ConcreteType`
     self.assertNoGenericParameterTypeVariable(alias_typ, aliasee.typ);
-    try self.consumeNlOrEof();
     return self.newNode(.{.NdAlias = tir.AliasNode.init(alias, aliasee)});
   }
 
@@ -1425,7 +1393,6 @@ pub const Parser = struct {
         }
       }
     }
-    try self.consumeNlOrEof();
     return self.newNode(.{.NdAlias = tir.AliasNode.init(alias, aliasee)});
   }
 
@@ -1433,6 +1400,7 @@ pub const Parser = struct {
     // let var (: type)? = expr
     try self.consumeIdent();
     const ident = self.previous_tok;
+    self.assertDiscardIdentNotInUse(ident);
     var anot_ty: ?*Type = null;
     if (self.match(.TkColon)) {
       anot_ty = try self.annotation();
@@ -1440,14 +1408,12 @@ pub const Parser = struct {
     }
     try self.consume(.TkEqual);
     const val = try self.parseExpr();
-    try self.consumeNlOrEof();
     return self.newNode(.{.NdVarDecl = tir.VarDeclNode.init(ident, val, anot_ty)});
   }
 
   fn exprStmt(self: *Self) !*Node {
     self.meta.sugars = 0;
     const expr = try self.parseExpr();
-    try self.consumeNlOrEof();
     return self.newNode(.{.NdExprStmt = tir.ExprStmtNode.initAll(expr, self.meta.sugars > 0)});
   }
 
@@ -1455,7 +1421,6 @@ pub const Parser = struct {
     // if expr then? nl body (elif expr then? nl body)* else nl body end
     const cond = try self.parseExpr();
     _ = self.match(.TkThen);
-    try self.consume(.TkNewline);
     var then_stmts = self.getNodeList();
     while (!self.check(.TkEof) and !self.check(.TkElif) and !self.check(.TkElse) and !self.check(.TkEnd)) {
       try self.addStatement(&then_stmts);
@@ -1473,13 +1438,11 @@ pub const Parser = struct {
     }
     var els_stmts = self.getNodeList();
     if (self.match(.TkElse)) {
-      try self.consume(.TkNewline);
       while (!self.check(.TkEof) and !self.check(.TkEnd)) {
         try self.addStatement(&els_stmts);
       }
     }
     try self.consume(.TkEnd);
-    try self.consumeNlOrEof();
     ifnode.NdSimpleIf.els = self.newNode(.{.NdBlock = tir.BlockNode.init(els_stmts.items())});
     return ifnode;
   }
@@ -1497,7 +1460,6 @@ pub const Parser = struct {
     if (!self.match(.TkBreak)) {
       try self.consume(.TkContinue);
     }
-    try self.consumeNlOrEof();
     return self.newNode(.{.NdControl = tir.ControlNode.init(token)});
   }
 
@@ -1506,7 +1468,7 @@ pub const Parser = struct {
     self.incLoop();
     defer self.decLoop();
     const cond = try self.parseExpr();
-    const then = try self.blockStmt(!self.check(.TkDo), false, false);
+    const then = try self.blockStmt(!self.check(.TkDo), false);
     return self.newNode(.{.NdWhile = tir.WhileNode.init(cond, then)});
   }
 
@@ -1567,17 +1529,15 @@ pub const Parser = struct {
     //  T: Foo + Bar,
     //  U: Bar
     try self.consume(.TkWhere);
-    self.skipNewlines();
     var params = TypeList.init();
     var disamb = self.getDisambiguator(u32);
     while (!self.check(.TkEof)) {
       if (params.isNotEmpty()) {
-        if (self.check(.TkNewline)) {
+        if (!self.check(.TkComma)) {
           break;
         }
         try self.consume(.TkComma);
         const ss = self.snapshot();
-        self.skipNewlines();
         if (!self.lexer.getTentativeToken().is(.TkColon)) {
           self.rewind(ss);
           break;
@@ -1658,15 +1618,11 @@ pub const Parser = struct {
       }
       if (!lambda) {
         if (!is_method and tparams != null) {
-          const ss = self.snapshot();
-          self.skipNewlines();
           if (self.check(.TkWhere)) {
             try self.whereClause(&tparams.?);
-          } else {
-            self.rewind(ss);
           }
         }
-        break :blk try self.blockStmt(true, lambda, false);
+        break :blk try self.blockStmt(true, false);
       }
       if (self.match(.TkEqGrt)) {
         const rexp = self.newNode(.{.NdRet = tir.RetNode.init(try self.parseExpr(), self.previous_tok)});
@@ -1691,21 +1647,17 @@ pub const Parser = struct {
       self.softErrMsg(self.previous_tok, "return statement used outside function");
     }
     const token = self.previous_tok;
+    const ss = self.snapshot();
+    const len = self.diag.count();
     var expr: ?*Node = null;
-    if (!self.check(.TkNewline)) {
-      expr = try self.parseExpr();
+    if (!self.check(.TkEnd)) {
+      expr = self.parseExpr() catch blk: {
+        self.rewind(ss);
+        self.diag.popUntil(len);
+        break :blk null;
+      };
     }
-    if (self.meta.func) |func| {
-      const node = self.newNode(.{.NdRet = tir.RetNode.init(expr, token)});
-      if (func.NdBasicFun.data.name != null) {
-        try self.consumeNlOrEof();
-      } else if (self.check(.TkNewline) or self.check(.TkEof)) {
-        try self.advance();
-      }
-      return node;
-    } else {
-      return error.ParseError;
-    }
+    return self.newNode(.{.NdRet = tir.RetNode.init(expr, token)});
   }
 
   inline fn isWildcardPtn(self: *Self, chars: []const u8) bool {
@@ -2106,16 +2058,9 @@ pub const Parser = struct {
     const tok = self.previous_tok;
     const expr = try self.parseExpr();
     _ = self.match(.TkWith);
-    if (is_stmt or !self.inParenthesizedExpr()) {
-      try self.consume(.TkNewline);
-    } else {
-      _ = self.match(.TkNewline);
-    }
-    if (is_stmt) self.skipNewlines();
     var cases = ptn.Case.CaseList.init(self.allocator);
     while (self.match(.TkCase)) {
       cases.append(try self.caseStmt(is_stmt));
-      self.skipNewlines();
     }
     try self.consume(.TkEnd);
     if (cases.isEmpty()) {
@@ -2136,9 +2081,8 @@ pub const Parser = struct {
     return node;
   }
 
-  fn blockStmt(self: *Self, skip_do: bool, skip_eat_nl: bool, add_scope: bool) anyerror!*Node {
+  fn blockStmt(self: *Self, skip_do: bool, add_scope: bool) anyerror!*Node {
     if (!skip_do) try self.consume(.TkDo);
-    try self.consume(.TkNewline);
     var stmts = self.getNodeList();
     if (add_scope) {
       // enter scope
@@ -2155,12 +2099,7 @@ pub const Parser = struct {
       stmts.append(self.newNode(.{.NdScope = tir.ScopeNode.init(false, true)}));
     }
     try self.consume(.TkEnd);
-    // eat newline if present
-    if (!skip_eat_nl) {
-      _ = self.match(.TkNewline);
-    }
-    var node = self.newNode(.{.NdBlock = tir.BlockNode.init(stmts.items())});
-    return node;
+    return self.newNode(.{.NdBlock = tir.BlockNode.init(stmts.items())});
   }
 
   fn classTypeAnnotation(self: *Self) !?*Type {
@@ -2198,11 +2137,8 @@ pub const Parser = struct {
       tparams = tmp.generic().tparams.box(self.allocator);
     }
     const traits = try self.classTypeAnnotation();
-    try self.consume(.TkNewline);
-    self.skipNewlines();
     if (self.check(.TkWhere) and tparams != null) {
       try self.whereClause(tparams.?);
-      self.skipNewlines();
     }
     // ClassBody
     // ClassFields
@@ -2244,7 +2180,6 @@ pub const Parser = struct {
         fields.append(self.newNode(.{.NdField = tir.FieldNode.init(id, val, field_ty)}));
       }
       disamb.put(value, id) catch {};
-      self.skipNewlines();
     }
     // ClassMethods
     var mdisamb = self.getDisambiguator(Token);
@@ -2272,11 +2207,8 @@ pub const Parser = struct {
       }
       methods.append(method);
       mdisamb.put(value, token) catch {};
-      self.skipNewlines();
     }
-    self.skipNewlines();
     try self.consume(.TkEnd);
-    try self.consumeNlOrEof();
     return self.newNode(.{.NdClass = tir.StructNode.init(
         ident, traits, fields.items(), methods.items(),
         if (tparams) |tp| tp.items() else null,
@@ -2296,9 +2228,11 @@ pub const Parser = struct {
       var tmp = try self.abstractTypeParams(undefined, true);
       tparams = tmp.generic().tparams.box(self.allocator);
     }
+    if (self.check(.TkWhere) and tparams != null) {
+      try self.whereClause(tparams.?);
+    }
     // NOTE: Disable trait extension for now
     // const traits = try self.classTypeAnnotation();
-    try self.consume(.TkNewline);
     // TraitMethods
     var mdisamb = self.getDisambiguator(Token);
     var methods = self.getNodeList();
@@ -2318,16 +2252,19 @@ pub const Parser = struct {
       }
       methods.append(method);
       mdisamb.put(value, token) catch {};
-      self.skipNewlines();
     }
-    self.skipNewlines();
     try self.consume(.TkEnd);
-    try self.consumeNlOrEof();
     return self.newNode(.{.NdTrait = tir.StructNode.init(
         ident, null, &[_]*Node{}, methods.items(),
         if (tparams) |tp| tp.items() else null,
         false, false, self.allocator
       )});
+  }
+
+  fn discardStatement(self: *Self) !*Node {
+    try self.advance();
+    try self.consume(.TkEqual);
+    return self.exprStmt();
   }
 
   fn statement(self: *Self) !*Node {
@@ -2338,9 +2275,7 @@ pub const Parser = struct {
     } else if (self.match(.TkType)) {
       return self.typeDecl();
     } else if (self.check(.TkDo)) {
-      return self.blockStmt(false, false, true);
-    } else if (self.match(.TkNewline)) {
-      return error.EmptyStatement;
+      return self.blockStmt(false, true);
     } else if (self.match(.TkIf)) {
       return self.ifStmt();
     } else if (self.match(.TkWhile)) {
@@ -2357,28 +2292,29 @@ pub const Parser = struct {
       return self.traitStmt();
     } else if (self.match(.TkMatch)) {
       return self.matchStmt(true);
+    } else if (self.isDiscardIdent()) {
+      return self.discardStatement();
     }
     return self.exprStmt();
   }
 
   fn recover(self: *Self) void {
-    if (self.check(.TkNewline)) {
-      self.advance() catch {};
-      return;
-    }
-    while (!self.check(.TkEof) and !self.match(.TkNewline)) {
-      self.advance() catch {};
+    while (!self.check(.TkEof)) {
+      switch (self.current_tok.ty) {
+        .TkLet, .TkAlias, .TkType, .TkDo,
+        .TkIf, .TkWhile, .TkBreak, .TkContinue,
+        .TkDef, .TkReturn, .TkClass, .TkTrait,
+        .TkMatch => break,
+        else => {
+          if (self.isDiscardIdent()) break;
+          self.advance() catch {};
+        }
+      }
     }
   }
 
-  fn addStatement(self: *Self, list: *NodeList) anyerror!void {
-    const stmt = self.statement() catch |e| {
-      if (e != error.EmptyStatement) {
-        return e;
-      }
-      return;
-    };
-    list.append(stmt);
+  inline fn addStatement(self: *Self, list: *NodeList) anyerror!void {
+    list.append(try self.statement());
   }
 
   pub fn parse(self: *Self, display_diag: bool) !*Node {

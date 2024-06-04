@@ -1,4 +1,6 @@
-const doStaticTest = @import("lib.zig").doStaticTest;
+const lib = @import("lib.zig");
+const doStaticTest = lib.doStaticTest;
+const doParsingTest = lib.doParsingTest;
 
 test "recursive types" {
   const src =
@@ -123,7 +125,7 @@ test "functions-12-user-defined-never" {
   \\ let j = fun(5)
   \\ let p: never = rec()
   \\ if j is S
-  \\  [j]
+  \\  _ = [j]
   \\ elif j is N
   \\  j = N(9)
   \\ else
@@ -214,4 +216,43 @@ test "generic-classes-2" {
   \\ let j:Poo{'mia'} = Fox{'mia'}('mia')
   ;
   try doStaticTest(src);
+}
+
+test "maximal munch parsing style" {
+  const src =
+  \\ let t: num? =
+  \\  Just(5)
+  \\ t.? |> println
+  \\ type Foo = 
+  \\  | A
+  \\  | B
+  \\  | C(num)
+  \\ type Foo = | A | B | C(num)
+  \\ do println('yep') end
+  \\ def foo(a: num): str println(yeah) let j = 5 return j end
+  \\ let p = def => 5
+  \\ p()
+  \\ match fox with
+  \\  case 1 => do println('yeye') end
+  \\ end
+  \\ match fox with case 1 => do println('yeye') end end
+  \\ if foo let k = 10 else let j = 12 end
+  \\ while foo do j = 12 p = [1, 2, 4][j] let t = 12 end
+  \\ class T: Foo def init(a: num): str let j = 12 end end
+  \\ class T{X, Y}: Foo where X: P + K{V}, Y: P + Q, def init(a: num): str let j = 12 end end
+  \\ trait T{X, Y} 
+  \\    where 
+  \\      X: P + K{V},
+  \\      Y: P + Q,
+  \\    def init(a: num): str
+  \\      let j = 12
+  \\    end
+  \\  end
+  \\ def foo(a: num): str
+  \\  return 12
+  \\    |> foo
+  \\    |> bar
+  \\ end
+  ;
+  try doParsingTest(src);
 }

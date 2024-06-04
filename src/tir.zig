@@ -2752,6 +2752,22 @@ pub const Type = struct {
   }
 
   /// a type that may require some form of substitution
+  pub inline fn isTraitParameterized(self: *Self) bool {
+    return switch (self.info) {
+      .Trait => |*trt| trt.isParameterized(),
+      else => false,
+    };
+  }
+
+  /// a type that may require some form of substitution
+  pub inline fn isClsOrTraitParameterized(self: *Self) bool {
+    return switch (self.info) {
+      .Class, .Trait => |*t| t.isParameterized(),
+      else => false,
+    };
+  }
+
+  /// a type that may require some form of substitution
   pub inline fn isTagParameterized(self: *Self) bool {
     return switch (self.info) {
       .Tag => |*tg| tg.isParameterized(),
@@ -2915,14 +2931,14 @@ pub const Type = struct {
       self.isLikeXTy(isClsParameterized) or
       self.isLikeXTy(isTagParameterized) or 
       self.isGeneric() or
-      self.isClsParameterized() or
+      self.isClsOrTraitParameterized() or
       self.isTagParameterized()
     );
   }
 
   /// a type that may be parameterized/generic (from annotation usage)
   pub inline fn isLikeParameterized(self: *Self) bool {
-    return self.isLikeXTy(isGeneric) or self.isLikeXTy(isClsParameterized) or self.isLikeXTy(isTagParameterized);
+    return self.isLikeXTy(isGeneric) or self.isLikeXTy(isClsOrTraitParameterized) or self.isLikeXTy(isTagParameterized);
   }
 
   /// a type that may be constant
@@ -3114,8 +3130,8 @@ pub const Type = struct {
   pub fn hasVariable(self: *Self) bool {
     return switch (self.info) {
       .Concrete, .Constant, .Instance => false,
-      .Variable => true,
-      .Class => |*cls| {
+      .Variable, .Generic, .Recursive => true,
+      .Class, .Trait => |*cls| {
         if (cls.tparams) |tparams| {
           for (tparams) |ty| {
             if (ty.hasVariable()) {
@@ -3127,6 +3143,9 @@ pub const Type = struct {
           if (ty.hasVariable()) {
             return true;
           }
+        }
+        if (cls.data.trait) |t| {
+          return t.hasVariable();
         }
         return false;
       },
@@ -3170,20 +3189,86 @@ pub const Type = struct {
         return false;
       },
       .Top => |*tp| tp.child.hasVariable(),
-      .Generic => |*gen| {
-        if (gen.base.hasVariable()) {
-          return true;
+      else => false,
+    };
+  }
+
+  /// check if a type contains a variable type (param)
+  fn _hasVariableSafe(self: *Self, map: *TypeHashMap, al: Allocator) bool {
+    if (map.get(self)) |_| {
+      return false;
+    }
+    map.set(self, self, al);
+    return switch (self.info) {
+      .Concrete, .Constant, .Instance => false,
+      .Variable, .Generic, .Recursive => true,
+      .Class, .Trait => |*cls| {
+        if (cls.tparams) |tparams| {
+          for (tparams) |ty| {
+            if (ty._hasVariableSafe(map, al)) {
+              return true;
+            }
+          }
         }
-        for (gen.getSlice()) |ty| {
-          if (ty.hasVariable()) {
+        for (cls.getSlice()) |ty| {
+          if (ty._hasVariableSafe(map, al)) {
+            return true;
+          }
+        }
+        if (cls.data.trait) |t| {
+          return t._hasVariableSafe(map, al);
+        }
+        return false;
+      },
+      .Tag => |*tg| {
+        for (tg.fieldSlice()) |prm| {
+          if (prm.typ._hasVariableSafe(map, al)) {
             return true;
           }
         }
         return false;
       },
-      .Recursive => true, 
+      .Union => |*uni| {
+        for (uni.variants.values()) |ty| {
+          if (ty._hasVariableSafe(map, al)) {
+            return true;
+          }
+        }
+        return false;
+      },
+      .TaggedUnion => |*uni| {
+        for (uni.variants.items()) |ty| {
+          if (ty._hasVariableSafe(map, al)) {
+            return true;
+          }
+        }
+        return false;
+      },
+      .Function => |*fun| {
+        if (fun.tparams) |tparams| {
+          for (tparams) |ty| {
+            if (ty._hasVariableSafe(map, al)) {
+              return true;
+            }
+          }
+        }
+        for (fun.data.params) |ty| {
+          if (ty._hasVariableSafe(map, al)) {
+            return true;
+          }
+        }
+        return false;
+      },
+      .Top => |*tp| tp.child._hasVariableSafe(map, al),
       else => false,
     };
+  }
+
+  /// check if a type contains a variable type (param)
+  /// safe because it can handle cycles in types
+  pub fn hasVariableSafe(self: *Self, al: Allocator) bool {
+    var map = TypeHashMap.init();
+    return self._hasVariableSafe(&map, al);
   }
 
   /// check if a type contains a variable type (param)

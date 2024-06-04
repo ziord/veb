@@ -3423,7 +3423,7 @@ test "traits <generic-function-bounds .6>" {
   \\ let r = format(Foo(), Bar(), Bar())
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "type 'Display' has no property 'clone'",
+    "type 'A' has no property 'clone'",
     "return a.clone().fmt() <> \" $ \" <> b.fmt() <> \" $ \" <> c.clone().fmt()"
   });
 }
@@ -3471,7 +3471,7 @@ test "traits <generic-function-bounds .7>" {
   \\ assert(r == "Foo() $ Bar() $ Foo()", 'should be same')
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Cannot cast from type 'Clone' to type 'Display'"
+    "Cannot cast from type 'Clone' to type 'A'"
   });
 }
 
@@ -3612,6 +3612,71 @@ test "traits <match patterns>" {
   });
 }
 
+test "traits <where bounds>" {
+  const src =
+  \\ trait Speaks
+  \\  def speak(): str;
+  \\ end
+  \\
+  \\ trait Barks{T}
+  \\   where
+  \\      T: Speaks
+  \\ end
+  \\
+  \\ class Foo: Barks{Foo}
+  \\ end
+  \\
+  \\ Foo()
+  ;
+  try doErrorTest(src, 6, [_][]const u8{
+    "type 'Foo' does not satisfy the trait constraint(s) of 'Speaks'",
+    "class Foo: Barks{Foo}",
+    "The following method(s) are not implemented:",
+    "speak", " : ", "fn (): str",
+  });
+}
+
+test "traits <where without generics>" {
+  const src =
+  \\ trait Barks
+  \\   where
+  \\      T: Speaks
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "expected token 'end' but found 'where'",
+  });
+}
+
+test "traits <resolution limits>" {
+  const src =
+  \\ trait Speaks
+  \\  pub def speak(): str;
+  \\ end
+  \\
+  \\ trait Barks{T}
+  \\   where
+  \\      T: Speaks
+  \\  def bark(): str;
+  \\ end
+  \\
+  \\ class Foo{T}: Barks{Foo{T}}
+  \\  def bark()
+  \\    return "Foo barking here!"
+  \\  end
+  \\  pub def speak()
+  \\    return "Foo speaking here!"
+  \\  end
+  \\ end
+  \\
+  \\ Foo{num}()
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "I cannot resolve the trait type 'Speaks' for class 'Foo{num}'",
+    "This trait may have been specified in a way that is too complicated for my resolution process."
+  });
+}
+
 test "builtin @ <vardecl, match>" {
   const src =
   \\ let @foo = 5
@@ -3694,5 +3759,23 @@ test "discard vardecl" {
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "cannot use the identifier '_' in this context.",
+  });
+}
+
+test "parser recovery" {
+  const src =
+  \\ trait Speaks
+  \\  def speak(): str;
+  \\ end
+  \\
+  \\ trait Barks
+  \\   where
+  \\      T: Speaks
+  \\ end
+  \\ let _ = fox
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "expected token 'end' but found 'where'",
+    "cannot use the identifier '_' in this context."
   });
 }

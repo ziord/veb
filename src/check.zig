@@ -1955,12 +1955,12 @@ pub const TypeChecker = struct {
     self.ctx.enterScope();
     defer self.ctx.leaveScope();
     var core_cls = core_ty.klass();
-    var user_cls = user_ty.klass();
     // generic
     if (core_cls.isParameterized()) {
       // FIXME: this check is a hack since resolving a CastNode's type after linking
       // (sometimes) breaks in the presence of recursive types.
       if (user_ty.hasRecursive()) return user_ty;
+      var user_cls = user_ty.klass();
       if (!user_cls.isParameterized()) {
         return self.errorFrom(
           true, debug, "type '{s}' is generic but used without type parameters",
@@ -2017,11 +2017,11 @@ pub const TypeChecker = struct {
     self.ctx.enterScope();
     defer self.ctx.leaveScope();
     var core_trt = core_ty.trait();
-    var user_trt = user_ty.trait();
     // generic
     if (core_trt.isParameterized()) {
       // FIXME: this is a hack. see synthInferClsType()
       if (user_ty.hasRecursive()) return user_ty;
+      var user_trt = user_ty.trait();
       if (!user_trt.isParameterized()) {
         return self.error_(
           true, debug, "type '{s}' is generic but used without type parameters",
@@ -2044,7 +2044,7 @@ pub const TypeChecker = struct {
       }
       const al = self.ctx.allocator();
       for (ctparams, tparams) |tvar, t| {
-        if (try self.checkTraitForCall(tvar, t, debug, al)) |_bty| {
+        if (try self.checkTraitForCall(tvar, t, debug)) |_bty| {
           self.insertType(tvar, _bty);
         }
       }
@@ -2905,9 +2905,10 @@ pub const TypeChecker = struct {
     }
   }
 
-  inline fn checkTraitForCall(self: *Self, tvar: *Type, on_typ: *Type, token: Token, al: Allocator) !?*Type {
+  inline fn checkTraitForCall(self: *Self, tvar: *Type, on_typ: *Type, token: Token) !?*Type {
     if (tvar.variable().bounds) |bounds| {
-      const trait = try self.resolveTraitType(bounds.clone(al), tvar.variable().getFirst());
+      assert(bounds.isUnion() or bounds.isVariable());
+      const trait = try self.resolveTraitType(bounds, tvar.variable().getFirst());
       try self.checkTrait(on_typ, trait, token);
       return trait;
     }
@@ -3022,7 +3023,7 @@ pub const TypeChecker = struct {
         _targs.append(_ty, al);
       }
       for (tparams, targs, 0..) |tvar, _ty, i| {
-        if (try self.checkTraitForCall(tvar, _ty, ast_n.getToken(), al)) |_bty| {
+        if (try self.checkTraitForCall(tvar, _ty, ast_n.getToken())) |_bty| {
           self.insertType(tvar, _bty);
           _targs.items()[i] = _bty;
         }
@@ -3036,7 +3037,7 @@ pub const TypeChecker = struct {
           if (param.typ.typeidEql(tvar)) {
             // NOTE: It's important to use `tvar` instead of `param.typ` because the bounds is literally on `tvar`
             const t = args_inf.itemAt(ppos);
-            if (try self.checkTraitForCall(tvar, t, tk, al)) |_bty| {
+            if (try self.checkTraitForCall(tvar, t, tk)) |_bty| {
               self.insertType(tvar, _bty);
               _targs.append(_bty, al);
             } else {
@@ -3057,7 +3058,7 @@ pub const TypeChecker = struct {
             };
             _ = try self.inferTypex(token, tvar, param.typ, inf_ty);
             const t = try self.lookupName(tvar.variable().getFirst(), true);
-            if (try self.checkTraitForCall(tvar, t, tk, al)) |_bty| {
+            if (try self.checkTraitForCall(tvar, t, tk)) |_bty| {
               self.insertType(tvar, _bty);
               _targs.append(_bty, al);
             } else {
@@ -3278,7 +3279,7 @@ pub const TypeChecker = struct {
         _targs.append(t, al);
       }
       for (tparams, targs, 0..) |tvar, t, i| {
-        if (try self.checkTraitForCall(tvar, t, tk, al)) |_bty| {
+        if (try self.checkTraitForCall(tvar, t, tk)) |_bty| {
           self.insertType(tvar, _bty);
           _targs.items()[i] = _bty;
         }
@@ -3292,7 +3293,7 @@ pub const TypeChecker = struct {
           for (params, 0..) |param, ppos| {
             if (param.typ.typeidEql(tvar)) {
               const t = args_inf.itemAt(ppos);
-              if (try self.checkTraitForCall(tvar, t, tk, al)) |_bty| {
+              if (try self.checkTraitForCall(tvar, t, tk)) |_bty| {
                 self.insertType(tvar, _bty);
                 _targs.append(_bty, al);
               } else {
@@ -3313,7 +3314,7 @@ pub const TypeChecker = struct {
               };
               _ = try self.inferTypex(token, tvar, param.typ, inf_ty);
               const t = try self.lookupName(tvar.variable().getFirst(), true);
-              if (try self.checkTraitForCall(tvar, t, tk, al)) |_bty| {
+              if (try self.checkTraitForCall(tvar, t, tk)) |_bty| {
                 self.insertType(tvar, _bty);
                 _targs.append(_bty, al);
               } else {
@@ -3910,6 +3911,9 @@ pub const TypeChecker = struct {
     if (!cls.isParameterized()) {
       const al = self.ctx.allocator();
       self.cycles.append(node, al);
+      self.resolving.append(ty, al);
+      defer _ = self.cycles.pop();
+      defer _ = self.resolving.pop();
       self.ctx.enterScope();
       defer self.ctx.leaveScope();
       if (!cls.data.builtin) {
@@ -3938,7 +3942,7 @@ pub const TypeChecker = struct {
         }
         if (cls.trait) |trait| {
           const token = node.getToken();
-          const trt = try self.resolveTraitType(trait.clone(al), token); 
+          const trt = try self.resolveTraitType(trait, token);
           ty.klass().data.trait = trt;
           try self.checkTrait(ty, trt, token);
         }
@@ -3953,7 +3957,6 @@ pub const TypeChecker = struct {
           ty.klass().data.methods.items()[i] = try self.inferFun(itm, fun_ty);
         }
       }
-      _ = self.cycles.pop();
       cls.data.checked = true;
       ty.klass().resolved = true;
     }
@@ -4350,15 +4353,25 @@ pub const TypeChecker = struct {
       const al = self.ctx.allocator();
       var cls = ty.klass();
       var trt = trait.trait();
+      if (cls.data.node == null) {
+        // this issue arises from generic classes with complicated traits spec
+        self.softError(debug,
+          "I cannot resolve the trait type '{s}' for class '{s}'",
+          .{self.getTypename(trait), self.getTypename(ty)}
+        );
+        return self.errorFmt(debug, 4, 2,
+          "This trait may have been specified in a way that is "
+          ++ "too complicated for my resolution process.", .{}
+        );
+      }
       const cls_token = cls.data.node.?.getToken();
       for (trt.data.methods.items()) |tm| {
         var fun = &tm.function().data.node.?.NdBasicFun;
         const name = fun.data.name.?.lexeme();
         var err = false;
         if (cls.data.trait) |t| {
-          if (t.hasVariable()) {
-            // this type is still being resolved, so skip checks on it
-            continue;
+          if (t.hasVariableSafe(al)) {
+            // this type is still being resolved
           } else if (!trait.isRelatedTo(t, .RCAny, al)) {
             err = true;
           }

@@ -4914,3 +4914,54 @@ test "traits <generic-class-bounds .2>" {
   ;
   try doRuntimeTest(src);
 }
+
+test "traits <generic-trait-bounds .1>" {
+  const src =
+  \\ trait Speaks
+  \\  pub def speak(): str;
+  \\ end
+  \\
+  \\ trait Barks{T}
+  \\   where
+  \\      T: Speaks
+  \\ end
+  \\
+  \\ class Foo: Barks{Foo}
+  \\  pub def speak()
+  \\    return "Foo speaking here!"
+  \\  end
+  \\ end
+  \\
+  \\ let f = Foo()
+  \\ assert(f.speak() == "Foo speaking here!", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <generic-trait-bounds .2>" {
+  const src =
+  \\ trait Speaks
+  \\  pub def speak(): str;
+  \\ end
+  \\
+  \\ trait Barks{T}
+  \\   where
+  \\      T: Speaks
+  \\  pub def bark(): str;
+  \\ end
+  \\
+  \\ class Foo: Barks{Foo}
+  \\  pub def bark()
+  \\    return "Foo barking here!"
+  \\  end
+  \\  pub def speak()
+  \\    return "Foo speaking here!"
+  \\  end
+  \\ end
+  \\
+  \\ let f = Foo()
+  \\ assert(f.bark() == "Foo barking here!", 'should be same')
+  \\ assert(f.speak() == "Foo speaking here!", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}

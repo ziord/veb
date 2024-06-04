@@ -327,6 +327,7 @@ pub const TypeLinker = struct {
       }
       const result = switch (ty.info) {
         .Concrete, .Variable, .Constant => ty,
+        .Class, .Trait => if (!ty.isParameterized()) ty else self.ctx.copyType(ty),
         else => self.ctx.copyType(ty),
       };
       // cache the type.

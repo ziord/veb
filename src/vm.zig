@@ -74,7 +74,7 @@ pub const VM = struct {
     init: *const vl.ObjString,
 
     pub fn new() @This() {
-      return .{.init = undefined,};
+      return .{.init = undefined};
     }
   };
 
@@ -228,6 +228,7 @@ pub const VM = struct {
   }
 
   fn captureUpvalue(self: *Self, fiber: *ObjFiber, local: *Value) *ObjUpvalue {
+    @setRuntimeSafety(false);
     var current = fiber.open_upvalues;
     var previous: ?*ObjUpvalue = null;
     // try to find a position where `local` fits
@@ -251,6 +252,7 @@ pub const VM = struct {
   }
 
   fn closeUpvalues(fiber: *ObjFiber, slot: *Value) void {
+    @setRuntimeSafety(false);
     while (fiber.open_upvalues != null and @intFromPtr(fiber.open_upvalues.?.loc) >= @intFromPtr(slot)) {
       var tmp = fiber.open_upvalues.?;
       tmp.value = tmp.loc.*;
@@ -566,7 +568,7 @@ pub const VM = struct {
             fp.stack[rx] = inst;
             fp = fiber.fp;
           } else {
-            var func = vl.asNativeFn(vl.asObj(inst).cls.?.getMethodWithName(vl.asString(prop)).?);
+            var func = vl.asNativeFn(vl.asObj(inst).cls.?.getNativeMethodWithName(vl.asString(prop)).?);
             const next = @call(.always_inline, Self.readWord, .{self, fp});
             self.read2Args(next, &rx, &rk1);
             fp.stack[rx] = inst;

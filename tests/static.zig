@@ -239,8 +239,8 @@ test "maximal munch parsing style" {
   \\ if foo let k = 10 else let j = 12 end
   \\ while foo do j = 12 p = [1, 2, 4][j] let t = 12 end
   \\ class T: Foo def init(a: num): str let j = 12 end end
-  \\ class T{X, Y}: Foo where X: P + K{V}, Y: P + Q, def init(a: num): str let j = 12 end end
-  \\ trait T{X, Y} 
+  \\ class U{X, Y}: Foo where X: P + K{V}, Y: P + Q, def init(a: num): str let j = 12 end end
+  \\ trait V{X, Y} 
   \\    where 
   \\      X: P + K{V},
   \\      Y: P + Q,

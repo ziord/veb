@@ -22,11 +22,15 @@ pub const FalseVar = @as([]const u8, "false");
 pub const NoReturnVar = @as([]const u8, "noreturn");
 pub const VoidVar = @as([]const u8, "void");
 pub const PanicVar = @as([]const u8, "@panic");
+pub const IterVar = @as([]const u8, "@iter");
+pub const IterMVar = @as([]const u8, "iter");
 pub const GeneratedTypeVar = @as([]const u8, "<>");
 pub const UnderscoreVar = @as([]const u8, "_");
 pub const LenVar = @as([]const u8, "len");
+pub const ListIteratorVar = @as([]const u8, "ListIterator");
 pub const LambdaVar = @as([]const u8, "<anon>");
 pub const ScriptVar = @as([]const u8, "<script>");
+pub const PreludeFilename = @as([]const u8, "prelude.veb");
 pub const GeneratedVarMarker = '$';
 
 pub const MAX_STR_LEN = 0x1000000;

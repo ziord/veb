@@ -353,11 +353,14 @@ pub const Pattern = struct {
 
 /// a body of actions
 pub const Body = struct {
-  /// the main body - in reverse order if `reversed`
+  /// id of this body
+  id: u32,
+  /// the main body - BlockNode
   node: *Node,
+  /// attached declarations during compilation
   decls: tir.NodeListU,
 
-  pub fn init(node: *Node, rev: bool, al: Allocator) @This() {
+  pub fn init(id: u32, node: *Node, rev: bool, al: Allocator) @This() {
     _ = rev;
     var block: *Node = undefined;
     if (node.isBlock()) {
@@ -365,7 +368,7 @@ pub const Body = struct {
     } else {
       block = tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{node}), al);
     }
-    return .{.node = block, .decls = tir.NodeListU.init()};
+    return .{.id = id, .node = block, .decls = tir.NodeListU.init()};
   }
 
   pub fn addNode(self: *@This(), node: *Node, al: Allocator) void {
@@ -373,7 +376,7 @@ pub const Body = struct {
   }
 
   pub fn clone(self: *@This(), al: Allocator) @This() {
-    return .{.node = self.node.clone(al), .decls = self.decls.clone(al)};
+    return .{.id = self.id, .node = self.node.clone(al), .decls = self.decls.clone(al)};
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
@@ -644,8 +647,8 @@ pub const Case = struct {
 
   pub const CaseList = ds.ArrayList(*Case);
 
-  pub fn init(pattern: *Pattern, guard: ?*Node, body: *Node, rev: bool, al: Allocator) @This() {
-    return .{.pattern = pattern, .guard = guard, .body = Body.init(body, rev, al)};
+  pub fn init(pattern: *Pattern, guard: ?*Node, body: *Node, rev: bool, id: u32, al: Allocator) @This() {
+    return .{.pattern = pattern, .guard = guard, .body = Body.init(id, body, rev, al)};
   }
 
   pub fn new(pattern: *Pattern, guard: ?*Node, body: *Node, rev: bool, al: Allocator) *@This() {
@@ -656,6 +659,13 @@ pub const Case = struct {
   pub fn from(self: *@This(), pat: *Pattern, al: Allocator) *@This() {
     const guard = if (self.guard) |guard| guard.clone(al) else self.guard;
     return util.box(Case, .{.pattern = pat, .guard = guard, .body = self.body.clone(al)}, al);
+  }
+
+  pub fn fromWithId(self: *@This(), id: usize, pat: *Pattern, al: Allocator) *@This() {
+    const guard = if (self.guard) |guard| guard.clone(al) else self.guard;
+    var body = self.body.clone(al);
+    body.id = @intCast(id);
+    return util.box(Case, .{.pattern = pat, .guard = guard, .body = body}, al);
   }
 
   pub fn clone(self: *@This(), al: Allocator) *@This() {
@@ -681,28 +691,18 @@ pub const MatchCompiler = struct {
   diag: *Diagnostic,
   namegen: util.NameGen,
   u8w: U8Writer,
-  /// store (body) nodes that may/may not have been included in the decision ir
-  failure: ds.ArrayHashMapUnmanaged(*Node, FailStatus),
+  /// store (body) nodes that are not have been included in the decision ir
+  failure: std.AutoHashMapUnmanaged(u32, *Case),
   /// select a constructor to test based on some heuristic
   heuristic: SelectionHeuristic,
   /// transform a decision ir into lowered form
   dtt: DecisionTreeTransformer,
+  /// id for tracking existing & generated cases
+  case_id: u32 = 0,
 
   const Self = @This();
   pub const CaseList = Case.CaseList;
   pub const MatchError = error{MatchError};
-
-  /// determine if the body of this case was included in the decision ir or not.
-  /// every Body included in the decision ir / result ends up being removed from
-  /// `self.failure`, that is, `removed` here is set to false. 
-  const FailStatus = struct {
-    removed: bool,
-    case: *Case,
-
-    pub fn init(removed: bool, case: *Case) @This() {
-      return .{.removed = removed, .case = case};
-    }
-  };
 
   /// heuristics for selecting a constructor in the pattern matrix to match on
   const SelectionHeuristic = struct {
@@ -869,7 +869,7 @@ pub const MatchCompiler = struct {
     return .{
       .allocator = al,
       .diag = diag,
-      .failure = ds.ArrayHashMapUnmanaged(*Node, FailStatus).init(),
+      .failure = std.AutoHashMapUnmanaged(u32, *Case){},
       .heuristic = SelectionHeuristic.init(al),
       .namegen = util.NameGen.init(al),
       .dtt = DecisionTreeTransformer.init(al),
@@ -919,18 +919,16 @@ pub const MatchCompiler = struct {
     var itr = self.failure.iterator();
     var msg: []const u8 = undefined;
     while (itr.next()) |entry| {
-      if (!entry.value_ptr.*.removed) {
-        const case = entry.value_ptr.*.case;
-        if (self.isExpandedPattern(case.pattern.variant)) {
-          msg = "possible redundant case.\n"
-              ++ "  This case may already be covered in a prior case or contains patterns that does.\n"
-              ++ "  Consider rewriting the pattern or rearranging the case clause(s)."
-              ;
-        } else {
-          msg = "redundant case";
-        }
-        self.softError(case.pattern.token, "{s}", .{msg});
+      const case = entry.value_ptr.*;
+      if (self.isExpandedPattern(case.pattern.variant)) {
+        msg = "possible redundant case.\n"
+            ++ "  This case may already be covered in a prior case or contains patterns that does.\n"
+            ++ "  Consider rewriting the pattern or rearranging the case clause(s)."
+            ;
+      } else {
+        msg = "redundant case";
       }
+      self.softError(case.pattern.token, "{s}", .{msg});
     }
   }
 
@@ -955,17 +953,15 @@ pub const MatchCompiler = struct {
   /// save this case as a default fail. If its body gets included in the
   /// decision ir, this is updated to a 'removed' state indicating success.
   inline fn addFailure(self: *Self, case: *Case) void {
-    if (self.failure.get(case.body.node) == null) {
-      self.failure.set(case.body.node, FailStatus.init(false, case), self.allocator);
-    }
+    self.failure.put(self.allocator, case.body.id, case) catch unreachable;
   }
 
   inline fn removeFailure(self: *Self, case: *Case) void {
-    self.failure.set(case.body.node, FailStatus.init(true, case), self.allocator);
+    _ = self.failure.remove(case.body.id);
   }
 
   inline fn hasFailure(self: *Self, case: *Case) bool {
-    return self.failure.get(case.body.node) != null;
+    return self.failure.get(case.body.id) != null;
   }
 
   inline fn hasRedunMarker(case: *Case) bool {
@@ -1002,9 +998,12 @@ pub const MatchCompiler = struct {
     // remove this case, since it's being expanded and will not be referenced after here
     self.removeFailure(case);
     var cases = CaseList.initCapacity(cons.args.len, self.allocator);
-    for (cons.args) |pat| {
-      cases.appendAssumeCapacity(Case.from(case, pat, self.allocator));
+    for (cons.args, self.case_id..) |pat, id| {
+      const newc = Case.fromWithId(case, id, pat, self.allocator);
+      cases.appendAssumeCapacity(newc);
+      self.addFailure(newc);
     }
+    self.case_id += @intCast(cons.args.len);
     self.convertPtnToRelationPtn(m_expr, cases.items());
     return self.filterCases(cases.items());
   }
@@ -1027,7 +1026,7 @@ pub const MatchCompiler = struct {
     var rel = _rel.?;
     var cons = &rel.pattern.variant.cons;
     var cases = CaseList.initCapacity(cons.args.len, self.allocator);
-    for (cons.args) |ptn| {
+    for (cons.args, self.case_id..) |ptn, id| {
       var new_mrel = MultiRelation.initCapacity(cons.args.len, self.allocator);
       for (mrel.relations.items()) |rl| {
         if (rl.pattern != rel.pattern) {
@@ -1037,8 +1036,11 @@ pub const MatchCompiler = struct {
         }
       }
       const pat = self.boxPattern(Pattern.init(new_mrel.toVariant(self.allocator), ptn.token, ptn.alat));
-      cases.appendAssumeCapacity(Case.from(case, pat, self.allocator));
+      const newc = Case.fromWithId(case, id, pat, self.allocator);
+      cases.appendAssumeCapacity(newc);
+      self.addFailure(newc);
     }
+    self.case_id += @intCast(cons.args.len);
     return self.filterCases(cases.items());
   }
 
@@ -1238,7 +1240,6 @@ pub const MatchCompiler = struct {
                 );
               }
               cases_a.append(Case.from(case, self.boxPattern(newp.?), self.allocator));
-              self.removeFailure(case);
             } else {
               // (b). The clause contains a test a is D(P1, .. , Pn), .. REST .. where D  ̸= C
               // Add this clause to B unchanged.
@@ -1261,7 +1262,6 @@ pub const MatchCompiler = struct {
     var ncases = CaseList.init(self.allocator);
     start: for (0..cases.len) |idx| {
       var case = cases[idx];
-      self.addFailure(case);
       if (case.pattern.isRelation()) {
         var rel = case.pattern.variant.rel;
         if (rel.pattern.isVariable()) {
@@ -1344,7 +1344,7 @@ pub const MatchCompiler = struct {
     if (bst == null) {
       var case = cases.itemAt(0);
       self.removeFailure(case);
-      const body = case.body.clone(self.allocator);
+      var body = case.body.clone(self.allocator);
       if (case.guard) |cond| {
         _ = cases.list.orderedRemove(0);
         const guard: Guard = .{
@@ -1353,6 +1353,10 @@ pub const MatchCompiler = struct {
         };
         return util.box(Result, .{.gard = guard}, self.allocator);
       } else {
+        body.addNode(
+          Node.new(.{.NdRedunMarker = tir.MarkerNode.init(case.pattern.token)}, self.allocator),
+          self.allocator
+        );
         return util.box(Result, .{.leaf = body}, self.allocator);
       }
     }
@@ -1379,6 +1383,11 @@ pub const MatchCompiler = struct {
   /// This implements pattern matching as described by Jules Jacobs, with modifications & extensions.
   /// Some inspiration from Maranget is also utilized.
   pub fn compile(self: *Self, node: *tir.MatchNode) !*DecisionTree {
+    // initially, all cases fail to match
+    for (node.cases) |case| {
+      self.addFailure(case);
+    }
+    self.case_id = @intCast(node.cases.len);
     // we match on m_expr
     if (util.getMode() == .Debug) {
       node.render(0, &self.u8w) catch {};
@@ -1602,7 +1611,7 @@ pub const DecisionTreeTransformer = struct {
     } else {
       const then = self.newBlock();
       const pair = self.cached_pairs.getLast();
-      // len becomes cons.args.len / 2 because we're using the .keys() (or .values()) list here instead of the .listItems()
+      // len becomes cons.args.len / 2 because we're using the .keys() (or .values()) list here instead of the .entries()
       const len = self.newNumberNode(swch.token, @floatFromInt(cons.args.len / 2));
       const op = if (cons.rested) geqToken(swch.token) else eqeqToken(swch.token);
       const cond = Node.new(.{.NdBinary = tir.BinaryNode.initRested(self.newMethodCall(pair.key, ks.LenVar), len, op)}, self.allocator);

@@ -6,6 +6,7 @@ const util = @import("util.zig");
 const ptn = @import("pattern.zig");
 const diagnostics = @import("diagnostics.zig");
 const VebAllocator = @import("allocator.zig");
+pub const prelude = @import("prelude.zig");
 
 const ds = tir.ds;
 const Token = lex.Token;
@@ -51,18 +52,25 @@ pub const Parser = struct {
     loops: u32 = 0,
     sugars: u32 = 0,
     pipes: u32 = 0,
+    in_type_decl: bool = false,
+    in_labeled_call: bool = false,
+    in_type_alias: bool = false,
+    add_exec_decls: bool = false,
     func: ?*Node = null,
     class: ?*Node = null,
     m_literals: ds.ArrayList(NameTuple),
     mode: ParseMode,
-    in_type_decl: bool = false,
-    in_labeled_call: bool = false,
-    in_type_alias: bool = false,
+    decls: std.StringHashMap(Token),
 
     const NameTuple = struct{*Node, *Node, bool};
 
     fn init(al: std.mem.Allocator, mode: ParseMode) @This() {
-      return .{.m_literals = ds.ArrayList(NameTuple).init(al), .mode = mode};
+      return .{
+        .m_literals = ds.ArrayList(NameTuple).init(al),
+        .mode = mode,
+        .add_exec_decls = mode == .User,
+        .decls = std.StringHashMap(Token).init(al)
+      };
     }
   };
 
@@ -96,6 +104,8 @@ pub const Parser = struct {
     Call,        // ()
     Access,      // [], ., as
   };
+
+  var empty_node: Node = .{.NdEmpty = tir.SymNode.init(Token.getDefaultToken())};
 
   const ptable = [_]ExprParseTable{
     .{.bp = .Term, .prefix = Self.unary, .infix = Self.binary},         // TkPlus
@@ -138,6 +148,7 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkFn
     .{.bp = .Equality, .prefix = null, .infix = Self.binaryIs},         // TkIs
     .{.bp = .None, .prefix = null, .infix = null},                      // TkIf
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkIn
     .{.bp = .Or, .prefix = Self.variable, .infix = null},               // TkOk
     .{.bp = .Or, .prefix = null, .infix = Self.binary},                 // TkOr
     .{.bp = .None, .prefix = null, .infix = null},                      // TkFor
@@ -434,7 +445,7 @@ pub const Parser = struct {
 
   fn assertBuiltinIdentNotInUse(self: *Self, token: Token) void {
     const lxm = token.lexeme();
-    if (lxm.len > 0 and lxm[0] == '@') {
+    if (!self.inBuiltinMode() and lxm.len > 0 and lxm[0] == '@') {
       self.softErrMsg(
         token, "cannot use an identifier marked with '@' in this context.\n"
         ++ "  Consider eliminating '@'."
@@ -449,6 +460,16 @@ pub const Parser = struct {
         token, "cannot use the identifier '_' in this context.\n"
         ++ "  Consider renaming this identifier."
       );
+    }
+  }
+
+  fn assertUniqueDecl(self: *Self, token: Token, comptime what: []const u8, put: bool) void {
+    const lxm = token.lexeme();
+    if (self.meta.decls.get(lxm)) |tk| {
+      self.softErrMsg(token, "illegal duplicate declaration (" ++ what ++ ").");
+      self.softErrFmt(tk, 4, 2, "'{s}' is also declared here:", .{lxm});
+    } else if (put) {
+      self.meta.decls.put(lxm, token) catch {};
     }
   }
 
@@ -1472,6 +1493,30 @@ pub const Parser = struct {
     return self.newNode(.{.NdWhile = tir.WhileNode.init(cond, then)});
   }
 
+  fn forStmt(self: *Self) !*Node {
+    // for (counter ,)? ident in iterable do? ... end
+    self.incLoop();
+    defer self.decLoop();
+    try self.consumeIdent();
+    var id1 = self.previous_tok;
+    self.assertDiscardIdentNotInUse(id1);
+    var id2: ?Token = null;
+    if (self.match(.TkComma)) {
+      try self.consumeIdent();
+      self.assertDiscardIdentNotInUse(self.previous_tok);
+      id2 = self.previous_tok;
+    }
+    try self.consume(.TkIn);
+    const itrbl = try self.parseExpr();
+    const then = try self.blockStmt(!self.check(.TkDo), false);
+    if (id2) |tok| {
+      const node = self.newNode(.{.NdFor = tir.ForNode.init(tok, itrbl, then)});
+      return self.newNode(.{.NdForCounter = tir.ForCounterNode.init(id1, node)});
+    } else {
+      return self.newNode(.{.NdFor = tir.ForNode.init(id1, itrbl, then)});
+    }
+  }
+
   fn funParams(self: *Self, variadic: *bool) !tir.ParamItems {
     // Params      :=  "(" Ident ":" Type ("," Ident ":" Type)* ")"
     var params = ds.ArrayListUnmanaged(*tir.ParamNode).init();
@@ -1484,6 +1529,7 @@ pub const Parser = struct {
         }
         try self.consumeIdent();
         const ident = self.previous_tok;
+        self.assertDiscardIdentNotInUse(ident);
         if (disamb.get(ident.lexeme())) |_| {
           self.softErrMsg(
             ident,
@@ -1588,10 +1634,24 @@ pub const Parser = struct {
     const is_pub = if (allow_pub) self.match(.TkPub) else if (trait_fun) true else false;
     try self.consume(.TkDef);
     const prev_func = self.meta.func;
+    defer self.meta.func = prev_func;
+    // Forbid function definitions inside an init method
+    if (self.meta.class != null) {
+      if (prev_func) |func| {
+        if (func.getBasicFun().data.name) |tk| {
+          if (tk.valueEql(ks.InitVar)) {
+            self.softErrMsg(self.previous_tok, "cannot define a function in the init method of a class.");
+          }
+        }
+      }
+    }
     const name = if (!lambda) blk: {
       if (!self.inBuiltinMode()) try self.consumeIdent() else try self.consume(.TkIdent);
       break :blk self.previous_tok;
     } else null;
+    if (name) |tk| {
+      self.assertUniqueDecl(tk, "function", false);
+    }
     var func = self.newNode(.{
       .NdBasicFun = tir.BasicFunNode.init(
         undefined, name, undefined, null, false, false, false, self.allocator
@@ -1634,7 +1694,6 @@ pub const Parser = struct {
     func.NdBasicFun.update(params, name, body, ret, false, variadic, is_pub);
     func.NdBasicFun.data.trait_fun = trait_fun;
     func.NdBasicFun.data.empty_trait_fun = semic.is(.TkSemic);
-    self.meta.func = prev_func;
     if (tparams) |*tp| {
       return self.newNode(.{.NdGenericFun = tir.GenericFunNode.init(tp.items(), func)});
     } else {
@@ -1999,7 +2058,7 @@ pub const Parser = struct {
     return (try self._asPattern());
   }
 
-  fn caseStmt(self: *Self, is_stmt: bool) !*ptn.Case {
+  fn caseStmt(self: *Self, id: u32, is_stmt: bool) !*ptn.Case {
     // case_block: "case" patterns guard? '=>' (expr | block)
     // patterns: pattern
     self.meta.m_literals.clearRetainingCapacity();
@@ -2041,7 +2100,7 @@ pub const Parser = struct {
         body = tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{body}), self.allocator);
       }
     }
-    return self.newObj(ptn.Case, ptn.Case.init(pat, guard, body, false, self.allocator));
+    return self.newObj(ptn.Case, ptn.Case.init(pat, guard, body, false, id, self.allocator));
   }
 
   fn convertMatchExprToVar(self: *Self, m: *tir.MatchNode, token: Token) ?*Node {
@@ -2059,25 +2118,20 @@ pub const Parser = struct {
     const expr = try self.parseExpr();
     _ = self.match(.TkWith);
     var cases = ptn.Case.CaseList.init(self.allocator);
+    var i = @as(u32, 1);
     while (self.match(.TkCase)) {
-      cases.append(try self.caseStmt(is_stmt));
+      cases.append(try self.caseStmt(i, is_stmt));
+      i += 1;
     }
     try self.consume(.TkEnd);
     if (cases.isEmpty()) {
       self.softErrMsg(tok, "match statement missing case arms");
-    } else if (cases.len() > 1) {
-      const last = cases.getLast();
-      const red = self.newNode(.{.NdRedunMarker = tir.MarkerNode.init(last.pattern.token)});
-      if (last.body.node.isBlock()) {
-        last.body.node.block().prepend(red, self.allocator);
-      } else {
-        last.body.node = tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{red, last.body.node}), self.allocator);
-      }
     }
     var node = self.newNode(.{.NdMatch = tir.MatchNode.init(expr, cases.items())});
     if (self.convertMatchExprToVar(&node.NdMatch, tok)) |decl| {
       node = tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{decl, node}), self.allocator);
     }
+    self.meta.sugars += 1;
     return node;
   }
 
@@ -2122,6 +2176,16 @@ pub const Parser = struct {
     // ClassDecl           :=  "class" Ident TypeParams TypeAnnotation? ClassBody "end"
     const prev_cls = self.meta.class;
     defer self.meta.class = prev_cls;
+    // Forbid class definitions inside an init method
+    if (self.meta.func) |func| {
+      if (prev_cls != null) {
+        if (func.getBasicFun().data.name) |tk| {
+          if (tk.valueEql(ks.InitVar)) {
+            self.softErrMsg(self.previous_tok, "cannot define a class in the init method of a class.");
+          }
+        }
+      }
+    }
     self.meta.class = @constCast(&@as(Node, .{.NdEmpty = tir.SymNode.init(self.previous_tok)}));
     switch (self.current_tok.ty) {
       .TkList, .TkError, .TkTuple, .TkMap, .TkStr => (
@@ -2131,6 +2195,10 @@ pub const Parser = struct {
       else => try self.consumeIdent()
     }
     const ident = self.previous_tok;
+    self.assertUniqueDecl(ident, "class", true);
+    const decls = self.meta.decls;
+    defer self.meta.decls = decls;
+    self.meta.decls = self.getDisambiguator(Token);
     var tparams: ?*TypeList = null;
     if (self.check(.TkLCurly)) {
       var tmp = try self.abstractTypeParams(undefined, true);
@@ -2183,7 +2251,7 @@ pub const Parser = struct {
     }
     // ClassMethods
     var mdisamb = self.getDisambiguator(Token);
-    var methods = self.getNodeList();
+    var methods = tir.NodeListU.init();
     while (self.check(.TkDef) or self.check(.TkPub)) {
       const method = try self.funStmt(false, true, true, false);
       const token = (
@@ -2205,12 +2273,12 @@ pub const Parser = struct {
       if (methods.len() > MAX_METHODS) {
         self.softErrMsg(token, "maximum number of method declarations exceeded");
       }
-      methods.append(method);
+      methods.append(method, self.allocator);
       mdisamb.put(value, token) catch {};
     }
     try self.consume(.TkEnd);
     return self.newNode(.{.NdClass = tir.StructNode.init(
-        ident, traits, fields.items(), methods.items(),
+        ident, traits, fields.items(), methods,
         if (tparams) |tp| tp.items() else null,
         false, false, self.allocator
       )});
@@ -2223,6 +2291,10 @@ pub const Parser = struct {
     self.meta.class = @constCast(&@as(Node, .{.NdEmpty = tir.SymNode.init(self.previous_tok)}));
     try self.consumeIdent();
     const ident = self.previous_tok;
+    self.assertUniqueDecl(ident, "trait", true);
+    const decls = self.meta.decls;
+    defer self.meta.decls = decls;
+    self.meta.decls = self.getDisambiguator(Token);
     var tparams: ?*TypeList = null;
     if (self.check(.TkLCurly)) {
       var tmp = try self.abstractTypeParams(undefined, true);
@@ -2235,7 +2307,7 @@ pub const Parser = struct {
     // const traits = try self.classTypeAnnotation();
     // TraitMethods
     var mdisamb = self.getDisambiguator(Token);
-    var methods = self.getNodeList();
+    var methods = tir.NodeListU.init();
     while (self.check(.TkDef) or self.check(.TkPub)) {
       const method = try self.funStmt(false, true, true, true);
       const token = (
@@ -2250,12 +2322,12 @@ pub const Parser = struct {
       if (methods.len() > MAX_METHODS) {
         self.softErrMsg(token, "maximum number of method declarations exceeded");
       }
-      methods.append(method);
+      methods.append(method, self.allocator);
       mdisamb.put(value, token) catch {};
     }
     try self.consume(.TkEnd);
     return self.newNode(.{.NdTrait = tir.StructNode.init(
-        ident, null, &[_]*Node{}, methods.items(),
+        ident, null, &[_]*Node{}, methods,
         if (tparams) |tp| tp.items() else null,
         false, false, self.allocator
       )});
@@ -2280,6 +2352,8 @@ pub const Parser = struct {
       return self.ifStmt();
     } else if (self.match(.TkWhile)) {
       return self.whileStmt();
+    } else if (self.match(.TkFor)) {
+      return self.forStmt();
     } else if (self.check(.TkBreak) or self.check(.TkContinue)) {
       return self.controlStmt();
     } else if (self.check(.TkDef)) {
@@ -2317,10 +2391,33 @@ pub const Parser = struct {
     list.append(try self.statement());
   }
 
+  fn addToplevel(self: *Self, list: *NodeList) void {
+    if (self.meta.add_exec_decls) {
+      list.ensureTotalCapacity(prelude.ExecsDecls);
+      for (0..prelude.ExecsDecls) |_| {
+        list.appendAssumeCapacity(&empty_node);
+      }
+    }
+    if (self.meta.mode == .User) {
+      // parse Builtins & Execs for dedups
+      var src = comptime prelude.NoExecsSrc ++ prelude.ExecsSrc;
+      var parser = Parser.init(
+        @constCast(&@as([]const u8, src)),
+        &ks.PreludeFilename, .Builtin, self.allocator,
+      );
+      const execs = parser.parse(true) catch unreachable;
+      for (execs.NdProgram.decls) |decl| {
+        const token = decl.getToken();
+        self.meta.decls.put(token.lexeme(), token) catch {};
+      }
+    }
+  }
+
   pub fn parse(self: *Self, display_diag: bool) !*Node {
     try self.advance();
     var entry = self.createNode();
     var list = self.getNodeList();
+    self.addToplevel(&list);
     while (!self.match(.TkEof)) {
       self.addStatement(&list) catch self.recover();
     }

@@ -21,7 +21,7 @@ pub fn doRuntimeTest(src: []const u8) !void {
   var cpu = vm.VM.init(&cna);
   defer cpu.shutdown();
   var fun = value.createScriptFn(&cpu, 0);
-  var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych.bprelude, null, null);
+  var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych.prelude, null, null);
   try compiler.compile(node);
   debug.Disassembler.disCode(&fun.code, "test");
   var start = std.time.milliTimestamp();
@@ -54,7 +54,7 @@ pub fn doStaticTest(src: []const u8) !void {
   var cpu = vm.VM.init(&cna);
   defer cpu.deinit();
   var fun = value.createScriptFn(&cpu, 0);
-  var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych.bprelude, null, null);
+  var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych.prelude, null, null);
   try compiler.compile(node);
   debug.Disassembler.disCode(&fun.code, "test");
 }

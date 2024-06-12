@@ -341,8 +341,7 @@ pub const CompUnit = struct {
 
   pub fn lookupFunc(self: *@This(), node: *Node) ?*FlowGraph {
     for (self.funcs.items()) |itm| {
-      const bb_items = itm.getEntry().bb.items();
-      for (bb_items) |nd| {
+      for (itm.getEntry().bb.items()) |nd| {
         if (nd == node) {
           return itm;
         }
@@ -353,8 +352,7 @@ pub const CompUnit = struct {
 
   pub fn lookupClass(self: *@This(), node: *Node) ?*FlowGraph {
     for (self.classes.items()) |itm| {
-      const bb_items = itm.getEntry().bb.items();
-      for (bb_items) |nd| {
+      for (itm.getEntry().bb.items()) |nd| {
         if (nd == node) {
           return itm;
         }

@@ -50,6 +50,8 @@ pub const NodeType = enum {
   NdCast,
   NdSimpleIf,
   NdWhile,
+  NdFor,
+  NdForCounter,
   NdControl,
   NdBasicCall,
   NdGenericCall,
@@ -397,6 +399,8 @@ pub const ExprStmtNode = struct {
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
+    var writer = u8w.writer();
+    try util.addDepth(&writer, depth);
     try self.expr.render(depth, u8w);
     _ = try u8w.writer().write("\n");
   }
@@ -708,6 +712,10 @@ pub const DotAccessNode = struct {
     return .{ .lhs = lhs, .rhs = rhs};
   }
 
+  pub inline fn initAll(lhs: *Node, rhs: *Node, allow_tag_access: bool, typ: ?*Type) @This() {
+    return .{ .lhs = lhs, .rhs = rhs, .allow_tag_access = allow_tag_access, .typ = typ};
+  }
+
   pub fn clone(self: *@This(), al: Allocator) *Node {
     return Node.new(.{
       .NdDotAccess = .{
@@ -873,9 +881,60 @@ pub const WhileNode = struct {
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
+    var writer = u8w.writer();
+    _ = try u8w.writer().write("<while> ");
+    try Node.render(self.cond, depth, u8w);
+    _ = try writer.write("\n");
+    try util.addDepth(&writer, depth);
+    try Node.render(self.then, depth, u8w);
+    try util.addDepth(&writer, depth);
+    _ = try writer.write("end\n");
+  }
+};
+
+/// NdFor
+pub const ForNode = struct {
+  ident: IdentToken,
+  itrbl: *Node,
+  then: *Node,
+
+  pub inline fn init(ident: Token, itrbl: *Node, then: *Node) @This() {
+    return .{.ident = IdentToken.init(ident), .itrbl = itrbl, .then = then};
+  }
+
+  pub fn clone(self: *@This(), al: Allocator) *Node {
+    return Node.new(.{.NdFor = .{
+      .ident = self.ident, .itrbl = self.itrbl.clone(al),
+      .then = self.then.clone(al)
+    }}, al);
+  }
+
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
     _ = depth;
     _ = self;
-    _ = try u8w.writer().write("<while>\n");
+    _ = try u8w.writer().write("<for>\n");
+  }
+};
+
+/// NdForCounter
+pub const ForCounterNode = struct {
+  counter: IdentToken,
+  forl: *Node,
+
+  pub inline fn init(counter: Token, forl: *Node) @This() {
+    return .{.counter = IdentToken.init(counter), .forl = forl};
+  }
+
+  pub fn clone(self: *@This(), al: Allocator) *Node {
+    return Node.new(.{.NdForCounter = .{
+      .counter = self.counter, .forl = self.forl.clone(al),
+    }}, al);
+  }
+
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
+    _ = depth;
+    _ = self;
+    _ = try u8w.writer().write("<for i>\n");
   }
 };
 
@@ -895,6 +954,10 @@ pub const ControlNode = struct {
 
   pub fn isContinue(self: ControlNode) bool {
     return self.token.ty == .TkContinue;
+  }
+
+  pub fn clone(self: *@This(), al: Allocator) *Node {
+    return Node.new(.{.NdControl = .{.token = self.token, .patch_index = self.patch_index}}, al);
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
@@ -1197,14 +1260,14 @@ pub const StructNode = struct {
 
   pub const StructData = struct {
     fields: NodeItems,
-    methods: NodeItems,
+    methods: NodeListU,
     params: ?TypeItems,
     builtin: bool,
     checked: bool,
     tktype: TokenType,
 
     pub inline fn init(
-      fields: NodeItems, methods: NodeItems, params: ?TypeItems,
+      fields: NodeItems, methods: NodeListU, params: ?TypeItems,
       checked: bool, builtin: bool, tktype: TokenType
     ) @This() {
       return .{
@@ -1224,7 +1287,7 @@ pub const StructNode = struct {
       }
       return util.box(StructData, @as(StructData, .{
         .fields = cloneNodeItems(self.fields, al),
-        .methods = cloneNodeItems(self.methods, al),
+        .methods = self.methods.clone(al),
         .params = params,
         .builtin = self.builtin,
         .checked = self.checked,
@@ -1233,15 +1296,12 @@ pub const StructNode = struct {
     }
 
     pub fn addMethod(self: *StructData, node: *Node, al: Allocator) void {
-      const items = util.allocSlice(*Node, self.methods.len + 1, al);
-      @memcpy(items[0..self.methods.len], self.methods);
-      items[self.methods.len] = node;
-      self.methods = items;
+      self.methods.append(node, al);
     }
   };
 
   pub inline fn init(
-    name: Token, trait: ?*Type, fields: NodeItems, methods: NodeItems,
+    name: Token, trait: ?*Type, fields: NodeItems, methods: NodeListU,
     params: ?TypeItems, checked: bool, builtin: bool, al: Allocator
   ) @This() {
     return .{
@@ -1466,6 +1526,8 @@ pub const Node = union(NodeType)  {
   NdCast: CastNode,
   NdSimpleIf: SimpleIfNode,
   NdWhile: WhileNode,
+  NdFor: ForNode,
+  NdForCounter: ForCounterNode,
   NdControl: ControlNode,
   NdBasicCall: BasicCallNode,
   NdGenericCall: GenericCallNode,
@@ -1877,7 +1939,7 @@ pub const Node = union(NodeType)  {
   pub fn clone(node: *Node, al: Allocator) *Node {
     return switch (node.*) {
       .NdNumber, .NdString, .NdBool, .NdAlias,
-      .NdEmpty, .NdControl, .NdFailMarker, .NdGenericFun,
+      .NdEmpty, .NdFailMarker, .NdGenericFun,
       .NdRedunMarker, .NdScope, .NdDiagStartMarker, .NdPipeHolder => node,
       .NdBinary, .NdAssign => |*nd| nd.clone(node, al),
       .NdList, .NdTuple => |*nd| nd.clone(node, al),
@@ -1925,6 +1987,8 @@ pub const Node = union(NodeType)  {
       .NdMCondition => |*nd| nd.tst.getToken(),
       .NdControl => |ct| ct.token,
       .NdWhile => |*nd| nd.cond.getToken(),
+      .NdFor => |*nd| nd.ident.toToken(),
+      .NdForCounter => |*nd| nd.counter.toToken(),
       .NdRet => |*nd| nd.tkbit.toToken(),
       .NdBasicCall => |*nd| nd.expr.getToken(),
       .NdGenericCall => |*nd| nd.call.getToken(),
@@ -1991,6 +2055,14 @@ pub const Node = union(NodeType)  {
     };
   }
 
+  pub fn getFieldName(self: *@This()) Token {
+    return switch (self.*) {
+      .NdField => |*nd| nd.name.toToken(),
+      .NdPubField => |*nd| nd.name.toToken(),
+      else => unreachable,
+    };
+  }
+
   pub fn getFieldLexeme(self: *@This()) []const u8 {
     return switch (self.*) {
       .NdField => |*nd| nd.name.lexeme(),
@@ -2038,8 +2110,8 @@ pub const Node = union(NodeType)  {
       .NdCondition => |*nd| nd.cond.getType(),
       .NdMCondition => |*nd| nd.tst.getType(),
       .NdGenericFun, .NdBlock, .NdSimpleIf,
-      .NdWhile, .NdControl, .NdScope, .NdLblArg,
-      .NdFailMarker, .NdRedunMarker,
+      .NdWhile, .NdFor, .NdForCounter, .NdControl,
+      .NdScope, .NdLblArg, .NdFailMarker, .NdRedunMarker,
       .NdEmpty, .NdDiagStartMarker,
       .NdProgram, .NdClass, .NdTrait,
       .NdMatch, .NdPipeHolder => null,
@@ -2095,7 +2167,7 @@ pub const Node = union(NodeType)  {
       .NdControl, .NdFailMarker,
       .NdRedunMarker, .NdScope, .NdTVar,
       .NdDiagStartMarker, .NdPipeHolder => false,
-      .NdOrElse, .NdMatch, .NdDeref => true,
+      .NdOrElse, .NdMatch, .NdDeref, .NdFor, .NdForCounter => true,
       .NdBinary => |*nd| nd.op_tkty == .TkPipeGthan or nd.op_tkty == .TkGthanLthan or nd.left.hasSugar() or nd.right.hasSugar(),
       .NdAssign => |*nd| nd.right.hasSugar() or nd.left.hasSugar(),
       .NdSubscript => |*nd| nd.expr.hasSugar() or nd.index.hasSugar(),
@@ -2145,7 +2217,7 @@ pub const Node = union(NodeType)  {
         return false;
       },
       .NdClass, .NdTrait => |*nd| {
-        for (nd.data.methods) |itm| {
+        for (nd.data.methods.items()) |itm| {
           if (itm.hasSugar()) {
             return true;
           }
@@ -2161,6 +2233,127 @@ pub const Node = union(NodeType)  {
         return false;
       },
     };
+  }
+
+  pub fn containsField(self: *@This(), field: Token) ?Token {
+    switch (self.*) {
+      .NdUnary => |*nd| return nd.expr.containsField(field),
+      .NdBinary, .NdAssign => |*nd| {
+        return (
+          nd.left.containsField(field) orelse
+          nd.right.containsField(field)
+        );
+      },
+      .NdList, .NdTuple => |*nd| {
+        for (nd.elems) |n| {
+          if (n.containsField(field)) |tk| {
+            return tk;
+          }
+        }
+        return null;
+      },
+      .NdMap => |*nd| {
+        for (nd.pairs) |n| {
+          if (n.key.containsField(field)) |tk| {
+            return tk;
+          } else if (n.value.containsField(field)) |tk| {
+            return tk;
+          }
+        }
+        return null;
+      },
+      .NdDeref => |*nd| return nd.expr.containsField(field),
+      .NdDotAccess => |*nd| {
+        if (nd.lhs.isTVariable() and nd.rhs.isTVariable()) {
+          if (nd.lhs.NdTVar.token.valueEql(ks.SelfVar)) {
+            if (nd.rhs.NdTVar.token.valueEql(field)) {
+              return nd.rhs.NdTVar.token;
+            }
+          }
+        }
+        return nd.lhs.containsField(field) orelse nd.rhs.containsField(field);
+      },
+      .NdSubscript => |*nd| {
+        return nd.expr.containsField(field) orelse nd.index.containsField(field);
+      },
+      .NdCondition => |*nd| return nd.cond.containsField(field),
+      .NdMCondition => |*nd| return nd.tst.containsField(field),
+      .NdCast => |*nd| return nd.expr.containsField(field),
+      .NdSimpleIf => |*nd| {
+        return (
+          nd.cond.containsField(field) orelse
+          nd.then.containsField(field) orelse
+          nd.els.containsField(field)
+        );
+      },
+      .NdWhile => |*nd| {
+        return nd.cond.containsField(field) orelse nd.then.containsField(field);
+      },
+      .NdFor => |*nd| {
+        return nd.then.containsField(field);
+      },
+      .NdForCounter => |*nd| {
+        return nd.forl.containsField(field);
+      },
+      .NdControl => return null,
+      .NdBasicCall => |*nd| {
+        if (nd.expr.containsField(field)) |tk| {
+          return tk;
+        }
+        for (nd._args[0..nd._len]) |n| {
+          if (n.containsField(field)) |tk| {
+            return tk;
+          }
+        }
+      },
+      .NdGenericCall => |*nd| {
+        return nd.call.containsField(field);
+      },
+      .NdError => |*nd| {
+        return nd.expr.containsField(field);
+      },
+      .NdOrElse => |*nd| {
+        return nd.ok.containsField(field) orelse nd.err.containsField(field);
+      },
+      .NdBasicFun => |*nd| {
+        return nd.data.body.containsField(field);
+      },
+      .NdGenericFun => |*nd| {
+        return nd.fun.containsField(field);
+      },
+      .NdLblArg => |*nd| {
+        return nd.value.containsField(field);
+      },
+      .NdRet => |*nd| {
+        if (nd.expr) |n| {
+          return n.containsField(field);
+        }
+      },
+      .NdMatch => |*nd| {
+        if (nd.lnode) |lnode| {
+          if (lnode.containsField(field)) |tk| {
+            return tk;
+          }
+        } else {
+          for (nd.cases) |case| {
+            if (case.body.node.containsField(field)) |tk| {
+              return tk;
+            }
+          }
+        }
+      },
+      .NdExprStmt => |*nd| return nd.expr.containsField(field),
+      .NdVarDecl => |*nd| return nd.value.containsField(field),
+      .NdBlock => |*nd| {
+        for (nd.nodes) |n| {
+          if (n.containsField(field)) |tk| {
+            return tk;
+          }
+        }
+      },
+      else => {},
+    }
+    return null;
   }
 };
 
@@ -4142,6 +4335,10 @@ pub const Type = struct {
           if (std.mem.eql(u8, cls1.data.name, t2.toc().name)) {
             return t1;
           }
+        } else if (t2.isTrait()) {
+          if (cls1.data.trait) |trt| {
+            return trt.is(t2, al);
+          }
         }
       },
       .Trait => |*trt| {
@@ -4590,19 +4787,19 @@ pub const Variable = struct {
     return true;
   }
 
-  pub fn len(self: *@This()) usize {
+  pub inline fn len(self: *@This()) usize {
     return self.tokens.len();
   }
 
-  pub fn getTokens(self: *@This()) *TokenList {
+  pub inline fn getTokens(self: *@This()) *TokenList {
     return &self.tokens;
   }
 
-  pub fn getFirst(self: *@This()) Token {
+  pub inline fn getFirst(self: *@This()) Token {
     return self.tokens.items()[0];
   }
 
-  pub fn getFirstLexeme(self: *@This()) []const u8 {
+  pub inline fn getFirstLexeme(self: *@This()) []const u8 {
     return self.tokens.items()[0].lexeme();
   }
 
@@ -4829,7 +5026,7 @@ pub const Class = struct {
   pub fn getMethod(self: *@This(), name: []const u8) ?*Node {
     if (self.data.node) |_node| {
       const data = if (_node.isClass()) _node.NdClass.data else _node.NdTrait.data;
-      for (data.methods) |mth| {
+      for (data.methods.items()) |mth| {
         if (mth.NdBasicFun.data.name.?.valueEql(name)) {
           return mth;
         }
@@ -4841,7 +5038,7 @@ pub const Class = struct {
   pub fn getMethodIndex(self: *@This(), name: []const u8) ?usize {
     if (self.data.node) |_node| {
       const data = if (_node.isClass()) _node.NdClass.data else _node.NdTrait.data;
-      for (data.methods, 0..) |mth, i| {
+      for (data.methods.items(), 0..) |mth, i| {
         if (mth.NdBasicFun.data.name.?.valueEql(name)) {
           return i;
         }

@@ -2039,34 +2039,6 @@ test "builtin-functions" {
   try doRuntimeTest(src);
 }
 
-test "builtin-functions-override" {
-  const src =
-  \\ def exit(x: num)
-  \\  return x - 2
-  \\ end
-  \\
-  \\ assert(exit(10) == 8, 'okay')
-  \\
-  \\ def panic(x: num)
-  \\  return x - 2
-  \\ end
-  \\
-  \\ assert(panic(10) == 8, 'okay')
-  \\
-  \\ let check = assert
-  \\ def assert{T}(t: T)
-  \\  check(t, 'nice')
-  \\ end
-  \\ assert(!!check)
-  \\
-  \\ def print(x*: any)
-  \\  return x
-  \\ end
-  \\ check(print('fox', 'fry', 1, 2, 3)[0] == 'fox', 'should be "fox"')
-  ;
-  try doRuntimeTest(src);
-}
-
 test "no-strict-varargs-immutability" {
   const src =
   \\ def fun(x*: num)
@@ -2616,6 +2588,28 @@ test "generic-classes-5" {
   try doRuntimeTest(src);
 }
 
+test "generic-classes-6<mutual-recursion>" {
+  const src =
+  \\ class Foo{T}
+  \\   pub def see(x: T): Bar{T}
+  \\    return Bar{T}()
+  \\   end
+  \\ end
+  \\
+  \\ class Bar{U}
+  \\    pub def ees(y: U): Foo{U}
+  \\      return Foo{U}()
+  \\    end
+  \\ end
+  \\
+  \\ let j = Foo{num}()
+  \\ let t = j.see((5))
+  \\ t is Bar{num} |> assert(*, 'should be true')
+  \\ j is Foo{num} |> assert(*, 'should be true')
+  ;
+  try doRuntimeTest(src);
+}
+
 test "generic call linking" {
   const src =
   \\ class Bar
@@ -2742,8 +2736,8 @@ test "builtin-map" {
   \\ assert(itm0[0] == 'c', 'should be c')
   \\ assert(itm0[1] == 3, 'should be 3')
   \\ assert(j.items().len() == 3, 'should be 3')
-  \\ # listItems
-  \\ assert(j.listItems().len() == 6, 'should be 6')
+  \\ # entries
+  \\ assert(j.entries().len() == 6, 'should be 6')
   ;
   try doRuntimeTest(src);
 }
@@ -3517,7 +3511,7 @@ test "patterns-35.<guards with blocks>" {
 test "patterns-35b.<guards with blocks>" {
   const src =
   \\ let z = false
-  \\ match {'a': false, 'b': true, 'c': false}.listItems()
+  \\ match {'a': false, 'b': true, 'c': false}.entries()
   \\  case [..] as t if !z => do
   \\    assert(!z, '...')
   \\    z = !z
@@ -3791,7 +3785,7 @@ test "patterns-50.<match on lists (guarded rested)" {
 test "patterns-51.<match on lists (guarded rested)>" {
   const src =
   \\ let z = false
-  \\ match {'a': false, 'b': true, 'c': false}.listItems()
+  \\ match {'a': false, 'b': true, 'c': false}.entries()
   \\  case [Key('a'), Value(false), ..] as t if z => assert(z, 'should be false')
   \\  case [..] as t if z => assert(z, 'should be false')
   \\  case _ => z = true
@@ -3943,7 +3937,90 @@ test "patterns-56.<annotated tags - exhaustiveness>" {
   try doRuntimeTest(src);
 }
 
-test "binary tree" {
+test "patterns-57.<complete-patterns>" {
+  const src =
+  \\ let i = [1, 2]
+  \\ let k = (i.get(0), i.get(1))
+  \\ match k
+  \\  case (Just(a), Just(b)) => assert(true, 'a')
+  \\  case (None, Just(_)) => assert(false, 'b')
+  \\  case (Just(_), None) => assert(false, 'c')
+  \\  case (None, None) => assert(false, 'd')
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-58.<near-complete-patterns>" {
+  const src =
+  \\ let i = [1, 2]
+  \\ let k = (i.get(0), i.get(1))
+  \\ match k
+  \\  case (None, None) => assert(false, 'a')
+  \\  case (Just(_), None) => assert(false, 'b')
+  \\  case (_, Just(_)) => assert(true, 'd')
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-59.<near-complete-patterns>" {
+  const src =
+  \\ let i = [1, 2]
+  \\ let k = (i.get(0), i.get(1))
+  \\ match k
+  \\  case (None, None) => assert(false, 'a')
+  \\  case (Just(a), Just(b)) => assert(true, 'b')
+  \\  case (None, _) => assert(false, 'c')
+  \\  case (_, None) => assert(false, 'd')
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-60.<near-complete-patterns>" {
+  const src =
+  \\ let i = [1, 2]
+  \\ let k = (i.get(0), i.get(1))
+  \\ match k
+  \\  case (None, None) => assert(false, 'a')
+  \\  case (None, _) => assert(false, 'b')
+  \\  case (_, None) => assert(false, 'c')
+  \\  case (Just(_), Just(_)) => assert(true, 'd')
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-61.<near-complete-patterns>" {
+  const src =
+  \\ match ([], [])
+  \\  case ([], _) => assert(true, 'a')
+  \\  case (_, []) => assert(false, 'b')
+  \\  case ([l], [r]) => assert(false, 'c')
+  \\  case ([l], [r, ..rs]) => assert(false, 'd')
+  \\  case ([l, ..ls], [r]) => assert(false, 'e')
+  \\  case ([l, ..ls], [r, ..rs]) => assert(false, 'f')
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
+test "patterns-62.<near-complete-patterns>" {
+  const src =
+  \\ _ = match ([1], ['a'])
+  \\  case ([], _) => 'a'
+  \\  case (_, []) => 'b'
+  \\  case ([l], [r]) => 'c'
+  \\  case ([l], [r, ..rs]) => 'd'
+  \\  case ([l, ..ls], [r]) => 'e'
+  \\  case ([l, ..ls], [r, ..rs]) => 'f'
+  \\ end == 'c' |> assert(*, 'should be true')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "binary tree .1" {
   const src =
   \\ type Tree{a} =
   \\  | Node(val: a, lhs: Tree{a}, rhs: Tree{a})
@@ -3973,7 +4050,41 @@ test "binary tree" {
   \\      Node (7, Empty, Empty)
   \\    )
   \\  )
-  \\ print_tree{num}(tree)
+  \\ print_tree(tree)
+  ;
+  try doRuntimeTest(src);
+}
+test "binary tree .2" {
+  const src =
+  \\ type Tree{a} =
+  \\  | Node(val: a, lhs: Tree{a}, rhs: Tree{a})
+  \\  | Empty
+  \\ def print_tree{a}(tree: Tree{a})
+  \\  match tree
+  \\    case Empty => println("Empty")
+  \\    case Node(val, lhs, rhs) => do
+  \\      println("Node:", val)
+  \\      print("Left: ")
+  \\      print_tree(lhs)
+  \\      print("Right: ")
+  \\      print_tree(rhs)
+  \\    end
+  \\  end
+  \\ end
+  \\ let tree = Node(
+  \\    1,
+  \\    Node (
+  \\      2,
+  \\      Node (3, Empty, Empty),
+  \\      Node (4, Empty, Empty)
+  \\    ),
+  \\    Node (
+  \\      5,
+  \\      Node (6, Empty, Empty),
+  \\      Node (7, Empty, Empty)
+  \\    )
+  \\  )
+  \\ print_tree(tree as Tree{num})
   ;
   try doRuntimeTest(src);
 }
@@ -4962,6 +5073,174 @@ test "traits <generic-trait-bounds .2>" {
   \\ let f = Foo()
   \\ assert(f.bark() == "Foo barking here!", 'should be same')
   \\ assert(f.speak() == "Foo speaking here!", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <generics & resolution>" {
+  const src =
+  \\ trait Speaks
+  \\  pub def speak(): str;
+  \\ end
+  \\
+  \\ trait Barks{T}
+  \\   where
+  \\      T: Speaks
+  \\  pub def bark(): str;
+  \\ end
+  \\
+  \\ class Foo{T}: Barks{Foo{T}} | Speaks
+  \\  pub def bark()
+  \\    return "Foo barking here!"
+  \\  end
+  \\  pub def speak()
+  \\    return "Foo speaking here!"
+  \\  end
+  \\ end
+  \\
+  \\ let f = Foo{num}()
+  \\ assert(f.bark() == "Foo barking here!", 'should be same')
+  \\ assert(f.speak() == "Foo speaking here!", 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <Iterator.next>" {
+  const src =
+  \\ let k = ['10', '11', '12', '13'].iter()
+  \\ assert(k.next().?? == '10', 'should be 10')
+  \\ assert(k.next().?? == '11', 'should be 11')
+  \\ assert(k.next().?? == '12', 'should be 12')
+  \\ assert(k.next().?? == '13', 'should be 13')
+  \\ assert(k.next() == None, 'should be None')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <Iterator.count>" {
+  const src =
+  \\ let j = ['a', 'b', 'c', 'd', 'e']
+  \\ let k = ['10', '11', '12', '13']
+  \\ assert(j.iter().count() == 5, 'should be 5')
+  \\ assert(k.iter().count() == 4, 'should be 4')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <Iterator.zip>" {
+  const src =
+  \\ let j = ['a', 'b', 'c', 'd', 'e']
+  \\ let k = ['10', '11', '12', '13']
+  \\ let p = j.iter().zip(k.iter())
+  \\ assert(p.iter().count() == 4, 'should be 4')
+  \\ assert(p.len() == 4, 'should be 4')
+  \\ assert(p[0][0] == 'a', 'should be a')
+  \\ assert(p[0][1] == '10', 'should be 10')
+  \\ assert(p[-1][0] == 'd', 'should be d')
+  \\ assert(p[-1][1] == '13', 'should be 13')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <range>" {
+  const src =
+  \\ range(1, Just(12), Just(2)).iter().count()
+  \\ |> assert(* == 6, 'should be 6')
+  \\
+  \\ range(1, Just(12), None).iter().count()
+  \\ |> assert(* == 11, 'should be 6')
+  \\
+  \\ let r = range(1, Just(12), None)
+  \\ assert(r.next().?? == 1, 'should be 1')
+  \\ assert(r.next().?? == 2, 'should be 2')
+  \\
+  \\ let r = range(1, Just(12), None).iter()
+  \\ assert(r.next().?? == 1, 'should be 1')
+  \\ assert(r.next().?? == 2, 'should be 2')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <zip>" {
+  const src =
+  \\ zip([1, 2, 3, 4].iter(), ['a', 'b', 'c'].iter())
+  \\  .iter().count()
+  \\ |> assert(* == 3, 'should be 3')
+  \\
+  \\ let r = zip([1, 2, 3].iter(), ['a', 'b', 'c', 'd'].iter())
+  \\ assert(r[0][0] == 1, 'should be 1')
+  \\ assert(r[0][1] == 'a', 'should be a')
+  \\ assert(r[-1][0] == 3, 'should be 1')
+  \\ assert(r[-1][1] == 'c', 'should be a')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <range & Iterator.zip>" {
+  const src =
+  \\ let k = [10, 11, 12, 13]
+  \\ let r = k.iter().zip(range(1, Just(12), Just(2)).iter())
+  \\ assert(r.len() == 4, 'should be 4')
+  \\ assert(r[0][0] == 10, 'should be 11')
+  \\ assert(r[0][1] == 1, 'should be 1')
+  \\ assert(r[-1][0] == 13, 'should be 13')
+  \\ assert(r[-1][1] == 7, 'should be 7')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "parameter resolution" {
+  const src =
+  \\ def iter{U}(itr: Iterator{U})
+  \\ end
+  \\ class Foo: Iterator{num} | Iter{num}
+  \\  state = 0
+  \\  data: List{num}
+  \\
+  \\  def init(d: List{num})
+  \\    self.data = d
+  \\  end
+  \\
+  \\  pub def fun(x: Iterator{num})
+  \\    return x
+  \\  end
+  \\
+  \\  pub def next()
+  \\    if self.state >= self.data.len()
+  \\      return None
+  \\    end
+  \\    self.state += 1
+  \\    return Just(self.data[self.state - 1])
+  \\  end
+  \\
+  \\  pub def iter()
+  \\    return Foo(self.data)
+  \\  end
+  \\ end
+  \\
+  \\ let f = Foo([1, 2, 3, 4])
+  \\ iter(f)
+  \\ assert(f.fun(f) == f, 'should be same')
+  \\ assert(f.fun(f) == (f as Iterator{num}), 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "for loop" {
+  const src =
+  \\ let i = 'a'
+  \\ let j = 'b'
+  \\ let l = [] as List{fn(): num}
+  \\ for j in range(1, Just(12), None) do
+  \\  _ = l.append(def () => j)
+  \\ end
+  \\ assert(j == 'b', 'should be same')
+  \\
+  \\ let expected = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  \\ for i, fun in l
+  \\  _ = assert(fun() == expected[i], 'should be same')
+  \\ end
+  \\ assert(i == 'a' and j == 'b', 'should be same')
   ;
   try doRuntimeTest(src);
 }

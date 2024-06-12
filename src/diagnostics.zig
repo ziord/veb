@@ -1,6 +1,7 @@
 const std = @import("std");
 const util = @import("util.zig");
 const lex = @import("lex.zig");
+const ks = @import("constants.zig");
 
 const Token = lex.Token;
 
@@ -31,6 +32,7 @@ pub const Diagnostic = struct {
   filename: *const[]const u8,
   src: *[]const u8,
   levels: std.ArrayList(DiagLevel),
+  skip_entry: bool = false,
 
   const Self = @This();
 
@@ -53,8 +55,13 @@ pub const Diagnostic = struct {
     return false;
   }
 
+  inline fn getFilename(self: *Self, token: Token) []const u8 {
+    return if (token.src_kind == .User) self.filename.* else ks.PreludeFilename;
+  }
+
   fn pushData(self: *Self, level: DiagLevel, token: Token, depth: u32, comptime fmt: []const u8, args: anytype)
   !void {
+    if (self.skip_entry) return;
     const allocator = self.data.allocator;
     const col = token.column(self.src.*);
     const msg = try std.fmt.allocPrint(allocator, fmt ++ "\n\n", args);
@@ -67,7 +74,7 @@ pub const Diagnostic = struct {
       .{
         .level = level,
         .token = token,
-        .msg = try std.fmt.allocPrint(allocator, "{s}.{}:{}:\n", .{self.filename.*, token.line, col})
+        .msg = try std.fmt.allocPrint(allocator, "{s}.{}:{}:\n", .{self.getFilename(token), token.line, col})
       }
     );
     for (0..depth + 2) |_| {
@@ -104,6 +111,14 @@ pub const Diagnostic = struct {
       if (item.level == level) return true;
     }
     return false;
+  }
+
+  pub inline fn skipEntry(self: *Self) void {
+    self.skip_entry = true;
+  }
+
+  pub inline fn resumeEntry(self: *Self) void {
+    self.skip_entry = false;
   }
 
   pub fn hasErrors(self: *Self) bool {

@@ -24,13 +24,15 @@ pub const NativeFns = [_][]const u8 {
   "keys",
   "values",
   "items",
-  "listItems",
+  "entries",
   "delete",
   "remove",
   "println",
   "slice",
   "concat",
   "@string",
+  "next",
+  "iter",
 };
 
 
@@ -107,7 +109,7 @@ pub fn fnPrint(vm: *VM, argc: u32, args: u32) Value {
   return NOTHING_VAL;
 }
 
-/// string(val: any): str
+/// @string(val: any): str
 pub fn fnString(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   return vl.valueToString(getArg(vm, args), vm);
@@ -332,8 +334,8 @@ fn mapItems(vm: *VM, argc: u32, args: u32) Value {
   return vl.objVal(list);
 }
 
-// listItems(): List{MapEntry{K, V}} -> List{Key(K) | Value(V)}
-fn mapListItems(vm: *VM, argc: u32, args: u32) Value {
+// entries(): List{MapEntry{K, V}} -> List{Key(K) | Value(V)}
+fn mapEntries(vm: *VM, argc: u32, args: u32) Value {
   _ = argc;
   var map = vl.asMap(getArg(vm, args));
   var list = vl.createList(vm, map.meta.len << 1);
@@ -356,7 +358,7 @@ fn createMapClass(vm: *VM) *vl.ObjClass {
     mapKeys,
     mapValues,
     mapItems,
-    mapListItems,
+    mapEntries,
     mapLen
   };
   //*** arity of each method ***//

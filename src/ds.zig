@@ -160,18 +160,18 @@ pub fn ArrayList(comptime T: type) type {
       return self.list.getLast();
     }
 
-    pub fn clone(ori: *ArrayList(T), al: Allocator) ArrayList(T) {
-      var new = ArrayList(T).init(al);
-      new.ensureTotalCapacity(ori.capacity());
+    pub fn clone(ori: *ArrayList(T)) ArrayList(T) {
+      var new = ArrayList(T).init(ori.list.allocator);
+      new.ensureTotalCapacity(ori.len());
       for (ori.items()) |itm| {
-        new.appendAssumeCapacity(itm.clone(al));
+        new.appendAssumeCapacity(itm.clone(ori.list.allocator));
       }
       return new;
     }
 
     pub fn copy(ori: *ArrayList(T)) ArrayList(T) {
       var new = ArrayList(T).init(ori.allocator());
-      new.ensureTotalCapacity(ori.capacity());
+      new.ensureTotalCapacity(ori.len());
       new.appendSliceAssumeCapacity(ori.items());
       return new;
     }
@@ -370,7 +370,7 @@ pub fn ArrayListUnmanaged(comptime T: type) type {
 
     pub fn clone(ori: *ArrayListUnmanaged(T), al: Allocator) ArrayListUnmanaged(T) {
       var new = ArrayListUnmanaged(T).init();
-      new.ensureTotalCapacity(ori.capacity(), al);
+      new.ensureTotalCapacity(ori.len(), al);
       for (ori.items()) |itm| {
         new.appendAssumeCapacity(itm.clone(al));
       }

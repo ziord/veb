@@ -24,6 +24,7 @@ const GenInfoMap = ds.ArrayHashMap(*Node, *ds.ArrayList(GenInfo));
 const TypeList = check.TypeList;
 const Type = check.Type;
 const U8Writer = util.U8Writer;
+const Prelude = check.TypeChecker.Prelude;
 const InitVar = ks.InitVar;
 const assert = check.assert;
 const logger = std.log.scoped(.compile);
@@ -213,7 +214,7 @@ pub const Compiler = struct {
   locals: ds.ArrayListUnmanaged(LocalVar),
   upvalues: ds.ArrayListUnmanaged(Upvalue),
   globals: ds.ArrayListUnmanaged(GlobalVar),
-  loop_ctrls: ds.ArrayListUnmanaged(*tir.ControlNode),
+  loop_ctrls: ds.ArrayListUnmanaged(LoopPatch),
   vreg: VRegister,
   rk_bx: RkBxPair = RkBxPair{},
   scope: i32 = GLOBAL_SCOPE, // defaults to global scope
@@ -225,7 +226,7 @@ pub const Compiler = struct {
   vm: *VM,
   diag: *Diagnostic,
   generics: *GenInfoMap,
-  _prelude: *Node,
+  prelude: Prelude,
   
   const Self = @This();
 
@@ -244,11 +245,15 @@ pub const Compiler = struct {
     optimizeBX: u32 = 0, // can optimize for bx
     in_noopt: u32 = 0,
   };
+  const LoopPatch = struct{
+    ctrl: *tir.ControlNode,
+    dummy: u32,
+  };
   const CompileError = error{CompileError};
 
   pub fn init(
     diag: *Diagnostic, vm: *VM, fun: *ObjFn, generics: *GenInfoMap,
-    allocator: *VebAllocator, prel: *Node,
+    allocator: *VebAllocator, prel: Prelude,
     prev: ?*@This(), mtd_token: ?Token,
   ) Self {
     var al = allocator.getArenaAllocator();
@@ -257,7 +262,7 @@ pub const Compiler = struct {
       .locals = ds.ArrayListUnmanaged(LocalVar).initCapacity(MAX_LOCALS, al),
       .upvalues = ds.ArrayListUnmanaged(Upvalue).init(),
       .globals = ds.ArrayListUnmanaged(GlobalVar).init(),
-      .loop_ctrls = ds.ArrayListUnmanaged(*tir.ControlNode).init(),
+      .loop_ctrls = ds.ArrayListUnmanaged(LoopPatch).init(),
       .vreg = VRegister.init(al),
       .u8w = U8Writer.init(al),
       .allocator = allocator,
@@ -265,7 +270,7 @@ pub const Compiler = struct {
       .vm = vm,
       .diag = diag,
       .generics = generics,
-      ._prelude = prel,
+      .prelude = prel,
     };
     if (prev) |p| {
       self.adoptBuiltinsPrelude(p);
@@ -460,14 +465,12 @@ pub const Compiler = struct {
   fn findUpvalue(self: *Self, node: *tir.TVarNode) ?u32 {
     if (self.enclosing == null) return null;
     var compiler = self.enclosing.?;
-    var local = compiler.findLocalVar(node);
-    if (local) |loc| {
+    if (compiler.findLocalVar(node)) |loc| {
       compiler.locals.items()[loc.index].captured = true;
-      return self.addUpvalue(loc.index, true, node.token) catch null;
+      return self.addUpvalue(loc.reg, true, node.token) catch null;
     }
-    var index = compiler.findUpvalue(node);
-    if (index) |idx| {
-      return self.addUpvalue(idx, false, node.token) catch null;
+    if (compiler.findUpvalue(node)) |reg| {
+      return self.addUpvalue(reg, false, node.token) catch null;
     }
     return null;
   }
@@ -535,7 +538,7 @@ pub const Compiler = struct {
   fn loadBuiltinsPrelude(self: *Self) void {
     util.assert(self.globals.len() == 0, "globals len should be zero at startup");
     self.skip_gsyms = true;
-    self.preallocateGlobals(self._prelude.NdProgram.decls);
+    self.preallocateGlobals(self.prelude.noexecs.NdProgram.decls);
     self.skip_gsyms = false;
     // patch and initialize all builtin globals:
     for (0..self.globals.len()) |i| {
@@ -546,7 +549,7 @@ pub const Compiler = struct {
 
   /// adopt prelude
   fn adoptBuiltinsPrelude(self: *Self, other: *Self) void {
-    var al = self.alloc();
+    const al = self.alloc();
     for (0..other.globals.len()) |i| {
       // store the global refs
       self.globals.append(other.globals.itemAt(i), al);
@@ -895,7 +898,7 @@ pub const Compiler = struct {
       if (typ.isFunction()) {
         var fun = typ.function();
         if (fun.isParameterized()) {
-          self.softError(node.token, "cannot generate code for an uninstantiated generic type", .{});
+          self.softError(node.token, "I cannot generate code for an uninstantiated generic type.", .{});
           return dst;
         } else if (fun.data.node != null and fun.data.node.?.NdBasicFun.data.name != null) {
           const last = self.diag.count();
@@ -1247,7 +1250,9 @@ pub const Compiler = struct {
   }
 
   fn patchLoopJmps(self: *Self, loop_cond: usize) void {
-    for (self.loop_ctrls.items()) |ctrl| {
+    for (self.loop_ctrls.items()) |_ctrl| {
+      const ctrl = _ctrl.ctrl;
+      assert(self.fun.code.words.items[ctrl.patch_index] == _ctrl.dummy);
       if (ctrl.isBreak()) {
         // this is a forward jmp, so patch the jmp offset
         self.fun.code.patch2ArgsSJmp(ctrl.patch_index);
@@ -1289,7 +1294,8 @@ pub const Compiler = struct {
       // jmp bck
       node.patch_index = self.fun.code.write2ArgsSJmp(.Jmp, 0, true, node.token.line, self.vm);
     }
-    self.loop_ctrls.append(node, self.alloc());
+    const dummy = self.fun.code.words.items[node.patch_index];
+    self.loop_ctrls.append(.{.ctrl = node, .dummy = dummy}, self.alloc());
     return dst;
   }
 
@@ -1334,7 +1340,7 @@ pub const Compiler = struct {
     }
     var compiler = Compiler.init(
       self.diag, self.vm, new_fn, self.generics,
-      self.allocator, self._prelude, self,
+      self.allocator, self.prelude, self,
       if (is_method) token else null,
     );
     compiler.enclosing = self;
@@ -1642,7 +1648,7 @@ pub const Compiler = struct {
     if (node.isParameterized()) return self.cClassGeneric(ast_node, _reg);
     var reg: u32 = undefined;
     const token = ast_node.getToken();
-    var cls = value.createClass(self.vm, node.data.methods.len);
+    var cls = value.createClass(self.vm, node.data.methods.len());
     const is_global = self.inGlobalScope();
     var ident = node.name.toToken();
     if (is_global) {
@@ -1665,7 +1671,7 @@ pub const Compiler = struct {
     const dst = self.cConst(reg, value.objVal(cls), token.line);
     self.leaveNoOpt();
     self.incScope();
-    for (node.data.methods, 0..) |mth, i| {
+    for (node.data.methods.items(), 0..) |mth, i| {
       const mreg = try self.cFun(mth, true, _reg);
       self.fun.code.write3ArgsInst(.Smtd, mreg, dst, @intCast(i), token.line, self.vm);
     }
@@ -1722,7 +1728,7 @@ pub const Compiler = struct {
       .NdMCondition => |*nd| self.c(nd.tst.NdCondition.cond, reg),
       .NdParam, .NdField, .NdPubField,
       .NdProgram, .NdCondition, .NdLblArg,
-      .NdOrElse, .NdPipeHolder => unreachable,
+      .NdOrElse, .NdPipeHolder, .NdFor, .NdForCounter => unreachable,
     };
   }
 

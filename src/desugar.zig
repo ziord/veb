@@ -7,6 +7,7 @@ const ds = @import("ds.zig");
 const diagnostics = @import("diagnostics.zig");
 
 const Node = tir.Node;
+const Token = tir.Token;
 const Allocator = std.mem.Allocator;
 const NodeItems = tir.NodeItems;
 const Type = tir.Type;
@@ -36,6 +37,68 @@ pub const Desugar = struct {
 
   inline fn newNode(self: *Desugar, data: anytype) *Node {
     return Node.box(data, self.al);
+  }
+
+  pub inline fn newTVarNode(self: *Desugar, token: Token) *Node {
+    return self.newNode(.{.NdTVar = tir.TVarNode.init(token)});
+  }
+
+  pub inline fn newScopeNode(self: *Desugar, enter: bool, exit: bool) *Node {
+    return self.newNode(.{.NdScope = tir.ScopeNode.init(enter, exit)});
+  }
+
+  inline fn newRetNode(self: *Desugar, expr: ?*Node, token: Token) *Node {
+    return self.newNode(.{.NdRet = tir.RetNode.init(expr, token)});
+  }
+
+  inline fn newNumberNode(self: *Desugar, token: Token, num: f64) *Node {
+    return self.newNode(.{.NdNumber = tir.NumberNode.init(token, num)});
+  }
+
+  inline fn newEmptyNode(self: *Desugar, token: Token) *Node {
+    return self.newNode(.{.NdEmpty = tir.SymNode.init(token)});
+  }
+
+  inline fn newBoolNode(self: *Desugar, token: Token) *Node {
+    return self.newNode(.{.NdBool = tir.SymNode.init(token)});
+  }
+
+  inline fn newSimpleIfNode(self: *Desugar, cond: *Node, then: *Node, els: *Node) *Node {
+    return self.newNode(.{.NdSimpleIf = tir.SimpleIfNode.init(cond, then, els)});
+  }
+
+  inline fn newTypeNode(self: *Desugar, typ: *Type, token: Token) *Node {
+    return self.newNode(.{.NdType = tir.TypeNode.init(typ.box(self.al), token)});
+  }
+  
+  inline fn newControlNode(self: *Desugar, token: Token) *Node {
+    return self.newNode(.{.NdControl = tir.ControlNode.init(token)});
+  }
+
+  inline fn newVarDeclNode(self: *Desugar, token: Token, value: *Node) *Node {
+    return self.newNode(.{.NdVarDecl = tir.VarDeclNode.init(token, value, null)});
+  }
+
+  inline fn newDotAccessNode(self: *Desugar, lhs: *Node, rhs: *Node, allow_tag_access: bool) *Node {
+    return self.newNode(.{.NdDotAccess = tir.DotAccessNode.initAll(lhs, rhs, allow_tag_access, null)});
+  }
+
+  inline fn newBinaryNode(self: *Desugar, left: *Node, right: *Node, op: Token) *Node {
+    return self.newNode(.{.NdBinary = tir.BinaryNode.init(left, right, op)});
+  }
+
+  inline fn newAssignNode(self: *Desugar, left: *Node, right: *Node, op: Token) *Node {
+    return self.newNode(.{.NdAssign = tir.BinaryNode.init(left, right, op)});
+  }
+
+  pub inline fn newCallNode(self: *Desugar, expr: *Node, cargs: []const *Node) *Node {
+    var args = util.allocSlice(*Node, cargs.len, self.al);
+    @memcpy(args, cargs);
+    return self.newNode(.{.NdBasicCall = tir.BasicCallNode.init(expr, args)});
+  }
+
+  inline fn newExprStmtNode(self: *Desugar, expr: *Node, has_sugar: bool) *Node {
+    return self.newNode(.{.NdExprStmt = tir.ExprStmtNode.initAll(expr, has_sugar)});
   }
 
   inline fn getNodeList(self: *Desugar, cap: usize) NodeList {
@@ -74,23 +137,18 @@ pub const Desugar = struct {
   fn desMatchExpr(self: *Desugar, node: *Node) *Node {
     var nd = &node.NdMatch;
     const token = nd.expr.getToken().tkFrom(self.namegen.generate("$d", .{}), .TkIdent);
-    const token2 = token.tkFrom("", .TkIdent);
-    const val = self.newNode(.{.NdEmpty = tir.SymNode.init(token2)});
-    const decl = self.newNode(.{.NdVarDecl = tir.VarDeclNode.init(token, val, null)});
-    const ident = self.newNode(.{.NdTVar = tir.TVarNode.init(token)});
+    const val = self.newEmptyNode(token.tkFrom("", .TkIdent));
+    const decl = self.newVarDeclNode(token, val);
+    const ident = self.newTVarNode(token);
     for (nd.cases) |case| {
       if (case.body.node.isBlock()) {
         const index: usize = if (case.body.node.NdBlock.nodes.len > 1) 1 else 0;
         const src = case.body.node.NdBlock.nodes[index];
-        const assign = self.newNode(.{.NdAssign = tir.BinaryNode.init(ident.clone(self.al), src, token.tkFrom("=", .TkNoReturn))});
-        var stmt = self.newNode(.{.NdExprStmt = tir.ExprStmtNode.init(assign)});
-        stmt.NdExprStmt.has_sugar = assign.hasSugar();
-        case.body.node.NdBlock.nodes[index] = stmt;
+        const assign = self.newAssignNode(ident.clone(self.al), src, token.tkFrom("=", .TkNoReturn));
+        case.body.node.NdBlock.nodes[index] = self.newExprStmtNode(assign, assign.hasSugar());
       } else {
-        const assign = self.newNode(.{.NdAssign = tir.BinaryNode.init(ident.clone(self.al), case.body.node, token.tkFrom("=", .TkNoReturn))});
-        var stmt = self.newNode(.{.NdExprStmt = tir.ExprStmtNode.init(assign)});
-        stmt.NdExprStmt.has_sugar = assign.hasSugar();
-        case.body.node = stmt;
+        const assign = self.newAssignNode(ident.clone(self.al), case.body.node, token.tkFrom("=", .TkNoReturn));
+        case.body.node = self.newExprStmtNode(assign, assign.hasSugar());
       }
     }
     self.block.append(decl);
@@ -116,35 +174,33 @@ pub const Desugar = struct {
     // decl: let $r = $p  # result
     // tmp id
     const token = node.ok.getToken().tkFrom(self.namegen.generate("$d", .{}), .TkIdent);
-    const decl = self.newNode(.{.NdVarDecl = tir.VarDeclNode.init(token, self.desExpr(node.ok), null)});
-    const ident = self.newNode(.{.NdTVar = tir.TVarNode.init(token)});
+    const decl = self.newVarDeclNode(token, self.desExpr(node.ok));
+    const ident = self.newTVarNode(token);
     // result id
     const token2 = node.ok.getToken().tkFrom(self.namegen.generate("$r", .{}), .TkIdent);
-    const val = self.newNode(.{.NdEmpty = tir.SymNode.init(token)});
-    const decl2 = self.newNode(.{.NdVarDecl = tir.VarDeclNode.init(token2, val, null)});
-    const ident2 = self.newNode(.{.NdTVar = tir.TVarNode.init(token2)});
+    const decl2 = self.newVarDeclNode(token2, self.newEmptyNode(token));
+    const ident2 = self.newTVarNode(token2);
     
     // cond: $p is Error
-    const is_token = token.tkFrom("is", .TkIs);
-    var typ = Type.newTag(ks.ErrorVar, .TkError);
-    const err = self.newNode(.{.NdType = tir.TypeNode.init(typ.box(self.al), token)});
-    const cond = self.newNode(.{.NdBinary = tir.BinaryNode.init(ident, err, is_token)});
+    const cond = self.newBinaryNode(
+      ident,
+      self.newTypeNode(Type.newTag(ks.ErrorVar, .TkError).box(self.al), token),
+      token.tkFrom("is", .TkIs),
+    );
     // then:
     var then: *Node = undefined;
-    const eq_token = token.tkFrom("=", .TkEqual);
     {
       var evar_decl: ?*Node = null;
       if (node.evar) |evar| {
         // let evar = $gen
-        evar_decl = self.newNode(.{.NdVarDecl = tir.VarDeclNode.init(evar.token, ident.clone(self.al), null)});
+        evar_decl = self.newVarDeclNode(evar.token, ident.clone(self.al));
       }
       var stmts: []*Node = @constCast(&[_]*Node{});
       var stmt: *Node = undefined;
       // assign err to generated ident
       if (!node.err.isRet()) {
-        const assign = self.newNode(.{.NdAssign = tir.BinaryNode.init(ident2.clone(self.al), node.err, token.tkFrom("=", .TkNoReturn))});
-        stmt = self.newNode(.{.NdExprStmt = tir.ExprStmtNode.init(assign)});
-        stmt.NdExprStmt.has_sugar = assign.hasSugar();
+        const assign = self.newAssignNode(ident2.clone(self.al), node.err, token.tkFrom("=", .TkNoReturn));
+        stmt = self.newExprStmtNode(assign, assign.hasSugar());
       } else {
         stmt = node.err;
       }
@@ -158,17 +214,14 @@ pub const Desugar = struct {
     // else:
     var els: *Node = undefined;
     {
-      const zero = self.newNode(.{.NdNumber = tir.NumberNode.init(token.tkFrom("0", .TkNumber), 0)});
-      const access = self.newNode(.{.NdDotAccess = tir.DotAccessNode.init(ident.clone(self.al), zero)});
-      access.NdDotAccess.allow_tag_access = true;
-      const assign = self.newNode(.{.NdAssign = tir.BinaryNode.init(ident2.clone(self.al), access, eq_token)});
-      const stmt = self.newNode(.{.NdExprStmt = tir.ExprStmtNode.init(assign)});
-      stmt.NdExprStmt.has_sugar = assign.hasSugar();
+      const zero = self.newNumberNode(token.tkFrom("0", .TkNumber), 0);
+      const access = self.newDotAccessNode(ident.clone(self.al), zero, true);
+      const assign = self.newAssignNode(ident2.clone(self.al), access, token.tkFrom("=", .TkEqual));
+      const stmt = self.newExprStmtNode(assign, assign.hasSugar());
       els = tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{stmt}), self.al);
     }
     // if $p is Error then:
-    const tmp = tir.SimpleIfNode.init(cond, then, els);
-    const ifs = self.newNode(.{.NdSimpleIf = tmp});
+    const ifs = self.newSimpleIfNode(cond, then, els);
     self.block.appendSlice(@constCast(&[_]*Node{decl, decl2, ifs}));
     if (util.getMode() == .Debug) {
       Node.render(decl, 0, &self.u8w) catch {};
@@ -184,22 +237,19 @@ pub const Desugar = struct {
     const vartk1 = token.tkFrom(self.namegen.generate("$t", .{}), .TkIdent);
     const vartk2 = token.tkFrom(self.namegen.generate("$r", .{}), .TkIdent);
     // assign
-    const decl1 = self.newNode(.{.NdVarDecl = tir.VarDeclNode.init(vartk1, self.desExpr(node.expr), null)});
+    const decl1 = self.newVarDeclNode(vartk1, self.desExpr(node.expr));
     // if $t is None
-    var ident = self.newNode(.{.NdTVar = tir.TVarNode.init(vartk1)});
-    const is_token = token.tkFrom("is", .TkIs);
-    var typ = Type.newTag(ks.NoneVar, .TkNone);
-    const none = self.newNode(.{.NdType = tir.TypeNode.init(typ.box(self.al), token)});
-    const cond = self.newNode(.{.NdBinary = tir.BinaryNode.init(ident, none, is_token)});
+    var ident = self.newTVarNode(vartk1);
+    const none = self.newTypeNode(Type.newTag(ks.NoneVar, .TkNone).box(self.al), token);
+    const cond = self.newBinaryNode(ident, none, token.tkFrom("is", .TkIs));
     // return $t
-    const ret = self.newNode(.{.NdRet = tir.RetNode.init(ident, vartk1)});
+    const ret = self.newRetNode(ident.clone(self.al), vartk1);
     const then = tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{ret}), self.al);
     const els = tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{}), self.al);
-    const ifs = self.newNode(.{.NdSimpleIf = tir.SimpleIfNode.init(cond, then, els)});
+    const ifs = self.newSimpleIfNode(cond, then, els);
     // unwrap
-    const zero = self.newNode(.{.NdNumber = tir.NumberNode.init(token.tkFrom("0", .TkNumber), 0)});
-    const val = self.newNode(.{.NdDotAccess = tir.DotAccessNode.init(ident.clone(self.al), zero)});
-    const decl2 = self.newNode(.{.NdVarDecl = tir.VarDeclNode.init(vartk2, val, null)});
+    const zero = self.newNumberNode(token.tkFrom("0", .TkNumber), 0);
+    const decl2 = self.newVarDeclNode(vartk2, self.newDotAccessNode(ident.clone(self.al), zero, false));
     self.block.appendSlice(@constCast(&[_]*Node{decl1, ifs, decl2}));
     if (util.getMode() == .Debug) {
       Node.render(decl1, 0, &self.u8w) catch {};
@@ -207,7 +257,60 @@ pub const Desugar = struct {
       Node.render(decl2, 0, &self.u8w) catch {};
       logger.debug("deref:\n{s}\n", .{self.u8w.items()});
     }
-    return self.newNode(.{.NdTVar = tir.TVarNode.init(vartk2)});
+    return self.newTVarNode(vartk2);
+  }
+
+  fn desForLoop(self: *Desugar, node: *tir.ForNode, counter: ?Token) *Node {
+    // for (i,)? f in foo ... end
+    const ident = node.ident.toToken();
+    // let itr = @iter(foo)
+    const itr = ident.tkFrom(self.namegen.generate("$itr", .{}), .TkIdent);
+    const tmp = ident.tkFrom(self.namegen.generate("$tmp", .{}), .TkIdent);
+    const tmp_ident = self.newTVarNode(tmp);
+    const iter_func_name = self.newTVarNode(ident.tkFrom(ks.IterVar, .TkIdent));
+    const decl1 = self.newVarDeclNode(itr, self.newCallNode(iter_func_name, &[_]*Node{node.itrbl}));
+    // let i = -1
+    var count_decl: ?*Node = null;
+    var count_incr: ?*Node = null;
+    if (counter) |c| {
+      const minus_one = self.newNumberNode(c.tkFrom("-1", .TkNumber), -1);
+      count_decl = self.newVarDeclNode(c, minus_one);
+      // i = i + 1
+      const one = self.newNumberNode(c.tkFrom("1", .TkNumber), 1);
+      var cvar = self.newTVarNode(c);
+      const add = self.newBinaryNode(cvar.clone(self.al), one, c.tkFrom("+", .TkPlus));
+      count_incr = self.newExprStmtNode(self.newAssignNode(cvar, add, c.tkFrom("=", .TkEqual)), false);
+    }
+    // while true
+    const while_cond = self.newBoolNode(ident.tkFrom("true", .TkTrue));
+    // let f = itr.next()
+    const next_da = self.newDotAccessNode(self.newTVarNode(itr), self.newTVarNode(ident.tkFrom("next", .TkIdent)), false);
+    const decl2 = self.newVarDeclNode(tmp, self.newCallNode(next_da, &[_]*Node{}));
+    // if f == None
+    const none = self.newTypeNode(Type.newTag(ks.NoneVar, .TkNone).box(self.al), ident);
+    const if_cond = self.newBinaryNode(tmp_ident.clone(self.al), none, ident.tkFrom("is", .TkIs));
+    // break
+    const brk = self.newControlNode(ident.tkFrom("break", .TkBreak));
+    const if_then = tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{brk}), self.al);
+    // else: let f = $tmp.0
+    const zero = self.newNumberNode(ident.tkFrom("0", .TkNumber), 0);
+    const deref = self.newDotAccessNode(tmp_ident, zero, false);
+    const decl3 = self.newVarDeclNode(ident, deref);
+    node.then.block().prepend(decl3, self.al);
+    const if_els = node.then;
+    const ifs = self.newSimpleIfNode(if_cond, if_then, if_els);
+    const while_then = tir.BlockNode.newBlockWithNodes(@constCast(
+      if (count_incr) |inc| &[_]*Node{inc, decl2, ifs} else &[_]*Node{decl2, ifs}
+    ), self.al);
+    const while_node = self.newNode(.{.NdWhile = tir.WhileNode.init(while_cond, while_then)});
+    // we need scope nodes since this is a 'bare' do..end block with a bunch of declarations
+    const scope_entry = self.newScopeNode(true, false);
+    const scope_exit = self.newScopeNode(false, true);
+    const res = tir.BlockNode.newBlockWithNodes(@constCast(
+      if (count_decl) |cdecl| &[_]*Node{scope_entry, cdecl, decl1, while_node, scope_exit}
+      else &[_]*Node{scope_entry, decl1, while_node, scope_exit}
+    ), self.al);
+    return self.des(res);
   }
 
   inline fn subPipeHolderItems(self: *Desugar, sub: *Node, nodes: NodeItems) bool {
@@ -348,12 +451,10 @@ pub const Desugar = struct {
       if (lst.len() > 1) {
         // lift sub -> expr to vardecl
         const token = sub.getToken().tkFrom(self.namegen.generate("$d", .{}), .TkIdent);
-        const ident = self.newNode(.{.NdTVar = tir.TVarNode.init(token)});
-        self.block.append(self.newNode(.{
-          .NdVarDecl = tir.VarDeclNode.init(token, lst.itemAt(0).forceClone(self.al), null)
-        }));
+        const ident = self.newTVarNode(token);
+        self.block.append(self.newVarDeclNode(token, lst.itemAt(0).forceClone(self.al)));
         for (lst.items()) |expr| {
-          expr.* = ident.clone(self.al).*;
+          expr.* = ident.*;
         }
       }
     }
@@ -370,9 +471,7 @@ pub const Desugar = struct {
       }
       return node.right;
     }
-    var args = util.allocSlice(*Node, 1, self.al);
-    args[0] = node.left;
-    var res = self.newNode(.{.NdBasicCall = tir.BasicCallNode.init(node.right, args)});
+    var res = self.newCallNode(node.right, &[_]*Node{node.left});
     if (util.getMode() == .Debug) {
       res.render(0, &self.u8w) catch {};
       logger.debug("pipeline:\n{s}", .{self.u8w.items()});
@@ -385,11 +484,8 @@ pub const Desugar = struct {
     const token = node.right.getToken();
     const lhs = self.desExpr(node.left);
     const rhs = self.desExpr(node.right);
-    const ident = self.newNode(.{.NdTVar = tir.TVarNode.init(token.tkFrom("concat", .TkIdent))});
-    const access = self.newNode(.{.NdDotAccess = tir.DotAccessNode.init(lhs, ident)});
-    var args = util.allocSlice(*Node, 1, self.al);
-    args[0] = rhs;
-    return self.newNode(.{.NdBasicCall = tir.BasicCallNode.init(access, args)});
+    const access = self.newDotAccessNode(lhs, self.newTVarNode(token.tkFrom("concat", .TkIdent)), false);
+    return self.newCallNode(access, &[_]*Node{rhs});
   }
 
   fn desExpr(self: *Desugar, node: *Node) *Node {
@@ -481,6 +577,12 @@ pub const Desugar = struct {
         nd.cond = self.desExpr(nd.cond);
         nd.then = self.des(nd.then);
       },
+      .NdFor => |*nd| {
+        return self.desForLoop(nd, null);
+      },
+      .NdForCounter => |*nd| {
+        return self.desForLoop(&nd.forl.NdFor, nd.counter.toToken());
+      },
       .NdSimpleIf => |*nd| {
         nd.cond = self.desExpr(nd.cond);
         nd.then = self.des(nd.then);
@@ -488,11 +590,13 @@ pub const Desugar = struct {
       },
       .NdBasicFun, .NdGenericFun => {},
       .NdClass, .NdTrait => |*nd| {
-        for (nd.data.methods) |mth| {
+        for (nd.data.methods.items()) |mth| {
           self.desugarFun(mth) catch {};
         }
       },
-      .NdMatch => |*nd| self.desMatchStmt(nd),
+      .NdMatch => |*nd| {
+        self.desMatchStmt(nd);
+      },
       .NdRet => |*nd| {
         if (nd.expr) |expr| {
           nd.expr = self.desExpr(expr);
@@ -501,7 +605,9 @@ pub const Desugar = struct {
       .NdProgram => |*nd| {
         nd.decls = self._desugarBlock(nd.decls);
       },
-      else => return self.desExpr(node),
+      else => {
+        return self.desExpr(node);
+      },
     }
     return node;
   }

@@ -8,6 +8,7 @@ pub const ks = @import("constants.zig");
 pub const Keywords = std.ComptimeStringMap(TokenType, .{
   .{"return", .TkReturn},
   .{"if", .TkIf},
+  .{"in", .TkIn},
   .{"else", .TkElse},
   .{"elif", .TkElif},
   .{"for", .TkFor},
@@ -97,6 +98,7 @@ pub const TokenType = enum (u8) {
   TkFn,             // fn
   TkIs,             // is
   TkIf,             // if
+  TkIn,             // in
   TkOk,             // ok
   TkOr,             // or
   TkFor,            // for
@@ -235,6 +237,7 @@ pub const TokenType = enum (u8) {
       .Tk2Gthan => ">>",
       .TkAs => "as",
       .TkIf => "if",
+      .TkIn => "in",
       .TkOr => "or",
       .TkDo => "do",
       .TkFn => "fn",
@@ -387,26 +390,34 @@ pub const SrcKind = ParseMode;
 pub const TokenBit = struct {
   pos: u32,
   ty: TokenType,
-  line: u32,
+  line: u31,
+  src_kind: SrcKind,
 
   pub inline fn init(token: Token) TokenBit {
-    return TokenBit{.pos = token.offset, .ty = token.ty, .line = token.line};
+    return TokenBit{
+      .pos = token.offset, .ty = token.ty,
+      .line = @intCast(token.line), .src_kind = token.src_kind,
+    };
   }
 
   pub inline fn toToken(self: TokenBit) Token {
-    return Token.init(self.ty, self.pos, .User, self.ty.str(), self.line);
+    return Token.init(self.ty, self.pos, self.src_kind, self.ty.str(), self.line);
   }
 };
-
 
 pub const IdentToken = struct {
   val: [*]const u8,
   len: u8,
   line: u16,
-  offset: u32,
+  offset: u31,
+  src_kind: SrcKind,
 
   pub inline fn init(token: Token) IdentToken {
-    return IdentToken{.val = token.val, .len = @intCast(token.len), .line = @intCast(token.line), .offset = token.offset};
+    return IdentToken{
+      .val = token.val, .len = @intCast(token.len),
+      .line = @intCast(token.line), .offset = @intCast(token.offset),
+      .src_kind = token.src_kind,
+    };
   }
 
   pub inline fn lexeme(self: *const IdentToken) []const u8 {
@@ -416,7 +427,7 @@ pub const IdentToken = struct {
 
   pub inline fn toToken(self: IdentToken) Token {
     @setRuntimeSafety(false);
-    return Token.init(.TkIdent, self.offset, .User, self.val[0..@intCast(self.len)], @intCast(self.line));
+    return Token.init(.TkIdent, self.offset, self.src_kind, self.val[0..@intCast(self.len)], @intCast(self.line));
   }
 };
 
@@ -538,7 +549,7 @@ pub const Token = struct {
   }
 };
 
-pub const ParseMode = enum(u8) {
+pub const ParseMode = enum(u1) {
   Builtin = 0,
   User = 1,
 };

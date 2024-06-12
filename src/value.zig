@@ -348,10 +348,10 @@ pub const ObjNativeFn = extern struct {
   obj: Obj,
   arity: u32,
   fun: NativeFn,
-  name: usize,
+  name: *const ObjString,
 
-  pub fn getName(self: *const ObjNativeFn) []const u8 {
-    return NativeFns[self.name];
+  pub inline fn getName(self: *const ObjNativeFn) []const u8 {
+    return self.name.string();
   }
 };
 
@@ -382,6 +382,15 @@ pub const ObjClass = extern struct {
   pub inline fn getMethodWithName(self: *@This(), name: *const ObjString) ?Value {
     for (self.methods[0..self.mlen]) |mtd| {
       if (asClosure(mtd).fun.name == name) {
+        return mtd;
+      }
+    }
+    return null;
+  }
+
+  pub inline fn getNativeMethodWithName(self: *@This(), name: *const ObjString) ?Value {
+    for (self.methods[0..self.mlen]) |mtd| {
+      if (asNativeFn(mtd).name == name) {
         return mtd;
       }
     }
@@ -1182,7 +1191,7 @@ pub fn createNativeFn(vm: *VM, zfun: NativeFn, arity: u32, name: usize) *ObjNati
   var fun = @call(.always_inline, createObject, .{vm, .objnativefn, null, ObjNativeFn});
   fun.fun = zfun;
   fun.arity = arity;
-  fun.name = name;
+  fun.name = createString(vm, &vm.strings, NativeFns[name], false);
   return fun;
 }
 

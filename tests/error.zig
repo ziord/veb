@@ -974,7 +974,7 @@ test "generic-classes-2" {
   \\ q.items()[0].len() - '2'
   \\ x.pulse().getGen()(5)
   ;
-    try doErrorTest(src, 5, [_][]const u8{
+  try doErrorTest(src, 5, [_][]const u8{
     "type 'Fox{num}' has no property 'y'",
     "Type 'Error(num)' is not indexable",
     "Type 'num' is not indexable",
@@ -1019,7 +1019,7 @@ test "generic-classes-3" {
   \\ let w = Fox{'mia'}('mia', 'mia', 'mia')
   \\ let j: Poo{'miah'} = Fox{'mia'}('mia')
   ;
-    try doErrorTest(src, 8, [_][]const u8{
+  try doErrorTest(src, 8, [_][]const u8{
     "Expected type 'num' + 'num' but found 'List{mia}' + 'num'",
     "Could not resolve type of ident: 'j'",
     "Could not resolve type of ident: 'p'",
@@ -1028,6 +1028,29 @@ test "generic-classes-3" {
     "Expected type 'num' + 'num' but found 'str' + 'str'",
     "Argument type mismatch. Expected type 'mia' but found 'num'",
     "Cannot initialize type 'Poo{miah}' with type 'Fox{mia} instance'"
+  });
+}
+
+test "generic-classes-4" {
+  const src =
+  \\ class Foo{T}
+  \\   pub def see(x: T): Bar{T}
+  \\    return Bar{T}()
+  \\   end
+  \\ end
+  \\
+  \\ class Bar{U}
+  \\    pub def ees(y: U): Foo{U}
+  \\      return Foo{U}()
+  \\    end
+  \\ end
+  \\
+  \\ let j = Foo{num}()
+  \\ let t = j.see((5))
+  \\ t.ees('oops')
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Argument type mismatch. Expected type 'num' but found 'str'"
   });
 }
 
@@ -1137,6 +1160,16 @@ test "class init" {
   });
 }
 
+test "patterns-0.<empty match>" {
+  const src =
+  \\ match ('a', 'b')
+  \\ end
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "match statement missing case arms"
+  });
+}
+
 test "patterns-1.<ordinary match>" {
   const src =
   \\ match ('a', 'b')
@@ -1196,6 +1229,59 @@ test "patterns-3.<nested match>" {
   try doErrorTest(src, 2, [_][]const u8{
     "possible redundant case",
     "case (('a', t, ..) as d, ..) => do",
+  });
+}
+
+test "patterns-3.1.<exhaustiveness>" {
+  const src =
+  \\ let i = [1, 2]
+  \\ let k = (i.get(0), i.get(1))
+  \\ match k
+  \\  case (None, None) => 0
+  \\  case (None, _) => 1
+  \\  case (_, None) => 2
+  \\ end
+  ;
+  try doErrorTest(src, 3, [_][]const u8{
+    "inexhaustive pattern match.",
+    "Remaining pattern type(s):",
+    "Tuple(_, Just(num))",
+  });
+}
+
+test "patterns-3.2.<redundancy>" {
+  const src =
+  \\ let i = [1, 2]
+  \\ let k = (i.get(0), i.get(1))
+  \\ match k
+  \\  case (None, None) => assert(false, 'a')
+  \\  case (Just(a), Just(b)) => assert(true, 'b')
+  \\  case (_, Just(_)) => assert(false, 'red')
+  \\  case (None, _) => assert(false, 'c')
+  \\  case (_, None) => assert(false, 'd')
+  \\ end
+  \\ 1/''
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "possible redundant case",
+    "case (None, _) => assert(false, 'c')",
+  });
+}
+
+test "patterns-3.3.<redundancy>" {
+  const src =
+  \\ let i = [1, 2]
+  \\ let k = (i.get(0), i.get(1))
+  \\ match k
+  \\  case (None, None) => 0
+  \\  case (None, _) => 1
+  \\  case (_, None) => 2
+  \\  case (None, Just(_)) => 3
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "possible redundant case",
+    "case (None, Just(_)) => 3",
   });
 }
 
@@ -2031,7 +2117,7 @@ test "patterns-37.<inexhaustive rested patterns>" {
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "List{str}",
+    "Map{str, _}",
   });
 }
 
@@ -2244,6 +2330,32 @@ test "patterns-47.<missing patterns>" {
     "Legion(_, _, _, false)",
     "Panda(_, str)",
     "Panda(num, _)",
+    "Legion(_, num, _, _)",
+    "Legion(str, _, _, _)"
+  });
+}
+
+test "patterns-47b.<missing patterns>" {
+  const src =
+  \\ class Panda
+  \\  pub x: num
+  \\  pub y: str
+  \\  def init(a: num, b: str)
+  \\    self.x = a
+  \\    self.y = b
+  \\  end
+  \\ end
+  \\ type Legion = Legion(str, num, str, bool)
+  \\ let j = Legion('a', 5, 'boy', true)
+  \\ match j
+  \\  case Legion('a', 5, 'boy', true) => println('you rock!')
+  \\ end
+  ;
+ try doErrorTest(src, 6, [_][]const u8{
+    "inexhaustive pattern match.",
+    "Remaining pattern type(s):",
+    "Legion(_, _, _, false)",
+    "Legion(_, _, str, _)",
     "Legion(_, num, _, _)",
     "Legion(str, _, _, _)"
   });
@@ -2572,6 +2684,33 @@ test "aspec.<methods 1>" {
 test "aspec.<methods 2>" {
   const src =
   \\ class Fish
+  \\  x: str
+  \\  pub y: num
+  \\  j: List{num}
+  \\
+  \\  def init()
+  \\    self.x = 'a'
+  \\    self.y = 0
+  \\    self.j = [] as List{num}
+  \\  end
+  \\
+  \\  def fox()
+  \\    print((def () => self.x)())
+  \\    return 5
+  \\  end
+  \\ end
+  \\
+  \\ Fish()
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "access of private field 'x' outside its defining class",
+    "print((def () => self.x)())",
+  });
+}
+
+test "aspec.<methods 2.5>" {
+  const src =
+  \\ class Fish
   \\  pub x: str
   \\  pub y: num
   \\  j: List{num}
@@ -2580,6 +2719,9 @@ test "aspec.<methods 2>" {
   \\    self.x = 'a'
   \\    self.y = 0
   \\    self.j = [] as List{num}
+  \\  end
+  \\
+  \\  def doom()
   \\    print((def () => self.fox())())
   \\  end
   \\
@@ -2590,8 +2732,9 @@ test "aspec.<methods 2>" {
   \\
   \\ Fish()
   ;
-  try doErrorTest(src, 1, [_][]const u8{
+  try doErrorTest(src, 2, [_][]const u8{
     "access of private method 'fox' outside its defining class",
+    "print((def () => self.fox())())",
   });
 }
 
@@ -2646,6 +2789,43 @@ test "tag namespaces .3" {
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "Cannot initialize type 'A' with type 'T'",
+  });
+}
+
+test "binary tree" {
+  const src =
+  \\ type Tree{a} =
+  \\  | Node(val: a, lhs: Tree{a}, rhs: Tree{a})
+  \\  | Empty
+  \\ def print_tree{a}(tree: Tree{a})
+  \\  match tree
+  \\    case Empty => println("Empty")
+  \\    case Node(val, lhs, rhs) => do
+  \\      println("Node:", val)
+  \\      print("Left: ")
+  \\      print_tree(lhs)
+  \\      print("Right: ")
+  \\      print_tree(rhs)
+  \\    end
+  \\  end
+  \\ end
+  \\ let tree = Node(
+  \\    1,
+  \\    Node (
+  \\      2,
+  \\      Node (3, Empty, Empty),
+  \\      Node (4, Empty, Empty)
+  \\    ),
+  \\    Node (
+  \\      5,
+  \\      Node (6, Empty, Empty),
+  \\      Node (7, Empty, Empty)
+  \\    )
+  \\  )
+  \\ print_tree(tree as Tree{str})
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Cannot cast from type 'Node(num, Node(num, {...}, {...}) | Empty, Node(num, {...}, {...}) | Empty)' to type 'Tree{str}'",
   });
 }
 
@@ -2957,6 +3137,76 @@ test "traits <required methods .10>" {
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "type 'Bar' does not implement the trait 'Display'",
+  });
+}
+
+test "traits <required methods .11>" {
+  const src =
+  \\ class Range: Iter{num}
+  \\    curr = 0
+  \\    start: num
+  \\    stop: Maybe{num}
+  \\    step: Maybe{num}
+  \\
+  \\    def init(start: num, stop: Maybe{num}, step: Maybe{num})
+  \\      self.start = start
+  \\      self.stop = stop
+  \\      self.step = step
+  \\    end
+  \\
+  \\    def get_step()
+  \\      return match self.step
+  \\        case Just(s) => s
+  \\        case None => 1
+  \\      end
+  \\    end
+  \\
+  \\    pub def iter()
+  \\      return self
+  \\    end
+  \\ end
+  \\
+  \\ let range = Range(1, Just(12), Just(2))
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "Expected method 'fn (): Iterator{num}' but found 'fn (): Range'",
+    "pub def iter()",
+  });
+}
+
+test "traits <required methods .12>" {
+  const src =
+  \\ class Range: Iter{num} | Iterator{num}
+  \\    curr = 0
+  \\    start: num
+  \\    stop: Maybe{num}
+  \\    step: Maybe{num}
+  \\
+  \\    def init(start: num, stop: Maybe{num}, step: Maybe{num})
+  \\      self.start = start
+  \\      self.stop = stop
+  \\      self.step = step
+  \\    end
+  \\
+  \\    def get_step()
+  \\      return match self.step
+  \\        case Just(s) => s
+  \\        case None => 1
+  \\      end
+  \\    end
+  \\
+  \\    pub def iter()
+  \\      return self
+  \\    end
+  \\ end
+  \\
+  \\ let range = Range(1, Just(12), Just(2))
+  ;
+  try doErrorTest(src, 6, [_][]const u8{
+    "type 'Range' does not satisfy the trait constraint(s) of 'Iter{num} & Iterator{num}'",
+    "class Range: Iter{num} | Iterator{num}",
+    "The following method(s) are not implemented",
+    "next", " : ", "fn (): Just(num) | None",
   });
 }
 
@@ -3423,7 +3673,7 @@ test "traits <generic-function-bounds .6>" {
   \\ let r = format(Foo(), Bar(), Bar())
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "type 'A' has no property 'clone'",
+    "type 'Display' has no property 'clone'",
     "return a.clone().fmt() <> \" $ \" <> b.fmt() <> \" $ \" <> c.clone().fmt()"
   });
 }
@@ -3471,7 +3721,7 @@ test "traits <generic-function-bounds .7>" {
   \\ assert(r == "Foo() $ Bar() $ Foo()", 'should be same')
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Cannot cast from type 'Clone' to type 'A'"
+    "Cannot cast from type 'Clone' to type 'Display'"
   });
 }
 
@@ -3571,7 +3821,7 @@ test "traits <generic missing traits>" {
   \\ let r = format{Foo, Bar, Foo}(Foo(), Bar(), Foo())
   ;
   try doErrorTest(src, 4, [_][]const u8{
-    "type 'Foo' does not implement the trait 'Clone{C}'",
+    "type 'Foo' does not implement the trait 'Clone{Foo}'",
     "class Foo: Display",
     "This error was triggered from here:",
     "let r = format{Foo, Bar, Foo}(Foo(), Bar(), Foo())",
@@ -3648,7 +3898,7 @@ test "traits <where without generics>" {
   });
 }
 
-test "traits <resolution limits>" {
+test "traits <generics & resolution .1>" {
   const src =
   \\ trait Speaks
   \\  pub def speak(): str;
@@ -3657,13 +3907,35 @@ test "traits <resolution limits>" {
   \\ trait Barks{T}
   \\   where
   \\      T: Speaks
-  \\  def bark(): str;
   \\ end
   \\
-  \\ class Foo{T}: Barks{Foo{T}}
-  \\  def bark()
-  \\    return "Foo barking here!"
-  \\  end
+  \\ class Foo{T}: Speaks | Barks{Foo{T}}
+
+  \\ end
+  \\
+  \\ Foo{num}()
+  ;
+  try doErrorTest(src, 6, [_][]const u8{
+    "type 'Foo{num}' does not satisfy the trait constraint(s) of 'Speaks'",
+    "class Foo{T}: Speaks | Barks{Foo{T}}",
+    "The following method(s) are not implemented:",
+    "speak", " : ", "fn (): str",
+  });
+}
+
+test "traits <generics & resolution .2>" {
+  const src =
+  \\ trait Speaks
+  \\  pub def speak(): str;
+  \\ end
+  \\
+  \\ trait Barks{T}
+  \\   where
+  \\      T: Speaks
+  \\  pub def bark(): str;
+  \\ end
+  \\
+  \\ class Foo{T}: Barks{Foo{T}} | Speaks
   \\  pub def speak()
   \\    return "Foo speaking here!"
   \\  end
@@ -3671,9 +3943,11 @@ test "traits <resolution limits>" {
   \\
   \\ Foo{num}()
   ;
-  try doErrorTest(src, 2, [_][]const u8{
-    "I cannot resolve the trait type 'Speaks' for class 'Foo{num}'",
-    "This trait may have been specified in a way that is too complicated for my resolution process."
+  try doErrorTest(src, 6, [_][]const u8{
+    "type 'Foo{num}' does not satisfy the trait constraint(s) of 'Barks{Foo{num}} & Speaks'",
+    "class Foo{T}: Barks{Foo{T}} | Speaks",
+    "The following method(s) are not implemented:",
+    "bark", " : ", "fn (): str",
   });
 }
 
@@ -3777,5 +4051,318 @@ test "parser recovery" {
   try doErrorTest(src, 2, [_][]const u8{
     "expected token 'end' but found 'where'",
     "cannot use the identifier '_' in this context."
+  });
+}
+
+test "parameter resolution" {
+  const src =
+  \\ def iter{U}(itr: Iterator{U})
+  \\ end
+  \\
+  \\ class Foo: Iterator{num} | Iter{num}
+  \\  state = 0
+  \\  data: List{num}
+  \\
+  \\  def init(d: List{num})
+  \\    self.data = d
+  \\  end
+  \\
+  \\  pub def fun(x: Iterator{str})
+  \\    _ = x
+  \\  end
+  \\
+  \\  pub def next()
+  \\    if self.state >= self.data.len()
+  \\      return None
+  \\    end
+  \\    self.state += 1
+  \\    return Just(self.data[self.state - 1])
+  \\  end
+  \\
+  \\  pub def iter()
+  \\    return Foo(self.data)
+  \\  end
+  \\ end
+  \\
+  \\ let f = Foo([1, 2, 3, 4])
+  \\ iter{str}(f)
+  \\ f.fun(f)
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "Argument type mismatch. Expected type 'Iterator{str}' but found 'Foo instance'",
+    "Argument type mismatch. Expected type 'Iterator{str}' but found 'Foo instance'",
+  });
+}
+
+test "duplicate declaration .1" {
+  const src =
+  \\ class Foo
+  \\ end
+  \\
+  \\ class Foo:Iter{str}
+  \\ end
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "illegal duplicate declaration (class)",
+    "class Foo:Iter{str}",
+    "'Foo' is also declared here",
+    "class Foo",
+  });
+}
+
+test "duplicate declaration .2" {
+  const src =
+  \\ trait Foo
+  \\ end
+  \\
+  \\ trait Foo
+  \\ end
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "illegal duplicate declaration (trait)",
+    "trait Foo",
+    "'Foo' is also declared here",
+    "trait Foo",
+  });
+}
+
+test "duplicate declaration .3" {
+  const src =
+  \\ trait Foo
+  \\ end
+  \\
+  \\ class Foo
+  \\ end
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "illegal duplicate declaration (class)",
+    "class Foo",
+    "'Foo' is also declared here",
+    "trait Foo",
+  });
+}
+
+test "duplicate declaration .4" {
+  const src =
+  \\ trait Iterator{U}
+  \\  pub def next(): Maybe{U};
+  \\ end
+  \\
+  \\ trait Iter{T}
+  \\  pub def iter(): Iterator{T};
+  \\ end
+  ;
+  try doErrorTest(src, 8, [_][]const u8{
+    "illegal duplicate declaration (trait)",
+    "trait Iterator{U}",
+    "'Iterator' is also declared here:",
+    "trait Iterator{U}",
+    "illegal duplicate declaration (trait)",
+    "trait Iter{T}",
+    "'Iter' is also declared here:",
+    "trait Iter{T}",
+  });
+}
+
+test "duplicate declaration .5 + error recovery" {
+  const src =
+  \\ def ListIterator{U}
+  \\  pub def next(): Maybe{U};
+  \\ end
+  \\
+  \\ trait Iter{T}
+  \\  pub def iter(): Iterator{T};
+  \\ end
+  ;
+  try doErrorTest(src, 8, [_][]const u8{
+    "illegal duplicate declaration (function)",
+    "def ListIterator{U}",
+    "'ListIterator' is also declared here:",
+    "class ListIterator{T}: Iterator{T}",
+    "illegal duplicate declaration (trait)",
+    "trait Iter{T}",
+    "'Iter' is also declared here:",
+    "trait Iter{T}",
+  });
+}
+
+test "builtin-functions-override" {
+  const src =
+  \\ def exit(x: num)
+  \\  return x - 2
+  \\ end
+  \\
+  \\ assert(exit(10) == 8, 'okay')
+  \\
+  \\ def panic(x: num)
+  \\  return x - 2
+  \\ end
+  \\
+  \\ assert(panic(10) == 8, 'okay')
+  \\
+  \\ let check = assert
+  \\ def assert{T}(t: T)
+  \\  check(t, 'nice')
+  \\ end
+  \\ assert(!!check)
+  \\
+  \\ def print(x*: any)
+  \\  return x
+  \\ end
+  \\ check(print('fox', 'fry', 1, 2, 3)[0] == 'fox', 'should be "fox"')
+  ;
+  try doErrorTest(src, 8, [_][]const u8{
+    "illegal duplicate declaration (function)",
+    "def assert{T}(t: T)",
+    "'assert' is also declared here:",
+    "def assert(arg: bool, msg: str): void",
+    "illegal duplicate declaration (function)",
+    "def print(x*: any)",
+    "'print' is also declared here:",
+    "def print(args*: any)",
+  });
+}
+
+test "definite field assignment .1" {
+  const src =
+  \\ class Foo
+  \\  x: num
+  \\
+  \\  def init()
+  \\    self.x = self.x
+  \\  end
+  \\ end
+  \\
+  \\ Foo()
+  ;
+  try doErrorTest(src, 3, [_][]const u8{
+    "This field appears to be used in its own initialization",
+    "self.x = self.x",
+    "I am unable to deduce that the field 'x' is definitely initialized",
+  });
+}
+
+test "definite field assignment .2" {
+  const src =
+  \\ class Foo
+  \\  x: num
+  \\
+  \\  def init()
+  \\    self.x = match 5
+  \\      case 1..12 => 10
+  \\      case _ => self.x
+  \\    end
+  \\  end
+  \\ end
+  \\
+  \\ Foo()
+  ;
+  try doErrorTest(src, 3, [_][]const u8{
+    "This field appears to be used in its own initialization",
+    "case _ => self.x",
+    "I am unable to deduce that the field 'x' is definitely initialized",
+  });
+}
+
+test "class in init method .1" {
+  const src =
+  \\ class Foo
+  \\  x: num
+  \\
+  \\  def init()
+  \\    class Fooby
+  \\    end
+  \\  end
+  \\ end
+  \\
+  \\ Foo()
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "cannot define a class in the init method of a class",
+    "class Fooby",
+  });
+}
+
+test "class in init method .2" {
+  const src =
+  \\ class Foo
+  \\  def init
+  \\    do
+  \\      do
+  \\        class Pox
+  \\        end
+  \\      end
+  \\    end
+  \\  end
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "cannot define a class in the init method of a class",
+    "class Pox",
+  });
+}
+
+test "function in init method .1" {
+  const src =
+  \\ class Foo
+  \\  x: num
+  \\
+  \\  def init()
+  \\    def Fooby
+  \\    end
+  \\  end
+  \\ end
+  \\
+  \\ Foo()
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "cannot define a function in the init method of a class",
+    "def Fooby",
+  });
+}
+
+test "function in init method .2" {
+  const src =
+  \\ class Fish
+  \\  pub x: str
+  \\  pub y: num
+  \\  j: List{num}
+  \\
+  \\  def init()
+  \\    self.x = (def () => self.x)()
+  \\    self.y = 0
+  \\    self.j = [] as List{num}
+  \\  end
+  \\
+  \\  def fox()
+  \\    return 5
+  \\  end
+  \\ end
+  \\
+  \\ Fish()
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "cannot define a function in the init method of a class",
+    "self.x = (def () => self.x)()",
+  });
+}
+
+test "for loop <scopes>" {
+  const src =
+  \\ let i = 'a'
+  \\ let j = 'b'
+  \\ let l = [] as List{fn(): num}
+  \\ for i, j in range(1, Just(12), None) do
+  \\  _ = l.append(def () => j)
+  \\ end
+  \\ let expected = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  \\ for idx, fun in l
+  \\  _ = assert(fun() == expected[i], 'should be same')
+  \\ end
+  \\ assert(i == 'a' and j == 'b', 'should be same')
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "Cannot index 'List{num}' type with type 'str'",
+    "_ = assert(fun() == expected[i], 'should be same')",
   });
 }

@@ -1564,7 +1564,6 @@ pub const DecisionTreeTransformer = struct {
     // transpile if condition
     var if_branch = swch.branches[0];
     var els_branch = swch.branches[1];
-    const skip = els_branch.rhs.isSwitch() and els_branch.rhs.swch.branches[0].lhs.cons.tag == .List;
     const id = swch.occ.clone(self.allocator);
     var cons = &if_branch.lhs.cons;
     const from_map = cons.from_map;
@@ -1590,7 +1589,7 @@ pub const DecisionTreeTransformer = struct {
         const decl = Node.new(.{.NdVarDecl = tir.VarDeclNode.init(cons.node.?.NdTVar.token, slice, null)}, self.allocator);
         nodes.append(decl, self.allocator);
       }
-      const _then = try self.tDecision(if_branch.rhs, parent, false);
+      const _then = try self.tDecision(if_branch.rhs, parent, true);
       if (_then.isBlock()) {
         nodes.appendSlice(_then.block().nodes, self.allocator);
       } else {
@@ -1601,7 +1600,7 @@ pub const DecisionTreeTransformer = struct {
       const ife = self.newIfElseNode(
         Node.toMatchCondition(cond, self.allocator),
         then,
-        self.blockOrToBlock(try self.tDecision(els_branch.rhs, parent, skip))
+        self.blockOrToBlock(try self.tDecision(els_branch.rhs, parent, true))
       );
       if (skip_cons_test) return ife;
       const tyn = self.newTypeNodeWithSkip(Type.newBuiltinGenericClass(ks.ListVar, .TkList, self.allocator), swch.token);
@@ -1628,7 +1627,7 @@ pub const DecisionTreeTransformer = struct {
           nodes.appendAssumeCapacity(self.constructorSubscriptToVarDecl(arg, pair.val, (i / 2)));
         }
       }
-      const _then = try self.tDecision(if_branch.rhs, parent, false);
+      const _then = try self.tDecision(if_branch.rhs, parent, true);
       if (_then.isBlock()) {
         nodes.appendSlice(_then.block().nodes, self.allocator);
       } else {
@@ -1639,7 +1638,7 @@ pub const DecisionTreeTransformer = struct {
       return self.newIfElseNode(
         Node.toMatchCondition(cond, self.allocator),
         then,
-        self.blockOrToBlock(try self.tDecision(els_branch.rhs, parent, skip))
+        self.blockOrToBlock(try self.tDecision(els_branch.rhs, parent, true))
       );
     }
   }
@@ -1648,15 +1647,10 @@ pub const DecisionTreeTransformer = struct {
     // transpile if condition
     var if_branch = swch.branches[0];
     var els_branch = swch.branches[1];
-    const skip = els_branch.rhs.isSwitch() and els_branch.rhs.swch.branches[0].lhs.cons.tag == .Tuple;
     const id = swch.occ.clone(self.allocator);
     var cons = &if_branch.lhs.cons;
     var nodes = tir.NodeListU.init();
     const then = self.newBlock();
-    const len = self.newNumberNode(swch.token, @floatFromInt(cons.args.len));
-    const op = if (cons.rested) geqToken(swch.token) else eqeqToken(swch.token);
-    const cond = Node.new(.{.NdBinary = tir.BinaryNode.init(self.newMethodCall(id, ks.LenVar), len, op)}, self.allocator);
-    cond.NdBinary.allow_rested = cons.rested;
     nodes.ensureTotalCapacity(cons.args.len, self.allocator);
     for (cons.args, 0..) |arg, index| {
       // don't capture wildcard patterns
@@ -1664,7 +1658,7 @@ pub const DecisionTreeTransformer = struct {
       // transform vars to var decl
       nodes.appendAssumeCapacity(self.constructorSubscriptToVarDecl(arg, id, index));
     }
-    const _then = try self.tDecision(if_branch.rhs, parent, false);
+    const _then = try self.tDecision(if_branch.rhs, parent, skip_cons_test);
     if (_then.isBlock()) {
       nodes.appendSlice(_then.block().nodes, self.allocator);
     } else {
@@ -1672,16 +1666,10 @@ pub const DecisionTreeTransformer = struct {
     }
     then.block().nodes = nodes.items();
     std.debug.assert(els_branch.lhs.isWildcard());
-    const ife = self.newIfElseNode(
-      Node.toMatchCondition(cond, self.allocator),
-      then,
-      self.blockOrToBlock(try self.tDecision(els_branch.rhs, parent, skip))
-    );
-    if (skip_cons_test) return ife;
+    const els = self.blockOrToBlock(try self.tDecision(els_branch.rhs, parent, skip_cons_test));
     const tyn = self.newTypeNodeWithSkip(Type.newBuiltinGenericClass(ks.TupleVar, .TkTuple, self.allocator), swch.token);
     const t_cond = Node.new(.{.NdBinary = tir.BinaryNode.init(id, tyn, isToken(swch.token))}, self.allocator);
-    const t_then = tir.BlockNode.newBlockWithNodes(@constCast(&[_]*Node{ife}), self.allocator);
-    return self.newIfElseNode(Node.toMatchCondition(t_cond, self.allocator), t_then, self.newBlock());
+    return self.newIfElseNode(Node.toMatchCondition(t_cond, self.allocator), then, els);
   }
 
   /// Switch (occ) test (..., body(..)) test (Wildcard(_) body(..)) ->

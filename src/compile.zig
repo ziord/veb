@@ -558,6 +558,24 @@ pub const Compiler = struct {
     }
   }
 
+  fn scrampleGenericMethods(self: *Self) void {
+    for (self.generics.values()) |list| {
+      for (list.items()) |itm| {
+        if (itm.instance.isClass()) {
+          var cls = &itm.instance.NdClass;
+          if (cls.data.builtin) continue;
+          if (cls.data.methods.isNotEmpty()) {
+            for (cls.data.methods.items()) |mth| {
+              if (mth.isGenericMtd()) {
+                mth.getBasicFun().data.name.? = mth.getBasicFun().data.name.?.tkFrom("$$", .TkIdent);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   /// preallocate all globals in `gsyms` or `globals`
   fn preallocateGlobals(self: *Self, toplevels: tir.NodeItems) void {
     // TODO: update
@@ -1672,6 +1690,7 @@ pub const Compiler = struct {
     self.leaveNoOpt();
     self.incScope();
     for (node.data.methods.items(), 0..) |mth, i| {
+      if (mth.isGenericMtd()) continue;
       const mreg = try self.cFun(mth, true, _reg);
       self.fun.code.write3ArgsInst(.Smtd, mreg, dst, @intCast(i), token.line, self.vm);
     }
@@ -1728,11 +1747,12 @@ pub const Compiler = struct {
       .NdMCondition => |*nd| self.c(nd.tst.NdCondition.cond, reg),
       .NdParam, .NdField, .NdPubField,
       .NdProgram, .NdCondition, .NdLblArg,
-      .NdOrElse, .NdPipeHolder, .NdFor, .NdForCounter => unreachable,
+      .NdOrElse, .NdPipeHolder, .NdFor, .NdForCounter, .NdGenericMtd => unreachable,
     };
   }
 
   pub fn compile(self: *Self, node: *Node) !void {
+    self.scrampleGenericMethods();
     self.preallocateGlobals(node.NdProgram.decls);
     const token = node.getToken();
     util.assert(

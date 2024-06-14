@@ -2276,6 +2276,117 @@ test "patterns-45.<redundancy in constant types>" {
   });
 }
 
+test "patterns-45b.<redundancy in tuples>" {
+  const src =
+  \\ let tuple = ('a', 'b', 'c')
+  \\ match tuple
+  \\   case ('a', '1', 'c') => 'one' |> println
+  \\   case (..) => 'two' |> println
+  \\   case _ => 'three' |> println
+  \\ end
+  \\ 1 / '1' # error propagation since we're testing a warning
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "possible redundant case",
+    "case _ => 'three' |> println"
+  });
+}
+
+test "patterns-45c.<redundancy in tuples>" {
+  const src =
+  \\ let tuple = (1, 2, 3)
+  \\ match tuple
+  \\   case (1, ..) => 'one' |> println
+  \\   case (..) as t => match t
+  \\    case (..) => 'ea' |> println
+  \\    case _ => 'rest' |> println
+  \\   end
+  \\   case _ => 'other' |> println
+  \\ end
+ \\ 1 / '1'
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "possible redundant case",
+    "case _ => 'rest' |> println",
+    "possible redundant case",
+    "case _ => 'other' |> println",
+  });
+}
+
+test "patterns-45d.<redundancy in list>" {
+  const src =
+  \\ let list = [1, 2, 3]
+  \\ match list
+  \\   case [1,] => 'one' |> println
+  \\   case [..t] => ('two', t) |> println
+  \\   case _ => 'else' |> println
+  \\ end
+  \\ 1 / '1'
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "possible redundant case",
+    "case _ => 'else' |> println",
+  });
+}
+
+test "patterns-45e.<redundancy in list>" {
+  const src =
+  \\ let list = [1, 2, 3]
+  \\ match list
+  \\   case [1,] => 'one' |> println
+  \\   case [..t] => match t
+  \\    case [..] => 'ea' |> println
+  \\    case _ => 'rest' |> println
+  \\   end
+  \\   case _ => 'other' |> println
+  \\ end
+  \\ 1 / '1'
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "possible redundant case",
+    "case _ => 'rest' |> println",
+    "possible redundant case",
+    "case _ => 'other' |> println",
+  });
+}
+
+test "patterns-45f.<redundancy in list (false +ve)>" {
+  const src =
+  \\ let list = [1, 2, 3]
+  \\ match list
+  \\   case [1,] => 'one' |> println
+  \\   case [..t] => match t
+  \\    case [..] => 'ea' |> println
+  \\   end
+  \\   case _ => 'other' |> println
+  \\ end
+  \\ 1 / '1'
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "possible redundant case",
+    "case [..] => 'ea' |> println", // false +ve
+    "possible redundant case",
+    "case _ => 'other' |> println",
+  });
+}
+
+test "patterns-45g.<redundancy in list (false +ve)>" {
+  const src =
+  \\ let list = [1, 2, 3]
+  \\ match list
+  \\   case [1,] => 'one' |> println
+  \\   case [..t] => match t
+  \\    case [..] => 'ea' |> println
+  \\   end
+  \\ end
+  \\ 1 / '1'
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "possible redundant case",
+    "case [..] => 'ea' |> println", // false +ve
+  });
+}
+
 test "patterns-46.<missing patterns>" {
   const src =
   \\ class Ant
@@ -3948,6 +4059,45 @@ test "traits <generics & resolution .2>" {
     "class Foo{T}: Barks{Foo{T}} | Speaks",
     "The following method(s) are not implemented:",
     "bark", " : ", "fn (): str",
+  });
+}
+
+test "traits <init>" {
+  const src =
+  \\ trait Oops
+  \\  def init(): str;
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "A trait may not define or specify the method 'init'",
+    "def init(): str;",
+  });
+}
+
+test "classes <generic-init>" {
+  const src =
+  \\ class Oops
+  \\  def init{T}() end
+  \\ end
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "Method 'init' cannot be generic.",
+    "def init{T}() end",
+  });
+}
+
+test "classes <generic-method>" {
+  const src =
+  \\ class Oops{T}
+  \\  def bad{T, U}(): str 5 end
+  \\ end
+  ;
+  try doErrorTest(src, 5, [_][]const u8{
+    "Warning: generic methods are experimental and should not be used unless absolutely necessary.",
+    "Duplicate generic type variable 'T'",
+    "def bad{T, U}(): str 5 end",
+    "Type variable also specified here:",
+    "class Oops{T}",
   });
 }
 

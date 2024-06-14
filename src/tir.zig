@@ -59,6 +59,7 @@ pub const NodeType = enum {
   NdOrElse,
   NdBasicFun,
   NdGenericFun,
+  NdGenericMtd,
   NdDotAccess,
   NdClass,
   NdTrait,
@@ -1252,6 +1253,35 @@ pub const GenericFunNode = struct {
   }
 };
 
+pub const MtdMetadata = struct{
+  tvar: ?*Type = null,
+  typ: ?*Type = null,
+  from: *Type,
+};
+
+/// NdGenericMtd
+pub const GenericMtdNode = struct {
+  params: ds.ArrayListUnmanaged(MtdMetadata),
+  /// NdGenericFun
+  gfun: *Node,
+
+  pub inline fn init(gfun: *Node) @This() {
+    return .{.params = ds.ArrayListUnmanaged(MtdMetadata).init(), .gfun = gfun};
+  }
+
+  pub fn clone(self: *@This(), al: Allocator) *Node {
+    var params = ds.ArrayListUnmanaged(MtdMetadata).initCapacity(self.params.len(), al);
+    params.appendSliceAssumeCapacity(self.params.items());
+    return Node.new(.{.NdGenericMtd = .{.params = params, .gfun = self.gfun}}, al);
+  }
+
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
+    _ = depth;
+    _ = self;
+    _ = try u8w.writer().write("<g.method>\n");
+  }
+};
+
 /// NdClass, NdTrait
 pub const StructNode = struct {
   name: IdentToken,
@@ -1535,6 +1565,7 @@ pub const Node = union(NodeType)  {
   NdOrElse: OrElseNode,
   NdBasicFun: BasicFunNode,
   NdGenericFun: GenericFunNode,
+  NdGenericMtd: GenericMtdNode,
   NdDotAccess: DotAccessNode,
   NdClass: StructNode,
   NdTrait: StructNode,
@@ -1614,9 +1645,16 @@ pub const Node = union(NodeType)  {
     };
   }
 
+  pub inline fn isGenericMtd(self: *const @This()) bool {
+    return switch (self.*) {
+      .NdGenericMtd => true,
+      else => false,
+    };
+  }
+
   pub inline fn isFun(self: *const @This()) bool {
     return switch (self.*) {
-      .NdGenericFun, .NdBasicFun => true,
+      .NdGenericMtd, .NdGenericFun, .NdBasicFun => true,
       else => false,
     };
   }
@@ -1899,12 +1937,18 @@ pub const Node = union(NodeType)  {
 
   pub fn getBasicFun(self: *@This()) *BasicFunNode {
     if (self.isBasicFun()) return &self.NdBasicFun;
-    return &self.NdGenericFun.fun.NdBasicFun;
+    if (self.isGenericFun()) return &self.NdGenericFun.fun.NdBasicFun;
+    return &self.NdGenericMtd.gfun.NdGenericFun.fun.NdBasicFun;
   }
 
-  pub fn getBasicCall(self: *@This()) *BasicCallNode {
+  pub inline fn getGenericFun(self: *@This()) *GenericFunNode {
+    if (self.isGenericFun()) return &self.NdGenericFun;
+    return &self.NdGenericMtd.gfun.NdGenericFun;
+  }
+
+  pub inline fn getBasicCall(self: *@This()) *BasicCallNode {
     if (self.isBasicCall()) return &self.NdBasicCall;
-    return getBasicCall(self.NdGenericCall.call);
+    return &self.NdGenericCall.call.NdBasicCall;
   }
 
   pub fn toCallNode(self: *@This()) CallNode {
@@ -2017,6 +2061,7 @@ pub const Node = union(NodeType)  {
         return Token.getDefaultToken();
       },
       .NdGenericFun => |*nd| nd.fun.getToken(),
+      .NdGenericMtd, => |*nd| nd.gfun.NdGenericFun.fun.getToken(),
       else => {
         switch (self.*) {
           .NdList, .NdTuple => |*nd| {
@@ -2109,12 +2154,11 @@ pub const Node = union(NodeType)  {
       .NdBasicFun => |*fun| if (fun.data.ret) |ret| ret else null,
       .NdCondition => |*nd| nd.cond.getType(),
       .NdMCondition => |*nd| nd.tst.getType(),
-      .NdGenericFun, .NdBlock, .NdSimpleIf,
+      .NdGenericFun, .NdGenericMtd, .NdBlock, .NdSimpleIf,
       .NdWhile, .NdFor, .NdForCounter, .NdControl,
       .NdScope, .NdLblArg, .NdFailMarker, .NdRedunMarker,
-      .NdEmpty, .NdDiagStartMarker,
-      .NdProgram, .NdClass, .NdTrait,
-      .NdMatch, .NdPipeHolder => null,
+      .NdEmpty, .NdDiagStartMarker, .NdProgram,
+      .NdClass, .NdTrait, .NdMatch, .NdPipeHolder => null,
       .NdBasicCall => |*nd| nd.typ,
       .NdGenericCall => |*nd| nd.call.getType(),
       inline else => |*nd| nd.typ,
@@ -2183,6 +2227,7 @@ pub const Node = union(NodeType)  {
       .NdLblArg => |*nd| nd.value.hasSugar(),
       .NdBasicFun => |*nd| nd.data.body.hasSugar(),
       .NdGenericFun => |*nd| nd.fun.hasSugar(),
+      .NdGenericMtd => |*nd| nd.gfun.NdGenericFun.fun.hasSugar(),
       .NdGenericCall => |*nd| nd.call.hasSugar(),
       .NdBasicCall => |*nd| nd.expr.hasSugar() or blk: {
         for (nd.args()) |arg| {
@@ -2320,6 +2365,9 @@ pub const Node = union(NodeType)  {
       },
       .NdGenericFun => |*nd| {
         return nd.fun.containsField(field);
+      },
+      .NdGenericMtd => |*nd| {
+        return nd.gfun.NdGenericFun.fun.containsField(field);
       },
       .NdLblArg => |*nd| {
         return nd.value.containsField(field);
@@ -2598,7 +2646,8 @@ pub const Type = struct {
       .Constant, .Concrete, .Variable, .Recursive, .TagOrClass => return self,
       .Function => |*fun| {
         if (map.get(self)) |ty| return ty;
-        var new = Type.init(.{.Function = Function.init(fun.data.ret._clone(map, al), null, fun.data.node, al)}).box(al);
+        const node = if (fun.data.node) |nd| if (!nd.isGenericMtd()) nd else nd.clone(al) else fun.data.node;
+        var new = Type.init(.{.Function = Function.init(fun.data.ret._clone(map, al), null, node, al)}).box(al);
         map.set(self, new, al);
         var _fun = new.function();
         if (fun.tparams) |tparams| {
@@ -4967,6 +5016,15 @@ pub const Class = struct {
     self.tparams = slice;
   }
 
+  pub inline fn appendMethodTy(self: *@This(), typ: *Type, al: Allocator) void {
+    self.data.methods.append(typ, al);
+  }
+
+  pub inline fn appendMethodTyAndNode(self: *@This(), typ: *Type, al: Allocator) void {
+    self.data.methods.append(typ, al);
+    self.data.node.?.NdClass.data.methods.append(typ.function().data.node.?, al);
+  }
+
   pub fn initTParamSlice(self: *@This(), typs: []*Type, _al: ?Allocator) void {
     if (_al) |al| {
       self.tparams = util.allocSlice(*Type, typs.len, al);
@@ -5027,7 +5085,7 @@ pub const Class = struct {
     if (self.data.node) |_node| {
       const data = if (_node.isClass()) _node.NdClass.data else _node.NdTrait.data;
       for (data.methods.items()) |mth| {
-        if (mth.NdBasicFun.data.name.?.valueEql(name)) {
+        if (mth.getBasicFun().data.name.?.valueEql(name)) {
           return mth;
         }
       }
@@ -5039,7 +5097,7 @@ pub const Class = struct {
     if (self.data.node) |_node| {
       const data = if (_node.isClass()) _node.NdClass.data else _node.NdTrait.data;
       for (data.methods.items(), 0..) |mth, i| {
-        if (mth.NdBasicFun.data.name.?.valueEql(name)) {
+        if (mth.getBasicFun().data.name.?.valueEql(name)) {
           return i;
         }
       }
@@ -5049,7 +5107,7 @@ pub const Class = struct {
 
   pub fn getMethodTy(self: *@This(), name: []const u8) ?*Type {
     for (self.data.methods.items()) |mth| {
-      if (mth.function().data.node.?.NdBasicFun.data.name.?.valueEql(name)) {
+      if (mth.function().data.node.?.getBasicFun().data.name.?.valueEql(name)) {
         return mth;
       }
     }

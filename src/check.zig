@@ -280,19 +280,20 @@ pub const TypeChecker = struct {
     /// list of conditions for which we may infer inexhaustiveness
     tests: TestList,
     /// list of missing patterns
-    missing_ptns: std.StringArrayHashMap(Token),
+    missing: std.StringArrayHashMap(Token),
     /// manage redundancy warnings arising from match cases
-    redundancy_warnings: ds.ArrayHashMap(Token, u32),
+    warnings: RedundancyMap,
 
     /// PtnTest -> BinaryNode, FlowNode, ConditionNode
     const PtnTest = struct {*Node, FlowNode, *Node};
     const TestList = ds.ArrayList(PtnTest);
+    const RedundancyMap = ds.ArrayHashMap(Token, u32);
 
     pub fn init(allocator: Allocator) MatchMeta {
       return .{
         .tests = TestList.init(allocator),
-        .missing_ptns = std.StringArrayHashMap(Token).init(allocator),
-        .redundancy_warnings = ds.ArrayHashMap(Token, u32).init(allocator),
+        .missing = std.StringArrayHashMap(Token).init(allocator),
+        .warnings = RedundancyMap.init(allocator),
       };
     }
   };
@@ -374,7 +375,7 @@ pub const TypeChecker = struct {
           self.builtins.append(self.inferClassPartial(node) catch unreachable, self.al);
         } else {
           const ty = self.inferClassPartial(node) catch unreachable;
-          self.str_ty = self.inferClass(node, ty) catch unreachable;
+          self.str_ty = self.inferClass(node, ty, &[_]*Type{}, &[_]*Type{}) catch unreachable;
           self.builtins.append(self.str_ty, self.al);
         }
       }
@@ -444,14 +445,19 @@ pub const TypeChecker = struct {
     return std.fmt.allocPrint(al, "${}.{}", .{l1, l2}) catch @panic("could not gen name");
   }
 
-  fn makeSynthName(self: *Self, name: ?[]const u8, is_builtin: bool, args: tir.TypeItems, targs: ?TypeItems) []const u8 {
+  fn makeSynthName(self: *Self, name: ?[]const u8, is_builtin: bool, args: tir.TypeItems, targs: ?TypeItems, cls_ty: ?*Type) []const u8 {
     _ = is_builtin;
     // FIXME: this is unhygienically inefficient.
-    const start = name orelse genName(
+    var start = name orelse genName(
       self.al,
       if (targs) |ta| ta.len else 0,
       args.len
     );
+    if (cls_ty) |ty| {
+      start = std.fmt.allocPrint(
+        self.al, "${s}.{s}.{}", .{start, ty.klassOrTrait().data.name, ty.typeid()}
+      ) catch @panic("could not gen cls name");
+    }
     var list = std.ArrayList(u8).init(self.al);
     var writer = list.writer();
     _ = writer.write(start) catch undefined;
@@ -473,13 +479,9 @@ pub const TypeChecker = struct {
     return writer.context.items;
   }
 
-  inline fn createSynthName(self: *Self, name: ?[]const u8, is_builtin: bool, args: tir.TypeItems, targs: ?TypeItems) []const u8 {
-    return self.makeSynthName(name, is_builtin, args, targs);
-  }
-
-  fn createFunSynthName(self: *Self, fun: *tir.BasicFunNode, args: *TypeList, targs: ?TypeItems) []const u8 {
+  fn createFunSynthName(self: *Self, fun: *tir.BasicFunNode, args: *TypeList, targs: ?TypeItems, cls_ty: ?*Type) []const u8 {
     if (fun.data.builtin) return fun.data.name.?.lexeme();
-    return self.createSynthName(if (fun.data.name) |nm| nm.lexeme() else null, fun.data.builtin, args.items(), targs);
+    return self.makeSynthName(if (fun.data.name) |nm| nm.lexeme() else null, fun.data.builtin, args.items(), targs, cls_ty);
   }
 
   inline fn boxSynthName(token: Token, val: []const u8) Token {
@@ -1007,25 +1009,6 @@ pub const TypeChecker = struct {
     }
   }
 
-  fn isTypeAndLengthCheck(self: *Self, n: *Node) bool {
-    if (n.isBinary()) {
-      var node = &n.NdBinary;
-      if (node.left.isCall()) {
-        const call = &node.left.NdBasicCall;
-        if (call.expr.isDotAccess() and call.expr.NdDotAccess.rhs.isTVariable()) {
-          const is_len = call.expr.NdDotAccess.rhs.NdTVar.valueEql(ks.LenVar);
-          if (is_len and self.matchmeta.tests.len() >= 2) {
-            var tst_before_len = self.matchmeta.tests.itemAt(self.matchmeta.tests.len() - 2).@"0";
-            if (tst_before_len.isBinary() and tst_before_len.NdBinary.right.isType()) {
-              return tst_before_len.NdBinary.op_tkty.is(.TkIs);
-            }
-          }
-        }
-      }
-    }
-    return false;
-  }
-
   fn isLengthCheck(self: *Self, n: *Node) bool {
     _ = self;
     if (n.isBinary()) {
@@ -1080,12 +1063,12 @@ pub const TypeChecker = struct {
 
   /// build missing types for map patterns
   fn buildMapPatternTypes(
-    self: *Self, ident: *TVarNode, is_direct_ident: bool,
+    self: *Self, ident: *TVarNode, is_direct_tst: bool,
     default: *Type, nghbs: *fir.NeighbourList, al: Allocator,
   ) *Type {
     for (nghbs.items()) |ngh| {
       for (ngh.node.get().bb.nodes.items()) |node| {
-        if (node.isVarDecl() and (!is_direct_ident or ident.valueEql(node.NdVarDecl.name.lexeme()))) {
+        if (node.isVarDecl() and (!is_direct_tst or ident.valueEql(node.NdVarDecl.name.lexeme()))) {
           var val = node.NdVarDecl.value;
           if (val.isSubscript()) {
             var lexeme = val.NdSubscript.expr.NdTVar.value();
@@ -1116,7 +1099,7 @@ pub const TypeChecker = struct {
   }
 
   /// compute missing pattern types
-  fn buildMissingPatternTypes(self: *Self, default: *Type, ident: *TVarNode, is_direct_ident: bool) *Type {
+  fn buildMissingPatternTypes(self: *Self, default: *Type, ident: *TVarNode, is_direct_tst: bool) *Type {
     // works by using the fail type `default`, and picking the constructor
     // from which the failure escalated. When the constructor is found,
     // the field/param corresponding to the test from which failure was
@@ -1139,8 +1122,8 @@ pub const TypeChecker = struct {
           if (typ) |t| {
             if (t.isMapTy()) {
               nghbs = last_tst.@"1".getNextNeighbours();
-              return self.buildMapPatternTypes(ident, is_direct_ident, default, nghbs, al);
-            } else if (t.isListTy() or t.isTupleTy()) {
+              return self.buildMapPatternTypes(ident, is_direct_tst, default, nghbs, al);
+            } else if (t.isListTy()) {
               nghbs = last_tst.@"1".getNextNeighbours();
             }
           }
@@ -1339,7 +1322,7 @@ pub const TypeChecker = struct {
     var ident: *TVarNode = undefined;
     var idx = self.matchmeta.tests.len() - 1;
     // controls how the missing pattern types would be built when using the ident name to discover those types 
-    var is_direct_ident = true;
+    var is_direct_tst = true;
     if (nd.isBinary()) {
       allow_rested = nd.NdBinary.allow_rested;
       ident = self.getIdent(&nd.NdBinary);
@@ -1347,7 +1330,7 @@ pub const TypeChecker = struct {
       ident = &nd.NdTVar;
     } else {
       // get the nearest (enclosing) binary/var test
-      is_direct_ident = false;
+      is_direct_tst = false;
       var i = idx;
       var id: ?*TVarNode = null;
       while (i > 0): (i -= 1) {
@@ -1368,15 +1351,12 @@ pub const TypeChecker = struct {
       if (id) |_id| {
         ident = _id;
       } else {
-        self.matchmeta.missing_ptns.put("", node.token) catch {};
+        self.matchmeta.missing.put("", node.token) catch {};
         return self.void_ty;
       }
     }
     var ty = try self.lookupName(ident, false);
     if (!ty.isNeverTy() and !allow_rested) {
-      // if we have a test on a tuple, since tuple sizes are comptime known
-      // we know statically that the Fail case should _never_ fail
-      if (ty.isTupleTy() and self.isTypeAndLengthCheck(nd)) return self.void_ty;
       // It is possible that this Fail node is from an enclosing `rested` constructor, because the
       // match compiler tries to produce an optimal decision tree without repeated constructor tests.
       // Hence, we look up the test 'stack', if we find any test with an allow_rested property,
@@ -1395,7 +1375,7 @@ pub const TypeChecker = struct {
             }
           }
         }
-        self.matchmeta.missing_ptns.put(self.getTypename(self.buildMissingPatternTypes(ty, ident, is_direct_ident)), ident.token) catch {};
+        self.matchmeta.missing.put(self.getTypename(self.buildMissingPatternTypes(ty, ident, is_direct_tst)), ident.token) catch {};
         return self.void_ty;
       }
     }
@@ -1742,12 +1722,12 @@ pub const TypeChecker = struct {
 
   fn checkMatchDiagEnd(self: *Self) !*Type {
     _ = self.diag.popLevel();
-    if (self.matchmeta.missing_ptns.count() > 0) {
+    if (self.matchmeta.missing.count() > 0) {
       // some tokens are generated ($) and won't be displayed, so we make a fresh token 
-      const token = self.matchmeta.missing_ptns.values()[0];
+      const token = self.matchmeta.missing.values()[0];
       self.softError(token, "inexhaustive pattern match.", .{});
       var prompt = false;
-      for (self.matchmeta.missing_ptns.keys()) |msg| {
+      for (self.matchmeta.missing.keys()) |msg| {
         if (msg.len == 0) {
           continue;
         }
@@ -1758,14 +1738,28 @@ pub const TypeChecker = struct {
         self.diag.addDiagnosticsSliceDirect(token, &[_][]const u8{"    ", msg, "\n"});
       }
       self.diag.addDiagnosticsDirect(token, "\n");
-      self.matchmeta.missing_ptns.clearRetainingCapacity();
+      self.matchmeta.missing.clearRetainingCapacity();
     }
-    if (self.matchmeta.redundancy_warnings.isNotEmpty()) {
-      var itr = self.matchmeta.redundancy_warnings.iterator();
+    if (self.matchmeta.warnings.isNotEmpty()) {
+      var last_0xfe: ?Token = null;
+      var _0xfes = @as(u32, 0);
+      var itr = self.matchmeta.warnings.iterator();
       while (itr.next()) |entry| {
         if (entry.value_ptr.* != 0xff) {
-          self.warn(true, entry.key_ptr.*, "possible redundant case", .{});
+          if (entry.value_ptr.* != 0xfe) {
+            self.warn(true, entry.key_ptr.*, "possible redundant case", .{});
+          } else {
+            entry.value_ptr.* = 0xff;
+            last_0xfe = entry.key_ptr.*;
+            _0xfes += 1;
+          }
         }
+      }
+      // this arises from using 'rested patterns'. only warn when there are more than
+      // one 0xfe flag set, this ensures that there is indeed a redundant test case,
+      // FIXME: this also produces false +ves for nested match nodes
+      if (_0xfes > 1) {
+        self.warn(true, last_0xfe.?, "possible redundant case", .{});
       }
     }
     return self.void_ty;
@@ -1784,7 +1778,7 @@ pub const TypeChecker = struct {
     } else if (tst.isTVariable()) {
       ident = &tst.NdTVar;
     } else {
-      self.matchmeta.redundancy_warnings.set(marker.token, 0xff);
+      self.matchmeta.warnings.set(marker.token, 0xff);
       return;
     }
     const typ = (
@@ -1792,12 +1786,20 @@ pub const TypeChecker = struct {
       else self.findName(ident.value()).?
     );
     if (typ.isNeverTy()) {
-      if (self.matchmeta.redundancy_warnings.get(marker.token) != null) {
+      if (self.matchmeta.warnings.get(marker.token) != null) {
         return;
       }
-      self.matchmeta.redundancy_warnings.set(marker.token, 1);
+      self.matchmeta.warnings.set(marker.token, 1);
+    } else if (is_call and allow_rested and self.isLengthCheck(tst)) {
+      // This is a rested test for list types. Set a different flag for this case
+      if (tst.NdBinary.left.NdBasicCall.expr.NdDotAccess.lhs.getType()) |ty| {
+        assert(ty.isListTy());
+        if (tst.NdBinary.right.isNumberLiteral() and tst.NdBinary.right.NdNumber.value == 0) {
+          self.matchmeta.warnings.set(marker.token, 0xfe);
+        }
+      }
     } else {
-      self.matchmeta.redundancy_warnings.set(marker.token, 0xff);
+      self.matchmeta.warnings.set(marker.token, 0xff);
     }
   }
 
@@ -2037,22 +2039,23 @@ pub const TypeChecker = struct {
       if (!core_cls.getSlice()[0].isVariable()) {
         return user_ty;
       }
+      const ctparams = core_cls.tparams.?;
       const tparams = user_cls.tparams.?;
-      const synth_name = self.createSynthName(core_cls.data.name, core_cls.builtin, tparams, null);
+      const synth_name = self.makeSynthName(core_cls.data.name, core_cls.builtin, tparams, null, null);
       const old_cls = core_cls.data.node.?;
       if (self.findGenInfo(old_cls, synth_name)) |info| {
         return info.typ;
       }
       if (!core_ty.isTupleTy()) {
         // typelinker & parser ensures that user_cls' tparams and core_cls' tparams are equal in size
-        for (core_cls.tparams.?, tparams) |tvar, ty| {
+        for (ctparams, tparams) |tvar, ty| {
           self.insertType(tvar, ty);
         }
       } else {
         // use union type to represent the multiple types of the tuple
         var uni = Type.newUnion().box(self.al);
         uni.union_().addSlice(tparams, self.al);
-        self.insertType(core_cls.tparams.?[0], uni);
+        self.insertType(ctparams[0], uni);
       }
       var new_node = old_cls.clone(self.al);
       // we only link when we're sure core_cls is an unsubstituted generic type
@@ -2066,12 +2069,12 @@ pub const TypeChecker = struct {
         boxSynthName(old_cls.getToken(), synth_name),
         user_ty,
       );
-      return try self.inferClass(new_node, user_ty);
+      return try self.inferClass(new_node, user_ty, ctparams, tparams);
     }
     // non-generic
     if (core_cls.data.node) |cls_node| {
       if (!self.cycles.contains(cls_node, Node.eql) and !cls_node.NdClass.data.checked) {
-        return try self.inferClass(cls_node, core_ty);
+        return try self.inferClass(cls_node, core_ty, &[_]*Type{}, &[_]*Type{});
       }
     }
     return core_ty;
@@ -2102,7 +2105,7 @@ pub const TypeChecker = struct {
       // resolve the provided type params (user_ty's)
       var call: Node = .{.NdGenericCall = tir.GenericCallNode.init(undefined, tparams)};
       try self.linkAndCheckCallTypeParams(&call, debug);
-      const synth_name = self.createSynthName(core_trt.data.name, core_trt.builtin, tparams, null);
+      const synth_name = self.makeSynthName(core_trt.data.name, core_trt.builtin, tparams, null, null);
       const old_trt = core_trt.data.node.?;
       if (self.findGenInfo(old_trt, synth_name)) |info| {
         return info.typ;
@@ -2127,12 +2130,12 @@ pub const TypeChecker = struct {
         boxSynthName(old_trt.getToken(), synth_name),
         user_ty,
       );
-      return try self.inferTrait(new_node, user_ty);
+      return try self.inferTrait(new_node, user_ty, ctparams, tparams);
     }
     // non-generic
     if (core_trt.data.node) |trt_node| {
       if (!self.cycles.contains(trt_node, Node.eql) and !trt_node.NdTrait.data.checked) {
-        return try self.inferTrait(trt_node, core_ty);
+        return try self.inferTrait(trt_node, core_ty, &[_]*Type{}, &[_]*Type{});
       } else if (user_ty.trait().data.methods.len() != core_ty.trait().data.methods.len()) {
         logger.debug("unequal user_ty and core_ty method sizes", .{});
       }
@@ -2330,13 +2333,13 @@ pub const TypeChecker = struct {
     } else if (typ.isClass() and !typ.klass().isParameterized()) {
       if (typ.klass().data.node) |nd| {
         if (!self.isCheckedClass(nd) and !self.cycles.contains(nd, Node.eql)) {
-          _ = try self.inferClass(nd, typ);
+          _ = try self.inferClass(nd, typ, &[_]*Type{}, &[_]*Type{});
         }
       }
     } else if (typ.isTrait() and !typ.trait().isParameterized()) {
       if (typ.trait().data.node) |nd| {
         if (!self.isCheckedTrait(nd) and !self.cycles.contains(nd, Node.eql)) {
-          _ = try self.inferTrait(nd, typ);
+          _ = try self.inferTrait(nd, typ, &[_]*Type{}, &[_]*Type{});
         }
       }
     }
@@ -3053,6 +3056,14 @@ pub const TypeChecker = struct {
     return false;
   }
 
+  fn setSynthNameOnDotAccessLHS(self: *Self, node: *Node, synth_name: []const u8) void {
+    _ = self;
+    if (node.isDotAccess()) {
+      const token = node.NdDotAccess.rhs.getToken();
+      node.NdDotAccess.rhs.* = .{.NdTVar = tir.TVarNode.init(token.tkFrom(synth_name, .TkIdent))};
+    }
+  }
+
   fn inferCall(self: *Self, node: *tir.CallNode, ast_n: *Node) !*Type {
     // set parent for later type disambiguation
     const parent = self.ctx.data.parent;
@@ -3127,7 +3138,22 @@ pub const TypeChecker = struct {
       return self.inferCall(node, ast_n);
     }
     const old_fun_id = fun_ty.data.node.?;
-    const fun = &old_fun_id.NdGenericFun;
+    var is_generic_mtd = old_fun_id.isGenericMtd();
+    var cls_ty: ?*Type = null;
+    if (is_generic_mtd) {
+      var params = old_fun_id.NdGenericMtd.params;
+      for (params.items()) |data| {
+        if (data.tvar) |tvar| {
+          self.insertType(tvar, data.typ.?);
+        }
+      }
+      // Insert self into current scope. Order matters here.
+      const tmp = params.getLast().from;
+      self.insertVar(ks.SelfVar, tmp);
+      cls_ty = tmp;
+    }
+    defer { if (is_generic_mtd) self.deleteVar(ks.SelfVar); }
+    const fun = old_fun_id.getGenericFun();
     const bfun = &fun.fun.NdBasicFun;
     // store the actual generic type arguments received by this class
     var _targs = TypeList.init();
@@ -3211,9 +3237,10 @@ pub const TypeChecker = struct {
     // lookup node using inferred args.
     // - if found just return the ret type of the found node
     // - else, do the stuff below, and cache the node
-    const synth_name = self.createFunSynthName(bfun, &args_inf, _targs.items());
+    const synth_name = self.createFunSynthName(bfun, &args_inf, _targs.items(), cls_ty);
     if (self.findGenInfo(old_fun_id, synth_name)) |info| {
       node.expr.setType(info.typ);
+      self.setSynthNameOnDotAccessLHS(node.expr, synth_name);
       return info.typ.function().data.ret;
     }
     const new_fun_id = bfun.clone(self.al);
@@ -3231,13 +3258,20 @@ pub const TypeChecker = struct {
     try self.validateCallArguments(new_fun_ty.function(), node);
     var typ = try self.inferFun(new_fun_id, new_fun_ty);
     const ret = typ.function().data.ret;
-    node.expr.setType(new_fun_ty);
+    node.expr.setType(typ);
     self.addGenInfo(
       old_fun_id,
       new_fun_id,
       boxSynthName(old_fun_id.getToken(), synth_name),
       typ
     );
+    if (cls_ty) |_ty| {
+      // look for the class with this method, and add it to the node.
+      _ty.klass().appendMethodTyAndNode(typ, self.al);
+      self.setSynthNameOnDotAccessLHS(node.expr, synth_name);
+      @setRuntimeSafety(false);
+      new_fun_id.NdBasicFun.data.name.? = new_fun_id.NdBasicFun.data.name.?.tkFrom(synth_name, .TkIdent);
+    }
     return ret;
   }
 
@@ -3351,7 +3385,7 @@ pub const TypeChecker = struct {
     if (!cls_ty.isParameterized()) {
       if (cls_ty.data.node) |cls_node| {
         if (!self.cycles.contains(cls_node, Node.eql) and !cls_node.NdClass.data.checked) {
-          _ = try self.inferClass(cls_node, ty);
+          _ = try self.inferClass(cls_node, ty, &[_]*Type{}, &[_]*Type{});
           // try to obtain the inferred init since this class just got checked
           init_mtd = cls_ty.getMethodTy(ks.InitVar);
         }
@@ -3661,6 +3695,8 @@ pub const TypeChecker = struct {
     const _node = ast_node.getBasicFun();
     if (ast_node.isGenericFun()) {
       fun.tparams = ast_node.NdGenericFun.params;
+    } else if (ast_node.isGenericMtd()) {
+      fun.tparams = ast_node.getGenericFun().params;
     }
     ty.aspec = tir.AccessSpecifier.getASpec(_node.data.public);
     var params = TypeList.initCapacity(_node.params.len, self.al);
@@ -3675,8 +3711,6 @@ pub const TypeChecker = struct {
   fn inferFunPartial(self: *Self, node: *Node) !*Type {
     if (node.isBasicFun()) {
       try self.linker.linkBasicFun(&node.NdBasicFun, null);
-    } else {
-      try self.linker.linkGenericFun(&node.NdGenericFun, false);
     }
     // we need to infer this first to handle recursive functions
     const ty = try self.createFunType(node, node.getType());
@@ -3989,7 +4023,7 @@ pub const TypeChecker = struct {
         defer self.deleteVar(ks.SelfVar);
         self.insertCoreType(cls.name.lexeme(), ty);
         for (cls.data.methods.items()) |itm| {
-          ty.klass().data.methods.append(try self.inferFunPartial(itm), self.al);
+          ty.klass().appendMethodTy(try self.inferFunPartial(itm), self.al);
         }
       }
     }
@@ -4028,7 +4062,7 @@ pub const TypeChecker = struct {
     return full_ty;
   }
 
-  fn inferClass(self: *Self, node: *Node, typ: ?*Type) !*Type {
+  fn inferClass(self: *Self, node: *Node, typ: ?*Type, ctparams: []*Type, tparams: []*Type) !*Type {
     var cls = &node.NdClass;
     var ty = typ orelse try self.lookupName(cls.name.toToken(), true);
     // generic is infer-by-need - performed on call/reference.
@@ -4057,12 +4091,20 @@ pub const TypeChecker = struct {
             } else {
               // otherwise, create one
               fun_ty = try self.inferFunPartial(itm);
-              ty.klass().data.methods.append(fun_ty, al);
+              ty.klass().appendMethodTy(fun_ty, al);
             }
-            for (fun_ty.function().data.params) |pty| {
-              try self.resolveType(pty, token, al);
+            if (!itm.isGenericMtd()) {
+              for (fun_ty.function().data.params) |pty| {
+                try self.resolveType(pty, token, al);
+              }
+              ty.klass().data.methods.items()[i] = try self.inferFun(itm, fun_ty);
+            } else {
+              for (ctparams, tparams) |_tvar, _typ| {
+                itm.NdGenericMtd.params.append(.{.tvar = _tvar, .typ = _typ, .from = ty}, al);
+              }
+              if (ctparams.len == 0) itm.NdGenericMtd.params.append(.{.from = ty}, al);
+              ty.klass().data.methods.items()[i] = fun_ty;
             }
-            ty.klass().data.methods.items()[i] = try self.inferFun(itm, fun_ty);
           }
           if (ty.klass().getMethod(ks.InitVar)) |mtd| {
             self.forbidReturnInInit(mtd);
@@ -4083,7 +4125,7 @@ pub const TypeChecker = struct {
           for (fun_ty.function().data.params) |pty| {
             try self.resolveType(pty, token, al);
           }
-          ty.klass().data.methods.append(fun_ty, al);
+          ty.klass().appendMethodTy(fun_ty, al);
           ty.klass().data.methods.items()[i] = try self.inferMethod(ty, itm, fun_ty);
         }
         if (cls.trait) |trait| {
@@ -4110,7 +4152,7 @@ pub const TypeChecker = struct {
         defer self.deleteVar(ks.SelfVar);
         self.insertCoreType(trt.name.lexeme(), ty);
         for (trt.data.methods.items()) |itm| {
-          ty.trait().data.methods.append(try self.inferFunPartial(itm), self.al);
+          ty.trait().appendMethodTy(try self.inferFunPartial(itm), self.al);
         }
       }
     }
@@ -4119,7 +4161,7 @@ pub const TypeChecker = struct {
     return ty;
   }
 
-  fn inferTrait(self: *Self, node: *Node, typ: ?*Type) !*Type {
+  fn inferTrait(self: *Self, node: *Node, typ: ?*Type, ctparams: []*Type, tparams: []*Type) !*Type {
     var trt = &node.NdTrait;
     var ty = typ orelse try self.lookupName(trt.name.toToken(), true);
     // generic is infer-by-need - performed on call/reference.
@@ -4142,9 +4184,18 @@ pub const TypeChecker = struct {
           } else {
             // otherwise, create one
             fun_ty = try self.inferFunPartial(itm);
-            ty.trait().data.methods.append(fun_ty, self.al);
+            ty.trait().appendMethodTy(fun_ty, self.al);
           }
-          ty.trait().data.methods.items()[i] = try self.inferFun(itm, fun_ty);
+          if (!itm.isGenericMtd()) {
+            // TODO: resolve param types?
+            ty.trait().data.methods.items()[i] = try self.inferFun(itm, fun_ty);
+          } else {
+            for (ctparams, tparams) |_tvar, _typ| {
+              itm.NdGenericMtd.params.append(.{.tvar = _tvar, .typ = _typ, .from = ty}, self.al);
+            }
+            if (ctparams.len == 0) itm.NdGenericMtd.params.append(.{.from = ty}, self.al);
+            ty.trait().data.methods.items()[i] = fun_ty;
+          }
         }
         if (ty.trait().getMethod(ks.InitVar) != null) {
           self.softErrorFrom(node,
@@ -4481,7 +4532,7 @@ pub const TypeChecker = struct {
     if (!trait.trait().isParameterized()) {
       if (trait.trait().data.node) |nd| {
         if (!self.isCheckedTrait(nd) and !self.cycles.contains(nd, Node.eql)) {
-          _ = try self.inferTrait(nd, trait);
+          _ = try self.inferTrait(nd, trait, &[_]*Type{}, &[_]*Type{});
         }
       }
     }
@@ -4501,7 +4552,8 @@ pub const TypeChecker = struct {
       }
       const cls_token = cls.data.node.?.getToken();
       for (trt.data.methods.items()) |tm| {
-        var fun = &tm.function().data.node.?.NdBasicFun;
+        var _node = tm.function().data.node.?;
+        var fun = _node.getBasicFun();
         const name = fun.data.name.?.lexeme();
         var err = false;
         if (cls.data.trait) |t| {
@@ -4522,7 +4574,16 @@ pub const TypeChecker = struct {
           self.softErrorFmt(debug, 4, 2, "This error was triggered from here:", .{});
         } else if (cls.getMethodTy(name)) |cm| {
           const token = cm.function().data.node.?.getToken();
+          const revert = self.diag.count();
           _ = self.checkArgumentAssign(tm, cm, token, "Expected method") catch {
+            if (_node.isGenericMtd()) {
+              self.diag.popUntil(revert);
+              self.softError(debug,
+                "Generic trait methods are experimental and may not be overriden.",
+                .{}
+              );
+              continue;
+            }
             return self.errorFmt(debug, 4, 2, "This error was triggered from here:", .{});
           };
           if (tm.aspec != cm.aspec) {
@@ -4533,8 +4594,17 @@ pub const TypeChecker = struct {
             self.softErrorFmt(fun.data.name.?, 4, 2, "Trait method specified here:", .{});
           }
         } else if (!fun.data.empty_trait_fun) {
-          cls.data.methods.append(tm.clone(self.al), self.al);
-          cls.data.node.?.NdClass.data.addMethod(tm.function().data.node.?, self.al);
+          var mth_ty = tm.clone(self.al);
+          if (!_node.isGenericMtd()) {
+            cls.appendMethodTyAndNode(mth_ty, self.al);
+          } else {
+            // set `from` for this generic method to the class type
+            var gmtd = &mth_ty.function().data.node.?.NdGenericMtd;
+            for (0..gmtd.params.len()) |i| {
+              gmtd.params.items()[i].from = ty;
+            }
+            cls.appendMethodTyAndNode(mth_ty, self.al);
+          }
         } else {
           self.missing_tmtds.append(.{name, self.getTypename(tm), cls_token});
         }

@@ -1659,8 +1659,8 @@ pub const Parser = struct {
     self.meta.func = func;
     var tparams: ?TypeList = null;
     if (self.check(.TkLCurly)) {
-      if (lambda) self.softErrMsg(self.current_tok, "generic lambdas are unsupported");
-      if (is_method) self.softErrMsg(self.current_tok, "generic methods are unsupported");
+      if (lambda) self.softErrMsg(self.current_tok, "generic lambdas are unsupported.");
+      if (is_method) self.softErrMsg(self.current_tok, "generic methods are unsupported.");
       var tmp = try self.abstractTypeParams(undefined, !lambda and !is_method);
       tparams = tmp.generic().tparams;
     }
@@ -2253,7 +2253,7 @@ pub const Parser = struct {
     var mdisamb = self.getDisambiguator(Token);
     var methods = tir.NodeListU.init();
     while (self.check(.TkDef) or self.check(.TkPub)) {
-      const method = try self.funStmt(false, true, true, false);
+      var method = try self.funStmt(false, true, false, false);
       const token = (
         if (method.isBasicFun()) method.NdBasicFun.data.name.?
         else method.NdGenericFun.fun.NdBasicFun.data.name.?
@@ -2267,21 +2267,42 @@ pub const Parser = struct {
         self.softErrMsg(token, "illegal duplicate method");
         self.softErrFmt(tok, 4, 2, "Method also declared here:", .{});
       }
-      if (method.isGenericFun()) {
-        self.softErrMsg(token, "generic methods are unsupported");
-      }
       if (methods.len() > MAX_METHODS) {
         self.softErrMsg(token, "maximum number of method declarations exceeded");
+      }
+      // NOTE: Generic trait methods are experimental!
+      if (method.isGenericFun()) {
+        if (token.valueEql(ks.InitVar)) {
+          self.softErrArgs(token, "Method '{s}' cannot be generic.", .{token.lexeme()});
+        } else if (!self.inBuiltinMode()) {
+          self.softWarnMsg(
+            token, "generic methods are experimental and "
+            ++ "should not be used unless absolutely necessary."
+          );
+        }
+        if (tparams) |tp| {
+          for (tp.items()) |tvar| {
+            for (method.NdGenericFun.params) |ty| {
+              if (tvar.variable().eql(ty.variable())) {
+                const debug = ty.variable().getFirst();
+                self.softErrArgs(debug, "Duplicate generic type variable '{s}'", .{debug.lexeme()});
+                self.softErrFmt(tvar.variable().getFirst(), 4, 2, "Type variable also specified here:", .{});
+                break;
+              }
+            }
+          }
+        }
+        method = self.newNode(.{.NdGenericMtd = tir.GenericMtdNode.init(method)});
       }
       methods.append(method, self.allocator);
       mdisamb.put(value, token) catch {};
     }
     try self.consume(.TkEnd);
     return self.newNode(.{.NdClass = tir.StructNode.init(
-        ident, traits, fields.items(), methods,
-        if (tparams) |tp| tp.items() else null,
-        false, false, self.allocator
-      )});
+      ident, traits, fields.items(), methods,
+      if (tparams) |tp| tp.items() else null,
+      false, false, self.allocator
+    )});
   }
 
   fn traitStmt(self: *Self) !*Node {
@@ -2309,7 +2330,7 @@ pub const Parser = struct {
     var mdisamb = self.getDisambiguator(Token);
     var methods = tir.NodeListU.init();
     while (self.check(.TkDef) or self.check(.TkPub)) {
-      const method = try self.funStmt(false, true, true, true);
+      var method = try self.funStmt(false, true, !self.inBuiltinMode(), true);
       const token = (
         if (method.isBasicFun()) method.NdBasicFun.data.name.?
         else method.NdGenericFun.fun.NdBasicFun.data.name.?
@@ -2322,15 +2343,41 @@ pub const Parser = struct {
       if (methods.len() > MAX_METHODS) {
         self.softErrMsg(token, "maximum number of method declarations exceeded");
       }
+      if (token.valueEql(ks.InitVar)) {
+        self.softErrArgs(token, "A trait may not define or specify the method '{s}'", .{token.lexeme()});
+      }
+      // NOTE: Generic trait methods are experimental and only available in Builtin Mode!
+      if (method.isGenericFun()) {
+        if (method.getBasicFun().data.empty_trait_fun) {
+          self.softErrMsg(
+            token,
+            "Generic trait methods are experimental and "
+            ++ "must provide a default implementation."
+          );
+        }
+        if (tparams) |tp| {
+          for (tp.items()) |tvar| {
+            for (method.NdGenericFun.params) |ty| {
+              if (tvar.variable().eql(ty.variable())) {
+                const debug = ty.variable().getFirst();
+                self.softErrArgs(debug, "Duplicate generic type variable '{s}'", .{debug.lexeme()});
+                self.softErrFmt(tvar.variable().getFirst(), 4, 2, "Type variable also specified here:", .{});
+                break;
+              }
+            }
+          }
+        }
+        method = self.newNode(.{.NdGenericMtd = tir.GenericMtdNode.init(method)});
+      }
       methods.append(method, self.allocator);
       mdisamb.put(value, token) catch {};
     }
     try self.consume(.TkEnd);
     return self.newNode(.{.NdTrait = tir.StructNode.init(
-        ident, null, &[_]*Node{}, methods,
-        if (tparams) |tp| tp.items() else null,
-        false, false, self.allocator
-      )});
+      ident, null, &[_]*Node{}, methods,
+      if (tparams) |tp| tp.items() else null,
+      false, false, self.allocator
+    )});
   }
 
   fn discardStatement(self: *Self) !*Node {

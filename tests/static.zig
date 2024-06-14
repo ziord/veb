@@ -244,7 +244,7 @@ test "maximal munch parsing style" {
   \\    where 
   \\      X: P + K{V},
   \\      Y: P + Q,
-  \\    def init(a: num): str
+  \\    def inits(a: num): str
   \\      let j = 12
   \\    end
   \\  end

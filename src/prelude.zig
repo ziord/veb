@@ -40,10 +40,10 @@ pub const NoExecsSrc =
 \\     return len
 \\   end
 \\
-\\   pub def zip(itr: Iterator{U}): List{Tuple{U, U}}
-\\     let res = [] as List{Tuple{U, U}}
+\\   pub def zip{V}(other: Iterator{V}): List{Tuple{U, V}}
+\\     let res = [] as List{Tuple{U, V}}
 \\     while true
-\\       match (self.next(), itr.next())
+\\       match (self.next(), other.next())
 \\         case (Just(a), Just(b)) => res.append((a, b))
 \\         case _ => break
 \\       end

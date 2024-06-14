@@ -626,11 +626,13 @@ pub const TypeLinker = struct {
           // check if this is a regular generic type called without instantiation, 
           // or a recursive generic type called without instantiation
           if ((self.using_tvar == 0 or eqn.isRecursive()) and !eqn.isTaggedUnion()) {
-            return self.error_(
-              debug,
-              "generic type '{s}' may not have been instantiated correctly",
-              .{typ.typename(self.u8w)}
-            );
+            if (!eqn.isTrait()) {
+              return self.error_(
+                debug,
+                "generic type '{s}' may not have been instantiated correctly",
+                .{typ.typename(self.u8w)}
+              );
+            }
           }
         }
       }
@@ -847,20 +849,23 @@ pub const TypeLinker = struct {
       }
     }
     for (node.data.methods.items()) |method| {
-      try self.linkBasicFun(&method.NdBasicFun, null);
+      if (method.isBasicFun()) {
+        try self.linkBasicFun(&method.NdBasicFun, null);
+      }
     }
   }
 
   pub fn linkTrait(self: *Self, node: *tir.StructNode, allow_generic: bool) !void {
-    std.debug.assert(!node.data.builtin);
+    std.debug.assert(!node.data.builtin and node.data.fields.len == 0);
     if (node.isParameterized()) {
       if (!allow_generic) return;
       self.ban_alias = node.data.params;
     }
     for (node.data.methods.items()) |method| {
-      try self.linkBasicFun(&method.NdBasicFun, null);
+      if (method.isBasicFun()) {
+        try self.linkBasicFun(&method.NdBasicFun, null);
+      }
     }
-    std.debug.assert(node.data.fields.len == 0);
   }
 
   inline fn linkRet(self: *Self, node: *tir.RetNode) !void {
@@ -935,7 +940,7 @@ pub const TypeLinker = struct {
       .NdNumber, .NdString, .NdBool, .NdControl, .NdScope,
       .NdCondition, .NdMCondition, .NdEmpty, .NdMatch,
       .NdFailMarker, .NdRedunMarker, .NdDiagStartMarker,
-      .NdPipeHolder, .NdFor, .NdForCounter => {},
+      .NdPipeHolder, .NdFor, .NdForCounter, .NdGenericMtd => {},
     };
   }
 };

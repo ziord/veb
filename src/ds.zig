@@ -469,6 +469,10 @@ pub fn ArrayHashMap(comptime K: type, comptime V: type) type {
       self.map.clearAndFree();
     }
 
+    pub inline fn clearRetainingCapacity(self: *@This()) void {
+      self.map.clearRetainingCapacity();
+    }
+
     pub inline fn get(self: *@This(), k: K) ?V {
       return self.map.get(k);
     }

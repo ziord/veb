@@ -5181,10 +5181,18 @@ test "traits <range & Iterator.zip>" {
   \\ let k = [10, 11, 12, 13]
   \\ let r = k.iter().zip(range(1, Just(12), Just(2)).iter())
   \\ assert(r.len() == 4, 'should be 4')
-  \\ assert(r[0][0] == 10, 'should be 11')
+  \\ assert(r[0][0] == 10, 'should be 10')
   \\ assert(r[0][1] == 1, 'should be 1')
   \\ assert(r[-1][0] == 13, 'should be 13')
   \\ assert(r[-1][1] == 7, 'should be 7')
+  \\
+  \\ let j = ['a', 'b', 'c', 'd']
+  \\ let r = k.iter().zip(j.iter())
+  \\ assert(r.len() == 4, 'should be 4')
+  \\ assert(r[0][0] == 10, 'should be 10')
+  \\ assert(r[0][1] == 'a', 'should be a')
+  \\ assert(r[-1][0] == 13, 'should be 13')
+  \\ assert(r[-1][1] == 'd', 'should be d')
   ;
   try doRuntimeTest(src);
 }
@@ -5241,6 +5249,64 @@ test "for loop" {
   \\  _ = assert(fun() == expected[i], 'should be same')
   \\ end
   \\ assert(i == 'a' and j == 'b', 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "classes <[experimental] generic methods .1>" {
+  const src =
+  \\ class Fin{T}
+  \\  pub x: T
+  \\  def init(x: T)
+  \\     self.x = x
+  \\  end
+  \\
+  \\  pub def generate{U}(y: U)
+  \\    return (self.x, y)
+  \\  end
+  \\ end
+  \\ let j = Fin(12)
+  \\ j.generate('xyz')[1] == 'xyz' |> assert(*, 'should be same')
+  \\ j.generate(false)[1] == false |> assert(*, 'should be same')
+  \\ j.generate([1, 2, 3])[1][-1] == 3 |> assert(*, 'should be same')
+  \\ j.generate((2, 4, 6))[1][-1] == 6 |> assert(*, 'should be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "classes <[experimental] generic methods .2>" {
+  const src =
+  \\ trait Debug{K, T}
+  \\  pub def show(x: K, y: T)
+  \\    return (x, y)
+  \\  end
+  \\ end
+  \\
+  \\ class Oops{P, Q}: Debug{P, Q}
+  \\ end
+  \\
+  \\ class Fin{X, T, V}
+  \\  where X: Debug{T, V}
+  \\  pub x: X
+  \\  def init(x: X)
+  \\     self.x = x
+  \\  end
+  \\
+  \\  pub def generate{U}(y: U, a: T, b: V)
+  \\    where U: Debug{V, T}
+  \\    return (self.x.show(a, b), y.show(b, a))
+  \\  end
+  \\ end
+  \\
+  \\ let op = Oops{num, str}()
+  \\ let res = Fin{Oops{num, str}, num, str}(op)
+  \\  .generate(Oops{str, num}(), 2, 'one')
+  \\
+  \\ assert(res.len() == 2, 'should be 2')
+  \\ assert(res[0][0] == 2, 'should be 2')
+  \\ assert(res[0][1] == 'one', 'should be one')
+  \\ assert(res[1][0] == 'one', 'should be one')
+  \\ assert(res[1][1] == 2, 'should be 2')
   ;
   try doRuntimeTest(src);
 }

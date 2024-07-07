@@ -404,13 +404,15 @@ pub fn ArrayListUnmanaged(comptime T: type) type {
 
 pub fn ArrayHashMap(comptime K: type, comptime V: type) type {
   return struct {
-    map: std.AutoArrayHashMap(K, V),
+    map: T,
+
+    const T = if (K != []const u8) std.AutoArrayHashMap(K, V) else std.StringArrayHashMap(V);
 
     pub inline fn init(al: Allocator) @This() {
-      return .{.map = std.AutoArrayHashMap(K, V).init(al)};
+      return .{.map = T.init(al)};
     }
 
-    pub inline fn iterator(self: *@This()) std.AutoArrayHashMap(K, V).Iterator {
+    pub inline fn iterator(self: *@This()) T.Iterator {
       return self.map.iterator();
     }
 
@@ -429,8 +431,87 @@ pub fn ArrayHashMap(comptime K: type, comptime V: type) type {
       self.map.ensureTotalCapacity(new_cap) catch {};
     }
 
+    pub inline fn keys(self: *@This()) []K {
+      return self.map.keys();
+    }
+
     pub inline fn values(self: *@This()) []V {
       return self.map.values();
+    }
+
+    pub inline fn count(self: *const @This()) usize {
+      return self.map.count();
+    }
+
+    pub inline fn capacity(self: *@This()) usize {
+      return self.map.capacity();
+    }
+
+    pub inline fn allocator(self: *@This()) Allocator {
+      return self.map.allocator;
+    }
+
+    pub inline fn isEmpty(self: *@This()) bool {
+      return self.map.count() == 0;
+    }
+
+    pub inline fn isNotEmpty(self: *@This()) bool {
+      return self.map.count() > 0;
+    }
+
+    pub fn copy(self: *@This()) @This() {
+      const map = self.map.clone() catch {
+        var new = @This() {.map = T.init(self.map.allocator)};
+        var itr = self.map.iterator();
+        while (itr.next()) |entry| {
+          new.set(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        return new;
+      };
+      return .{.map = map};
+    }
+
+    pub inline fn clearAndFree(self: *@This()) void {
+      self.map.clearAndFree();
+    }
+
+    pub inline fn clearRetainingCapacity(self: *@This()) void {
+      self.map.clearRetainingCapacity();
+    }
+
+    pub inline fn get(self: *@This(), k: K) ?V {
+      return self.map.get(k);
+    }
+  };
+}
+
+pub fn HashMap(comptime K: type, comptime V: type, comptime Context: type, comptime max_load_perc: u64) type {
+  return struct {
+    map: T,
+
+    const T = std.HashMap(K, V, Context, max_load_perc);
+
+    pub inline fn init(al: Allocator) @This() {
+      return .{.map = T.init(al)};
+    }
+
+    pub inline fn iterator(self: *@This()) T.Iterator {
+      return self.map.iterator();
+    }
+
+    pub fn set(self: *@This(), key: K, val: V) void {
+      self.map.put(key, val) catch |e| {
+        util.logger.debug("error: {}", .{e});
+        std.os.exit(1);
+      };
+    }
+
+    pub fn setAssumeCapacity(self: *@This(), key: K, val: V,) void {
+      self.map.putAssumeCapacity(key, val);
+    }
+
+    pub inline fn ensureTotalCapacity(self: *@This(), new_cap: usize) void {
+      self.map.ensureTotalCapacity(new_cap) catch {};
     }
 
     pub inline fn count(self: *@This()) usize {
@@ -455,7 +536,7 @@ pub fn ArrayHashMap(comptime K: type, comptime V: type) type {
 
     pub fn copy(self: *@This()) @This() {
       const map = self.map.clone() catch {
-        var new = @This() {.map = std.AutoArrayHashMap(K, V).init(self.map.allocator)};
+        var new = @This() {.map = T.init(self.map.allocator)};
         var itr = self.map.iterator();
         while (itr.next()) |entry| {
           new.set(entry.key_ptr.*, entry.value_ptr.*);
@@ -476,6 +557,81 @@ pub fn ArrayHashMap(comptime K: type, comptime V: type) type {
     pub inline fn get(self: *@This(), k: K) ?V {
       return self.map.get(k);
     }
+
+    pub inline fn getPtr(self: *@This(), k: K) ?*V {
+      return self.map.getPtr(k);
+    }
+  };
+}
+
+pub fn HashMapUnmanaged(comptime K: type, comptime V: type, comptime Context: type, comptime max_load_perc: u64) type {
+  return struct {
+    map: T,
+
+    const T = std.HashMapUnmanaged(K, V, Context, max_load_perc);
+
+    pub inline fn init() @This() {
+      return .{.map = T{}};
+    }
+
+    pub inline fn iterator(self: *@This()) T.Iterator {
+      return self.map.iterator();
+    }
+
+    pub fn set(self: *@This(), key: K, val: V, al: Allocator) void {
+      self.map.put(al, key, val) catch |e| {
+        util.logger.debug("error: {}", .{e});
+        std.os.exit(1);
+      };
+    }
+
+    pub fn setAssumeCapacity(self: *@This(), key: K, val: V) void {
+      self.map.putAssumeCapacity(key, val);
+    }
+
+    pub inline fn ensureTotalCapacity(self: *@This(), new_cap: usize, al: Allocator) void {
+      self.map.ensureTotalCapacity(al, new_cap) catch {};
+    }
+
+    pub inline fn count(self: *const @This()) usize {
+      return self.map.count();
+    }
+
+    pub inline fn capacity(self: *@This()) usize {
+      return self.map.capacity();
+    }
+
+    pub inline fn isEmpty(self: *@This()) bool {
+      return self.map.count() == 0;
+    }
+
+    pub inline fn isNotEmpty(self: *@This()) bool {
+      return self.map.count() > 0;
+    }
+
+    pub fn copy(self: *@This(), al: Allocator) @This() {
+      const map = self.map.clone(al) catch {
+        var new = @This() {.map = T{}};
+        var itr = self.map.iterator();
+        while (itr.next()) |entry| {
+          new.set(entry.key_ptr.*, entry.value_ptr.*, al);
+        }
+        return new;
+      };
+      return .{.map = map};
+    }
+
+    pub inline fn clearAndFree(self: *@This(), al: Allocator) void {
+      self.map.clearAndFree(al);
+    }
+
+    pub inline fn clearRetainingCapacity(self: *@This()) void {
+      self.map.clearRetainingCapacity();
+    }
+
+    pub inline fn get(self: *@This(), k: K) ?V {
+      return self.map.get(k);
+    }
   };
 }
 
@@ -483,10 +639,10 @@ pub fn ArrayHashMapUnmanaged(comptime K: type, comptime V: type) type {
   return struct {
     map: Map,
 
-    const Map = std.AutoArrayHashMapUnmanaged(K, V);
+    const Map = if (K != []const u8) std.AutoArrayHashMapUnmanaged(K, V) else std.StringArrayHashMapUnmanaged(V);
 
     pub inline fn init() @This() {
-      return .{.map = std.AutoArrayHashMapUnmanaged(K, V){}};
+      return .{.map = Map{}};
     }
 
     pub inline fn iterator(self: *@This()) Map.Iterator {
@@ -508,7 +664,7 @@ pub fn ArrayHashMapUnmanaged(comptime K: type, comptime V: type) type {
       self.map.ensureTotalCapacity(al, new_cap) catch {};
     }
 
-    pub inline fn values(self: *@This()) []V {
+    pub inline fn values(self: *const @This()) []V {
       return self.map.values();
     }
 
@@ -552,4 +708,20 @@ pub fn ArrayHashMapUnmanaged(comptime K: type, comptime V: type) type {
       return self.map.getPtr(k);
     }
   };
+}
+
+pub fn StringHashMap(comptime V: type) type {
+  return HashMap([]const u8, V, std.hash_map.StringContext, std.hash_map.default_max_load_percentage);
+}
+
+pub fn StringHashMapUnmanaged(comptime V: type) type {
+  return HashMapUnmanaged([]const u8, V, std.hash_map.StringContext, std.hash_map.default_max_load_percentage);
+}
+
+pub fn StringArrayHashMap(comptime V: type) type {
+  return ArrayHashMap([]const u8, V);
+}
+
+pub fn StringArrayHashMapUnmanaged(comptime V: type) type {
+  return ArrayHashMapUnmanaged([]const u8, V);
 }

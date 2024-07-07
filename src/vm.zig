@@ -25,7 +25,6 @@ pub const VM = struct {
   fiber: *ObjFiber,
   strings: StringHashMap,
   tags: StringHashMap,
-  gsyms: [MAX_GSYM_ITEMS]Value,
   globals: StringHashMap,
   objects: ?*vl.Obj,
   classes: BuiltinCls,
@@ -86,7 +85,6 @@ pub const VM = struct {
       .gc = GC.init(allocator),
       .strings = StringHashMap.init(),
       .tags = StringHashMap.init(),
-      .gsyms = undefined,
       .globals = StringHashMap.init(),
       .objects = null,
       .classes = BuiltinCls.init(),
@@ -298,6 +296,7 @@ pub const VM = struct {
   pub fn run(self: *Self) RuntimeError!void {
     var fiber = self.fiber;
     var fp = fiber.fp;
+    var gsyms = fp.closure.fun.module.items;
     while (true) {
       const code = @call(.always_inline, Self.readWord, .{self, fp});
       switch (@call(.always_inline, Code.readInstOp, .{code})) {
@@ -337,7 +336,7 @@ pub const VM = struct {
           var bx: u32 = undefined;
           self.read2Args(code, &rx, &bx);
           @setRuntimeSafety(false);
-          fp.stack[rx] = self.gsyms[bx];
+          fp.stack[rx] = gsyms[bx];
           continue;
         },
         .Sgsym => {
@@ -346,7 +345,7 @@ pub const VM = struct {
           var bx: u32 = undefined;
           self.read2Args(code, &rx, &bx);
           @setRuntimeSafety(false);
-          self.gsyms[bx] = fp.stack[rx];
+          gsyms[bx] = fp.stack[rx];
           continue;
         },
         .Mov => {
@@ -487,6 +486,7 @@ pub const VM = struct {
           if (vl.isClosure(val)) {
             fiber.appendFrame(vl.asClosure(val), fp.stack + rx);
             fp = fiber.fp;
+            gsyms = fp.closure.fun.module.items;
           } else if (vl.isMethod(val)) {
             var mtd = vl.asMethod(val);
             if (mtd.isBoundUserMethod()) {
@@ -494,6 +494,7 @@ pub const VM = struct {
               @setRuntimeSafety(false);
               fp.stack[rx] = mtd.as.user.instance;
               fp = fiber.fp;
+              gsyms = fp.closure.fun.module.items;
             } else {
               fp.stack[rx] = mtd.as.native.instance;
               const res = mtd.as.native.fun.fun(self, n, rx);
@@ -517,15 +518,16 @@ pub const VM = struct {
           self.read3Args(code, &rx, &rk1, &idx);
           const inst = self.RK(rk1, fp);
           if (vl.isInstance(inst)) {
-            const closure = vl.asClosure(vl.asObj(inst).cls.?.methods[idx]);
+            const closure = vl.asClosure(vl.asObj(inst).cls.?.items[idx]);
             const next = @call(.always_inline, Self.readWord, .{self, fp});
             self.read2Args(next, &rx, &rk1);
             fiber.appendFrame(closure, fp.stack + rx);
             @setRuntimeSafety(false);
             fp.stack[rx] = inst;
             fp = fiber.fp;
+            gsyms = fp.closure.fun.module.items;
           } else {
-            var func = vl.asNativeFn(vl.asObj(inst).cls.?.methods[idx]);
+            var func = vl.asNativeFn(vl.asObj(inst).cls.?.items[idx]);
             const next = @call(.always_inline, Self.readWord, .{self, fp});
             self.read2Args(next, &rx, &rk1);
             fp.stack[rx] = inst;
@@ -534,6 +536,7 @@ pub const VM = struct {
             @setRuntimeSafety(false);
             fp.stack[rx] = res;
             fp = fiber.fp;
+            gsyms = fp.closure.fun.module.items;
           }
           continue;
         },
@@ -567,6 +570,7 @@ pub const VM = struct {
             @setRuntimeSafety(false);
             fp.stack[rx] = inst;
             fp = fiber.fp;
+            gsyms = fp.closure.fun.module.items;
           } else {
             var func = vl.asNativeFn(vl.asObj(inst).cls.?.getNativeMethodWithName(vl.asString(prop)).?);
             const next = @call(.always_inline, Self.readWord, .{self, fp});
@@ -577,6 +581,7 @@ pub const VM = struct {
             @setRuntimeSafety(false);
             fp.stack[rx] = res;
             fp = fiber.fp;
+            gsyms = fp.closure.fun.module.items;
           }
           continue;
         },
@@ -586,6 +591,7 @@ pub const VM = struct {
           var frame = fiber.popFrame();
           closeUpvalues(fiber, &frame.stack[0]);
           fp = fiber.fp;
+          gsyms = fp.closure.fun.module.items;
           if (fiber.frame_len == 0) {
             if (fiber.caller == null) {
               // TODO: handle result
@@ -814,6 +820,7 @@ pub const VM = struct {
           const init_mtd = vl.asObj(fp.stack[rx]).cls.?.getInitMethod(self).?;
           fiber.appendFrame(vl.asClosure(init_mtd), fp.stack + rx);
           fp = fiber.fp;
+          gsyms = fp.closure.fun.module.items;
           continue;
         },
         .Smtd => {
@@ -823,7 +830,7 @@ pub const VM = struct {
           var idx: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &idx);
           @setRuntimeSafety(false);
-          vl.asClass(self.RK(rk1, fp)).methods[idx] = fp.stack[rx];
+          vl.asClass(self.RK(rk1, fp)).items[idx] = fp.stack[rx];
           continue;
         },
         .Gmtd => {
@@ -834,8 +841,8 @@ pub const VM = struct {
           self.read3Args(code, &rx, &rk1, &idx);
           const inst = self.RK(rk1, fp);
           const mtd = (
-            if (vl.isInstance(inst)) vl.createBoundUserMethod(self, inst, vl.asClosure(vl.asObj(inst).cls.?.methods[idx]))
-            else vl.createBoundNativeMethod(self, inst, vl.asNativeFn(vl.asObj(inst).cls.?.methods[idx]))
+            if (vl.isInstance(inst)) vl.createBoundUserMethod(self, inst, vl.asClosure(vl.asObj(inst).cls.?.items[idx]))
+            else vl.createBoundNativeMethod(self, inst, vl.asNativeFn(vl.asObj(inst).cls.?.items[idx]))
           );
           @setRuntimeSafety(false);
           fp.stack[rx] = vl.objVal(mtd);
@@ -858,7 +865,7 @@ pub const VM = struct {
           var rk: u32 = undefined;
           self.read3Args(code, &rx, &idx, &rk);
           @setRuntimeSafety(false);
-          vl.asStruct(fp.stack[rx]).methods[idx] = self.RK(rk, fp);
+          vl.asStruct(fp.stack[rx]).items[idx] = self.RK(rk, fp);
           continue;
         },
         .Gfd => {
@@ -879,7 +886,7 @@ pub const VM = struct {
           self.read3Args(code, &rx, &rk, &idx);
           @setRuntimeSafety(false);
           const val = self.RK(rk, fp);
-          fp.stack[rx] = if (vl.isStruct(val)) vl.asStruct(self.RK(rk, fp)).methods[idx] else vl.asError(val).val;
+          fp.stack[rx] = if (vl.isStruct(val)) vl.asStruct(self.RK(rk, fp)).items[idx] else vl.asError(val).val;
           continue;
         },
         .Gmtds => {
@@ -898,6 +905,26 @@ pub const VM = struct {
           );
           @setRuntimeSafety(false);
           fp.stack[rx] = vl.objVal(mtd);
+          continue;
+        },
+        .Gmsym => {
+          // gmsym rx, rk(mod), idx
+          var rx: u32 = undefined;
+          var rk1: u32 = undefined;
+          var idx: u32 = undefined;
+          self.read3Args(code, &rx, &rk1, &idx);
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.asModule(self.RK(rk1, fp)).items[idx];
+          continue;
+        },
+        .Smsym => {
+          // smsym rx(mod), idx, rk(value)
+          var rx: u32 = undefined;
+          var idx: u32 = undefined;
+          var rk: u32 = undefined;
+          self.read3Args(code, &rx, &idx, &rk);
+          @setRuntimeSafety(false);
+          vl.asModule(fp.stack[rx]).items[idx] = self.RK(rk, fp);
           continue;
         },
         .Nerr => {

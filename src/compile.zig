@@ -227,12 +227,24 @@ pub const Compiler = struct {
   diag: *Diagnostic,
   generics: *GenInfoMap,
   prelude: Prelude,
+  entry_module: bool = false,
+  module_dst: u32 = undefined,
+  module_decl_idx: u32 = 0,
   
   const Self = @This();
 
   const GLOBAL_SCOPE = 0;
   const MAX_LOCALS = VM.MAX_LOCAL_ITEMS;
   const MAX_GSYMS = VM.MAX_GSYM_ITEMS;
+  const Module = struct {
+    compiled: bool = false,
+    /// the module as a callable ObjClosure object
+    closure: value.Value = 0,
+    /// the actual module - an ObjFn object
+    obj: *ObjFn,
+    /// the compiler for this module
+    compiler: *Compiler,
+  };
   const GlobalVarInfo = struct {
     pos: u32,
     isGSym: bool,
@@ -250,6 +262,7 @@ pub const Compiler = struct {
     dummy: u32,
   };
   const CompileError = error{CompileError};
+  var modules = ds.StringArrayHashMapUnmanaged(Module).init();
 
   pub fn init(
     diag: *Diagnostic, vm: *VM, fun: *ObjFn, generics: *GenInfoMap,
@@ -273,9 +286,9 @@ pub const Compiler = struct {
       .prelude = prel,
     };
     if (prev) |p| {
-      self.adoptBuiltinsPrelude(p);
+      self.adoptPrelude(p);
     } else {
-      self.loadBuiltinsPrelude();
+      self.loadPrelude();
     }
     if (mtd_token) |token| {
       self.appendSelfParam(token) catch unreachable;
@@ -305,6 +318,16 @@ pub const Compiler = struct {
       else 
         1
     );
+  }
+
+  inline fn addModule(self: *Self, name: []const u8, module: *ObjFn, compiler: *Self) void {
+    modules.set(name, .{.obj = module, .compiler = compiler}, self.alloc());
+  }
+
+  inline fn finishModule(self: *Self, name: []const u8, module: value.Value) void {
+    _ = self;
+    modules.getPtr(name).?.compiled = true;
+    modules.getPtr(name).?.closure = module;
   }
 
   inline fn isSelfVar(self: *Self, node: *tir.TVarNode) bool {
@@ -424,7 +447,7 @@ pub const Compiler = struct {
     if (self.findGlobal(token)) |info| {
       return .{.pos = info.pos, .isGSym = info.isGSym};
     }
-    if (self.gsyms.len() >= MAX_GSYMS or self.skip_gsyms) {
+    if (self.skip_gsyms) {
       logger.debug("Gsyms {s}..using globals list", .{if (self.skip_gsyms) "elided" else "exceeded"});
       return .{.pos = self.addGlobalVar(token), .isGSym = false};
     }
@@ -444,9 +467,9 @@ pub const Compiler = struct {
     return gvar.mempos;
   }
 
-  inline fn addPatchInitGlobalVar(self: *Self, node: *tir.TVarNode) void {
-     _ = self.addGSymVar(node);
-    var info = self.patchGlobal(node) catch return;
+  inline fn addPatchInitGlobalVar(self: *Self, token: Token) void {
+    _ = self.addGSymVar(token);
+    const info = self.patchGlobal(token) catch return;
     self.initializeGlobal(info);
   }
 
@@ -535,10 +558,10 @@ pub const Compiler = struct {
   }
 
   /// load prelude
-  fn loadBuiltinsPrelude(self: *Self) void {
+  fn loadPrelude(self: *Self) void {
     util.assert(self.globals.len() == 0, "globals len should be zero at startup");
     self.skip_gsyms = true;
-    self.preallocateGlobals(self.prelude.noexecs.NdProgram.decls);
+    self.preallocatePrelude();
     self.skip_gsyms = false;
     // patch and initialize all builtin globals:
     for (0..self.globals.len()) |i| {
@@ -548,7 +571,7 @@ pub const Compiler = struct {
   }
 
   /// adopt prelude
-  fn adoptBuiltinsPrelude(self: *Self, other: *Self) void {
+  fn adoptPrelude(self: *Self, other: *Self) void {
     const al = self.alloc();
     for (0..other.globals.len()) |i| {
       // store the global refs
@@ -578,12 +601,14 @@ pub const Compiler = struct {
 
   /// preallocate all globals in `gsyms` or `globals`
   fn preallocateGlobals(self: *Self, toplevels: tir.NodeItems) void {
-    // TODO: update
-    if (self.inLocalScope()) return;
+    assert(!self.inLocalScope());
     for (toplevels) |decl| {
       switch (decl.*) {
-        .NdVarDecl => |*vd| {
+        .NdVarDecl, .NdConstVarDecl => |*vd| {
           _ = self.addGSymVar(vd.name.toToken());
+        },
+        .NdPubVarDecl => |*vd| {
+          _ = self.addGSymVar(vd.getVarDecl().name.toToken());
         },
         .NdBasicFun => |*fun| {
           if (fun.data.name) |ident| {
@@ -609,6 +634,89 @@ pub const Compiler = struct {
           } else {
             _ = self.addGSymVar(cls.name.toToken());
           }
+        },
+        .NdImport => |*nd| {
+          self.addPatchInitGlobalVar(nd.getImportNameToken());
+          if (nd.data.entities) |entities| {
+            for (entities) |entity| {
+              self.addPatchInitGlobalVar(entity.getName());
+            }
+          }
+        },
+        else => {},
+      }
+    }
+  }
+
+  /// preallocate all prelude globals in `gsyms` or `globals`
+  fn preallocatePrelude(self: *Self) void {
+    assert(!self.inLocalScope());
+    for (self.prelude.core.NdProgram.decls) |decl| {
+      switch (decl.*) {
+        .NdVarDecl, .NdConstVarDecl => |*vd| {
+          _ = self.addGSymVar(vd.name.toToken());
+        },
+        .NdPubVarDecl => |*vd| {
+          _ = self.addGSymVar(vd.getVarDecl().name.toToken());
+        },
+        .NdBasicFun => |*fun| {
+          if (fun.data.name) |ident| {
+            _ = self.addGSymVar(ident);
+          }
+        },
+        .NdGenericFun => |_| {
+          if (self.generics.get(decl)) |list| {
+            for (list.items()) |itm| {
+              itm.instance.NdBasicFun.data.name.? = itm.synth_name;
+              _ = self.addGSymVar(itm.synth_name);
+            }
+          }
+        },
+        .NdClass => |*cls| {
+          if (cls.isParameterized()) {
+            if (self.generics.get(decl)) |list| {
+              for (list.items()) |itm| {
+                itm.instance.NdClass.name = tir.IdentToken.init(itm.synth_name);
+                _ = self.addGSymVar(itm.synth_name);
+              }
+            }
+          } else {
+            _ = self.addGSymVar(cls.name.toToken());
+          }
+        },
+        .NdImport => |*nd| {
+          self.addPatchInitGlobalVar(nd.getImportNameToken());
+          if (nd.data.entities) |entities| {
+            for (entities) |entity| {
+              _ = self.addPatchInitGlobalVar(entity.getName());
+            }
+          }
+        },
+        else => {},
+      }
+    }
+  }
+
+  fn compilePrelude(self: *Self, reg: u32) !void {
+    for (self.prelude.core.NdProgram.decls) |decl| {
+      switch (decl.*) {
+        .NdVarDecl, .NdConstVarDecl => |*vd| {
+          _ = try self.cVarDecl(vd, reg);
+        },
+        .NdPubVarDecl => |*vd| {
+          _ = try self.cVarDecl(vd.getVarDecl(), reg);
+        },
+        .NdBasicFun => |*fun| {
+          if (fun.data.builtin) continue;
+          _ = try self.cFun(decl, false, reg);
+        },
+        .NdGenericFun => |*fun| {
+          if (fun.fun.getBasicFun().data.builtin) continue;
+          _ = try self.cFunGeneric(decl, false, reg);
+        },
+        .NdClass => |*cls| {
+          if (cls.data.builtin) continue;
+          _ = try self.cClass(decl, cls, reg);
         },
         else => {},
       }
@@ -662,7 +770,7 @@ pub const Compiler = struct {
     }
   }
 
-  fn validateGlobalVarUse(self: *Self, info: GlobalVarInfo, node: *tir.TVarNode) !void {
+  fn validateGlobalVarUse(self: *Self, info: GlobalVarInfo, token: Token) !void {
     if (info.from_enclosing) {
       // this global var was obtained from an enclosing compiler's
       // global state, so it IS already validated. Just return.
@@ -670,12 +778,12 @@ pub const Compiler = struct {
     }
     if (info.isGSym) {
       if (self.gsyms.items()[info.pos].patched and !self.gsyms.items()[info.pos].initialized) {
-        return self.compileError(node.token, "cannot use variable '{s}' in its own initializer", .{node.token.lexeme()});
+        return self.compileError(token, "cannot use variable '{s}' in its own initializer", .{token.lexeme()});
       }
     } else {
       const gvar = info.gvar.?;
       if (gvar.patched and !gvar.initialized) {
-        return self.compileError(node.token, "cannot use variable '{s}' in its own initializer", .{node.token.lexeme()});
+        return self.compileError(token, "cannot use variable '{s}' in its own initializer", .{token.lexeme()});
       }
     }
   }
@@ -691,6 +799,13 @@ pub const Compiler = struct {
       self.fun.code.write2ArgsInst(.Load, reg, memidx, @intCast(line), self.vm);
       return reg;
     }
+  }
+
+  fn cConstNoOpt(self: *Self, reg: u32, val: value.Value, line: usize) u32 {
+    // load rx, memidx
+    const memidx = self.fun.code.writeValue(val, self.vm);
+    self.fun.code.write2ArgsInst(.Load, reg, memidx, @intCast(line), self.vm);
+    return reg;
   }
 
   fn storeVar(self: *Self, token: Token) u32 {
@@ -814,7 +929,7 @@ pub const Compiler = struct {
             op = OpCode.Iscls;
             const cls = typ.klass();
             const reg = try self.getReg(node.right.getToken());
-            var name = tir.TVarNode.init(cls.data.node.?.NdClass.name.toToken());
+            var name = tir.TVarNode.init(cls.getName());
             const rk2 = try self.cVar(&name, reg);
             self.vreg.releaseReg(reg);
             break :blk rk2;
@@ -920,7 +1035,7 @@ pub const Compiler = struct {
           return dst;
         } else if (fun.data.node != null and fun.data.node.?.NdBasicFun.data.name != null) {
           const last = self.diag.count();
-          var id = tir.TVarNode.init(fun.data.node.?.NdBasicFun.data.name.?);
+          var id = tir.TVarNode.init(fun.getName());
           const reg = self.cVar(&id, dst) catch undefined;
           // we use this indirection because for some reason zig generates bad
           // code for the above `catch` when used for handling this error
@@ -937,7 +1052,7 @@ pub const Compiler = struct {
       self.fun.code.write2ArgsInst(.Gupv, dst, upv, node.token.line, self.vm);
       return dst;
     } else if (self.findGlobal(node.token)) |info| {
-      try self.validateGlobalVarUse(info, node);
+      try self.validateGlobalVarUse(info, node.token);
       const inst: OpCode = if(info.isGSym) .Ggsym else .Gglb;
       self.fun.code.write2ArgsInst(inst, dst, info.pos, node.token.line, self.vm);
       return dst;
@@ -994,17 +1109,39 @@ pub const Compiler = struct {
     const prop = node.rhs.getToken(); // should be a VarNode's token
     var prop_idx: u32 = 0;
     var op: OpCode = undefined;
-    var ty = tmp.classOrInstanceClass().klass();
-    if (ty.getFieldIndex(prop.lexeme())) |idx| {
-      prop_idx = @intCast(idx);
-      op = .Gfd;
-    } else if (ty.getMethodIndex(prop.lexeme())) |idx| {
-      prop_idx = @intCast(idx);
-      op = if (is_call) .Jnextc else .Gmtd;
-    } else {
-      return self.compileError(prop, "No such field/method '{s}'", .{prop.lexeme()});
+    if (tmp.isClass() or tmp.isInstance()) {
+      var ty = tmp.classOrInstanceClass().klass();
+      if (ty.getFieldIndex(prop.lexeme())) |idx| {
+        prop_idx = @intCast(idx);
+        op = .Gfd;
+      } else if (ty.getMethodIndex(prop.lexeme())) |idx| {
+        prop_idx = @intCast(idx);
+        op = if (is_call) .Jnextc else .Gmtd;
+      } else {
+        return self.compileError(prop, "No such field/method '{s}'", .{prop.lexeme()});
+      }
+      self.fun.code.write3ArgsInst(op, dst, rk_inst, prop_idx, prop.line, self.vm);
+    } else if (tmp.isModule()) {
+      const name = tmp.module().name();
+      const m_info = modules.get(name).?;
+      if (m_info.compiler.findGlobal(prop)) |info| {
+        assert(info.isGSym);
+        self.fun.code.write3ArgsInst(.Gmsym, dst, rk_inst, info.pos, prop.line, self.vm);
+        return dst;
+      } else if (node.typ) |ty| {
+        if (ty.isFunction() or ty.isClass()) {
+          const _prop = if (ty.isFunction()) ty.function().getName() else ty.klass().getName();
+          if (m_info.compiler.findGlobal(_prop)) |info| {
+            assert(info.isGSym);
+            self.fun.code.write3ArgsInst(.Gmsym, dst, rk_inst, info.pos, prop.line, self.vm);
+            return dst;
+          }
+        } else if (ty.isTag()) {
+          return self.cTagVar(&node.rhs.NdTVar, ty, dst);
+        }
+      }
+      return self.compileError(prop, "No such property '{s}'", .{prop.lexeme()});
     }
-    self.fun.code.write3ArgsInst(op, dst, rk_inst, prop_idx, prop.line, self.vm);
     return dst;
   }
 
@@ -1071,9 +1208,9 @@ pub const Compiler = struct {
     const rk_val = try self.c(rhs, val_reg);
     var typ = node.lhs.getType().?;
     const token = node.lhs.getToken();
+    const prop = node.rhs.getToken();
     if (typ.isInstance() or typ.isClass()) {
       var ty = typ.classOrInstanceClass().klass();
-      const prop = node.rhs.getToken();
       var prop_idx: u32 = 0;
       if (ty.getFieldIndex(prop.lexeme())) |idx| {
         prop_idx = @intCast(idx);
@@ -1081,6 +1218,17 @@ pub const Compiler = struct {
         return self.compileError(prop, "No such field '{s}'", .{prop.lexeme()});
       }
       self.fun.code.write3ArgsInst(.Sfd, rx, prop_idx, rk_val, prop.line, self.vm);
+    } else if (typ.isModule()) {
+      // smsym rx(mod), idx, rk(value)
+      const name = typ.module().name();
+      var m_info = modules.get(name).?;
+      if (m_info.compiler.findGlobal(prop)) |info| {
+        assert(info.isGSym);
+        self.fun.code.write3ArgsInst(.Smsym, rx, info.pos, rk_val, prop.line, self.vm);
+        return dst;
+      } else {
+        return self.compileError(prop, "No such property '{s}'", .{prop.lexeme()});
+      }
     } else if (typ.isJustTy()) {
       // TODO: is mutation of tag's content safe?
       self.fun.code.write3ArgsInst(.Ssfd, rx, 0, rk_val, token.line, self.vm);
@@ -1331,6 +1479,7 @@ pub const Compiler = struct {
     var reg: u32 = undefined;
     const token = ast_node.getToken();
     var new_fn = value.createFn(self.vm, @intCast(node.params.len));
+    new_fn.module = self.fun.module;
     const is_global = self.inGlobalScope();
     var is_lambda = node.data.name == null;
     if (is_lambda) new_fn.name = value.createString(self.vm, &self.vm.strings, ks.LambdaVar, false);
@@ -1397,7 +1546,7 @@ pub const Compiler = struct {
         self.fun.code.write2ArgsInst(inst, reg, info.pos, self.lastLine(), self.vm);
       }
     }
-    if (util.getMode() == .Debug) {
+    if (util.inDebugMode()) {
       std.debug.print("\n", .{});
       Disassembler.disCode(&new_fn.code, new_fn.getName());
     }
@@ -1437,8 +1586,11 @@ pub const Compiler = struct {
     if (ty.isTag()) {
       return self.cTagCall(node, ty, reg); // node.typ.?
     }
-    if (node.expr.isDotAccess() and (!ty.isClass() or node.expr.isFun())) {
-      return try self.cMethodCall(node, reg);
+    if (node.expr.isDotAccess()) {
+      const t = node.expr.NdDotAccess.lhs.getType().?;
+      if (t.isInstance() or (ty.isFunction() and !t.isModule())) {
+        return try self.cMethodCall(node, reg);
+      }
     }
     const fun_dst = try self.c(node.expr, reg);
     var _dst = reg;
@@ -1503,15 +1655,9 @@ pub const Compiler = struct {
     const token = node.token;
     assert(tag.fieldsLen() == 0);
     if (ty.isNoneTy()) {
-      self.enterNoOpt();
-      const dst = self.cConst(reg, value.noneVal(), token.line);
-      self.leaveNoOpt();
-      return dst;
+      return self.cConstNoOpt(reg, value.noneVal(), token.line);
     }
-    self.enterNoOpt();
-    const dst = self.cConst(reg, value.createTag(self.vm, tag.name), token.line);
-    self.leaveNoOpt();
-    return dst;
+    return self.cConstNoOpt(reg, value.createTag(self.vm, tag.name), token.line);
   }
 
   fn cTagCall(self: *Self, node: *tir.CallNode, ty: *Type, reg: u32) !u32 {
@@ -1523,9 +1669,7 @@ pub const Compiler = struct {
     const token = node.expr.getToken();
     const strc = value.createStruct(self.vm, tag.fieldsLen());
     strc.name = value.createString(self.vm, &self.vm.strings, tag.name, false);
-    self.enterNoOpt();
-    const dst = self.cConst(reg, value.objVal(strc), token.line);
-    self.leaveNoOpt();
+    const dst = self.cConstNoOpt(reg, value.objVal(strc), token.line);
     const _dst = try self.getReg(token);
     for (node.args, 0..) |arg, idx| {
       const tmp = try self.c(arg, _dst);
@@ -1559,10 +1703,7 @@ pub const Compiler = struct {
     // optimize tuple len call since we know the result at compile time, i.e. tuple.len()
     if (self.isTupleLenMethodCall(node)) {
       const len = node.expr.NdDotAccess.lhs.getType().?.klass().tparamsLen();
-      self.enterNoOpt();
-      const dst = self.cConst(reg, value.numberVal(@floatFromInt(len)), node.expr.getToken().line);
-      self.leaveNoOpt();
-      return dst;
+      return self.cConstNoOpt(reg, value.numberVal(@floatFromInt(len)), node.expr.getToken().line);
     }
     if (node.variadic) node.transformVariadicArgs(self.alloc());
     const token = node.expr.getToken();
@@ -1639,6 +1780,63 @@ pub const Compiler = struct {
     return self.c(node.lnode.?, reg);
   }
 
+  inline fn cModuleStore(self: *Self, compiler: *Self, node: *tir.ImportNode, module: *value.ObjModule) !void {
+    const id = node.getImportNameToken();
+    assert(self.inGlobalScope());
+    if (self.findGlobal(id)) |info| {
+      if (info.isGSym) {
+        self.fun.module.items[info.pos] = value.objVal(module);
+      } else {
+        self.fun.code.write2ArgsInst(.Sglb, compiler.module_dst, info.pos, self.lastLine(), self.vm);
+      }
+    }
+  }
+
+  fn cModuleExec(self: *Self, compiler: *Self, node: *tir.ImportNode, new_fn: *ObjFn, call: value.Value) !void {
+    try self.cModuleStore(compiler, node, new_fn.module);
+    const reg = try self.getReg(node.getToken());
+    defer self.vreg.releaseReg(reg);
+    const dst = self.cConstNoOpt(reg, call, self.lastLine());
+    self.fun.code.write2ArgsInst(.Call, dst, 0, self.lastLine(), self.vm);
+  }
+
+  fn cImport(self: *Self, node: *tir.ImportNode, reg: u32) !u32 {
+    // check if we're not already compiling this
+    const path = node.program.NdProgram.filepath;
+    if (node.typ) |typ| {
+      if (!typ.module().resolved) {
+        logger.debug("skipping compilation of unchecked module: '{s}'", .{path});
+        return reg;
+      }
+    }
+    if (modules.get(path)) |mod| {
+      if (mod.compiled) {
+        logger.debug("using cached module: '{s}'", .{path});
+        try self.cModuleExec(mod.compiler, node, mod.obj, mod.closure);
+      } else {
+        try self.cModuleStore(mod.compiler, node, mod.obj.module);
+      }
+      return reg;
+    }
+    // first compile this node
+    var new_fn = value.createFn(self.vm, 0);
+    var compiler = util.box(Compiler, Compiler.init(
+      self.diag, self.vm, new_fn, self.generics,
+      self.allocator, self.prelude, self, null,
+    ), self.alloc());
+    self.addModule(path, new_fn, compiler);
+    try compiler.compileModule(node.program);
+    new_fn.name = new_fn.module.name;
+    const call = value.objVal(value.createClosure(self.vm, new_fn));
+    self.finishModule(path, call);
+    try self.cModuleExec(compiler, node, new_fn, call);
+    if (util.inDebugMode()) {
+      std.debug.print("\n", .{});
+      Disassembler.disCode(&new_fn.code, new_fn.getName());
+    }
+    return reg;
+  }
+
   fn cClassGeneric(self: *Self, node: *Node, reg: u32) CompileError!u32 {
     if (self.generics.get(node)) |list| {
       for (list.items()) |itm| {
@@ -1685,9 +1883,7 @@ pub const Compiler = struct {
       cls.name = value.createString(self.vm, &self.vm.strings, classname(ident), false);
     }
     // emit class
-    self.enterNoOpt();
-    const dst = self.cConst(reg, value.objVal(cls), token.line);
-    self.leaveNoOpt();
+    const dst = self.cConstNoOpt(reg, value.objVal(cls), token.line);
     self.incScope();
     for (node.data.methods.items(), 0..) |mth, i| {
       if (mth.isGenericMtd()) continue;
@@ -1705,6 +1901,14 @@ pub const Compiler = struct {
   }
 
   fn cProgram(self: *Self, node: *tir.ProgramNode, start: u32) !u32 {
+    const dst = try self.getReg(Token.getDefaultToken());
+    defer self.vreg.releaseReg(dst);
+    self.module_dst = self.cConstNoOpt(dst, value.objVal(self.fun.module), 1);
+    if (self.entry_module) {
+      const reg = try self.getReg(Token.getDefaultToken());
+      defer self.vreg.releaseReg(reg);
+      try self.compilePrelude(reg);
+    }
     var reg = start;
     for (node.decls) |nd| {
       reg = try self.c(nd, reg);
@@ -1724,7 +1928,8 @@ pub const Compiler = struct {
       .NdMap => |*nd| self.cMap(nd, reg),
       .NdExprStmt => |*nd| self.cExprStmt(nd, reg),
       .NdTVar => |*nd| self.cVar(nd, reg),
-      .NdVarDecl => |*nd| self.cVarDecl(nd, reg),
+      .NdVarDecl, .NdConstVarDecl => |*nd| self.cVarDecl(nd, reg),
+      .NdPubVarDecl => |*nd| self.cVarDecl(nd.getVarDecl(), reg),
       .NdAssign => |*nd| self.cAssign(nd, reg),
       .NdBlock => |*nd| self.cBlock(nd, reg),
       .NdType => |*nd| self.cNType(nd, reg),
@@ -1745,15 +1950,17 @@ pub const Compiler = struct {
       .NdDotAccess => |*nd| self.cDotAccess(nd, false, reg),
       .NdMatch => |*nd| self.cMatch(nd, reg),
       .NdMCondition => |*nd| self.c(nd.tst.NdCondition.cond, reg),
+      .NdImport => |*nd| self.cImport(nd, reg),
       .NdParam, .NdField, .NdPubField,
       .NdProgram, .NdCondition, .NdLblArg,
-      .NdOrElse, .NdPipeHolder, .NdFor, .NdForCounter, .NdGenericMtd => unreachable,
+      .NdOrElse, .NdPipeHolder, .NdFor,
+      .NdForCounter, .NdGenericMtd => unreachable,
     };
   }
 
-  pub fn compile(self: *Self, node: *Node) !void {
-    self.scrampleGenericMethods();
+  fn compileModule(self: *Self, node: *Node) !void {
     self.preallocateGlobals(node.NdProgram.decls);
+    self.fun.module = value.createModule(self.vm, self.gsyms.len(), node.NdProgram.filepath);
     const token = node.getToken();
     util.assert(
       (self.cProgram(&node.NdProgram, VRegister.DummyReg) catch VRegister.DummyReg) == VRegister.DummyReg,
@@ -1761,11 +1968,24 @@ pub const Compiler = struct {
     );
     self.fun.code.write2ArgsInst(.Ret, 0, 0, self.lastLine(), self.vm);
     self.validateNoUnpatchedGlobals(token) catch {};
-    defer self.allocator.deinitArena();
     if (self.diag.hasErrors()) {
       self.diag.display();
       self.fun.code.words.len = 0;
       return error.CompileError;
     }
+  }
+
+  fn setupEntryModule(self: *Self, node: *Node) void {
+    // save this module for future import resolution, if any.
+    // no need to call finishModule since this is the entry module.
+    self.addModule(node.NdProgram.filepath, self.fun, self);
+    self.entry_module = true;
+  }
+
+  pub fn compile(self: *Self, node: *Node) !void {
+    self.scrampleGenericMethods();
+    self.setupEntryModule(node);
+    try self.compileModule(node);
+    modules.clearAndFree(self.alloc());
   }
 };

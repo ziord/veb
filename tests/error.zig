@@ -46,7 +46,7 @@ test "builtin properties .1" {
   \\ p["fox"]
   ;
   try doErrorTest(src, 3, [_][]const u8{
-    "Cannot modify immutable type 'Tuple{num, num}'",
+    "Cannot mutate immutable type 'Tuple{num, num}'",
     "Expected type 'num' | 'num' but found 'num' | 'Type'",
     "Cannot index 'List{any}' type with type 'str'",
   });
@@ -64,7 +64,7 @@ test "builtin properties .2" {
   \\ p["fox"]
   ;
   try doErrorTest(src, 3, [_][]const u8{
-    "Cannot modify immutable type 'Tuple{num, num}'",
+    "Cannot mutate immutable type 'Tuple{num, num}'",
     "Cannot index type 'Map{str, num}' with type 'num'",
     "Cannot index 'List{any}' type with type 'str'",
   });
@@ -897,7 +897,7 @@ test "simple-classes-2" {
   \\ r.x
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Cannot modify immutable type 'fn (): Fox'",
+    "Cannot mutate immutable type 'fn (): Fox'",
     "illegal return statement in `init` method"
   });
 }
@@ -914,7 +914,7 @@ test "immutable method mod" {
   \\ j.fish = def => 10
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Cannot modify immutable type 'fn (): num'",
+    "Cannot mutate immutable type 'fn (): num'",
     "j.fish = def => 10"
   });
 }
@@ -2607,7 +2607,7 @@ test "typing.<immutable varargs>" {
   \\ fun(2, 3, 4)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Cannot modify immutable type 'List{num}'",
+    "Cannot mutate immutable type 'List{num}'",
   });
 }
 
@@ -2690,8 +2690,8 @@ test "aspec.<fields 1>" {
   \\ j.x + j.y
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "access of private field 'x' outside its defining class",
-    "access of private field 'y' outside its defining class",
+    "Access of private field 'x' outside its defining class",
+    "Access of private field 'y' outside its defining class",
   });
 }
 
@@ -2723,7 +2723,7 @@ test "aspec.<fields 2>" {
   \\ Fish().fox()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "access of private field 'x' outside its defining class",
+    "Access of private field 'x' outside its defining class",
   });
 }
 
@@ -2748,7 +2748,7 @@ test "aspec.<fields 3>" {
   \\ Fish().fox()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "access of private field 'j' outside its defining class",
+    "Access of private field 'j' outside its defining class",
   });
 }
 
@@ -2773,7 +2773,7 @@ test "aspec.<fields 4>" {
   \\ Fish().fox()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "access of private field 'j' outside its defining class",
+    "Access of private field 'j' outside its defining class",
   });
 }
 
@@ -2788,7 +2788,7 @@ test "aspec.<methods 1>" {
   \\ j.fun()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "access of private method 'fun' outside its defining class",
+    "Access of private method 'fun' outside its defining class",
   });
 }
 
@@ -2814,7 +2814,7 @@ test "aspec.<methods 2>" {
   \\ Fish()
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "access of private field 'x' outside its defining class",
+    "Access of private field 'x' outside its defining class",
     "print((def () => self.x)())",
   });
 }
@@ -2844,7 +2844,7 @@ test "aspec.<methods 2.5>" {
   \\ Fish()
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "access of private method 'fox' outside its defining class",
+    "Access of private method 'fox' outside its defining class",
     "print((def () => self.fox())())",
   });
 }
@@ -4110,8 +4110,7 @@ test "builtin @ <vardecl, match>" {
   \\  case @Foo() => 10
   \\ end
   ;
-  try doErrorTest(src, 4, [_][]const u8{
-    "cannot use an identifier marked with '@' in this context.",
+  try doErrorTest(src, 3, [_][]const u8{
     "cannot use an identifier marked with '@' in this context.",
     "cannot use an identifier marked with '@' in this context.",
     "cannot use an identifier marked with '@' in this context.",
@@ -4514,5 +4513,16 @@ test "for loop <scopes>" {
   try doErrorTest(src, 2, [_][]const u8{
     "Cannot index 'List{num}' type with type 'str'",
     "_ = assert(fun() == expected[i], 'should be same')",
+  });
+}
+
+test "const variables" {
+  const src =
+  \\ const i = 'a'
+  \\ const j = 'b'
+  \\ j = i
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Cannot mutate constant type 'str'",
   });
 }

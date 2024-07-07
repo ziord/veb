@@ -1,0 +1,9 @@
+pub builtin class str
+  pub def len(): num
+    #[[internal]]
+  end
+
+  pub def concat(other: str): str
+    #[[internal]]
+  end
+end

@@ -32,6 +32,9 @@ pub const NameGen = struct {
   }
 };
 
+pub const U8Writer = TWriter(u8);
+pub const StringWriter = TWriter([]const u8);
+
 pub fn TWriter(comptime T: type) type {
   return struct {
     backing: std.ArrayList(T),
@@ -69,9 +72,6 @@ pub fn TWriter(comptime T: type) type {
     }
   };
 }
-
-pub const U8Writer = TWriter(u8);
-pub const StringWriter = TWriter([]const u8);
 
 pub inline fn append(comptime T: type, list: *std.ArrayList(T), val: T) void {
   list.append(val) catch |e| {
@@ -113,6 +113,14 @@ pub fn error_(comptime fmt: []const u8, args: anytype) noreturn {
 
 pub inline fn getMode() std.builtin.Mode {
   return builtin.mode;
+}
+
+pub inline fn inDebugMode() bool {
+  return builtin.mode == .Debug;
+}
+
+pub inline fn getVersion() []const u8 {
+  return "0.1.0";
 }
 
 pub inline fn assert(check: bool, msg: []const u8) void {
@@ -159,4 +167,26 @@ pub fn addDepth(writer: *std.ArrayList(u8).Writer, depth: usize) !void {
   for (0..depth) |_| {
     _ = try writer.write(" ");
   }
+}
+
+pub fn readFile(filename: []const u8, al: Allocator) ![]const u8 {
+  errdefer print("Error opening file: {s}\n", .{filename});
+  var path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+  const abs_path = try std.fs.realpath(filename, &path_buffer);
+  const file = try std.fs.openFileAbsolute(abs_path, .{});
+  defer file.close();
+  const size = try file.getEndPos();
+  const content = try al.allocSentinel(u8, size, 0);
+  const got = try file.readAll(content);
+  assert(got == size, "file size should match");
+  return content;
+}
+
+pub fn readFileHandle(file: std.fs.File, al: Allocator) ![]const u8 {
+  defer file.close();
+  const size = try file.getEndPos();
+  const content = try al.allocSentinel(u8, size, 0);
+  const got = try file.readAll(content);
+  assert(got == size, "file size should match");
+  return content;
 }

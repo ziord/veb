@@ -162,6 +162,14 @@ pub const OpCode = enum (u8) {
   // [6] [8] [18]
   Sgsym, // set global sym
 
+  // gmsym rx, rk(mod), rk(idx)
+  // [6]   [8]    [9]         [9]
+  Gmsym, // get module sym
+
+  // smsym rx(mod), idx, rk(value)
+  // [6]   [8]    [9]         [9]
+  Smsym, // set module sym
+
   // mov rx, ry
   // [6] [8]  [9]
   Mov, // move

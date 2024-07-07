@@ -1,0 +1,24 @@
+pub type Tree{a} =
+  | Node(val: a, lhs: Tree{a}, rhs: Tree{a})
+  | Empty
+ 
+pub def print_tree{a}(tree: Tree{a})
+  match tree
+    case Empty => println("Empty")
+    case Node(val, lhs, rhs) => do
+      println("Node:", val)
+      print("Left: ")
+      print_tree(lhs)
+      print("Right: ")
+      print_tree(rhs)
+    end
+  end
+end
+
+pub def show(x*: any)
+  for val in x
+    print(val)
+    print(" ")
+  end
+  println()
+end

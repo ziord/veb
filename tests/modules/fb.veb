@@ -1,0 +1,28 @@
+import pub fa as b
+import std
+
+b.Fish('heyo'.len())
+
+b.show_foo(b.C)
+b.show_foo(b.Bar.C)
+b.Fish(12).swim()
+
+let f = b.Fish('heyo'.len())
+f.swim() |> println
+f.swim()
+b.Fish(f.x).swim()
+for i, j in std.collections.range(1, Just(5), None)
+    println(i, j)
+end
+let a: b.Tree{num} = b.Node(12, b.Empty, b.Empty)
+println(a)
+
+std.collections.zip([1, 2, 3, 4].iter(), ['a', 'b', 'c'].iter()) |> println
+let bk = b.Bonkers('oops')
+bk.scream()
+b.CAPITAL |> println
+let k = b.CAPITAL
+k |> println
+const f = {'a': 5, 'b': 7}
+f.set('a', 12)
+println(f)

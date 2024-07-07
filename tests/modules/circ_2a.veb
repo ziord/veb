@@ -1,0 +1,9 @@
+import circ_2b
+
+pub def thingy(x: num)
+    return circ_2b.okay(x)
+end
+
+pub def aha@(t: num)
+    return t * 2 + t << 3 >> 1
+end

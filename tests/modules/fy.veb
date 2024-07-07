@@ -1,0 +1,46 @@
+import fx
+import fc
+import fb
+import fa
+let x: fx.Foo = fx.Foo.B
+println(x)
+
+println(fa.CAPITAL)
+println(fb.b.CAPITAL)
+for i, j in fc.sc.range(1, Just(12), Just(3))
+  println(i, j)
+end
+
+def fun(a: fx.Foo, b: fx.Foo): fx.Cmp{num, str}
+  println(a, b)
+  return fx.Car('o_o'.len())
+end
+
+fun(x, fx.A) |> println
+
+let j: fx.Cmp{num, str} = fx.Plane('yes')
+println(j)
+j = fx.Car(12)
+println(j)
+
+type Funk = A(str) | B(num)
+let k: A = A('ok')
+println(k)
+
+class MyFold : fx.Foldable{num, str}
+  pub def fold_right(x: str)
+    return x <> '^_^' <> x
+  end
+
+  pub def fold_left(x: num)
+    return x << 1
+  end
+end
+
+MyFold().fold_right('oopsla') |> println
+MyFold().fold_left('oopsla'.len()) |> println
+
+fx.Fox().fun() |> println
+
+let j: fx.Q.Plane = fx.Plane('yes')
+println(j)

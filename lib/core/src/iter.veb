@@ -1,0 +1,69 @@
+pub trait Iterator{U}
+  pub def next(): Maybe{U};
+
+  pub def count(): num
+    let len = 0
+    while self.next() != None
+      len += 1
+    end
+    return len
+  end
+
+  pub def zip{V}(other: Iterator{V}): List{Tuple{U, V}}
+    let res = [] as List{Tuple{U, V}}
+    while true
+      match (self.next(), other.next())
+        case (Just(a), Just(b)) => res.append((a, b))
+        case _ => break
+      end
+    end
+    return res
+  end
+
+  pub def map{T}(fun: fn(U): T): List{T}
+    let res = [] as List{T}
+    while true
+      match self.next()
+        case Just(a) => res.append(fun(a))
+        case _ => break
+      end
+    end
+    return res
+  end
+
+  pub def filter(fun: fn(U): bool): List{U}
+    let res = [] as List{U}
+    while true
+      match self.next()
+        case Just(a) => if fun(a) res.append(a) end
+        case _ => break
+      end
+    end
+    return res
+  end
+
+  pub def reduce(func: fn(U, U):U, init: Maybe{U})
+    let acc = match init
+      case Just(i) => i
+      case None => match self.next()
+        case Just(i) => i
+        case None => @panic('reduce of empty iterable with no initial value')
+      end
+    end
+    while true
+      match self.next()
+        case Just(t) => acc = func(acc, t)
+        case None => break
+      end
+    end
+    return acc
+  end
+end
+
+pub trait Iter{T}
+  pub def iter(): Iterator{T};
+end
+
+pub def @iter{T}(itr: Iter{T}): Iterator{T}
+   return itr.iter()
+end

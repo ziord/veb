@@ -28,6 +28,7 @@ const NodeList = tir.NodeList;
 const Pattern = ptn.Pattern;
 const ParseMode = lex.ParseMode;
 pub const TypeKind = tir.TypeKind;
+pub const logger = std.log.scoped(.parse);
 
 /// maximum number of elements of a list literal 
 const MAX_LISTING_ELEMS = 0xff;
@@ -37,6 +38,8 @@ const MAX_PARAMS = 0xff;
 const MAX_FIELDS = 0xff;
 /// maximum number of class methods
 const MAX_METHODS = 0xff;
+/// maximum number of resolution cycles for an import
+const MAX_IMPORT_RES_CYCLE = 0x2;
 
 pub const Parser = struct {
   current_tok: Token,
@@ -45,7 +48,21 @@ pub const Parser = struct {
   allocator: std.mem.Allocator,
   diag: Diagnostic,
   meta: ParseMeta,
+  cwd: []const u8,
   namegen: util.NameGen,
+  imports: ds.StringHashMap(Program),
+
+  pub var lib_path: []const u8 = "";
+
+  const FileHandle = struct {
+    filename: []const u8,
+    file: std.fs.File,
+  };
+
+  const Program = struct {
+    node: *Node,
+    src: []const u8,
+  };
 
   const ParseMeta = struct {
     casts: u32 = 0,
@@ -55,12 +72,12 @@ pub const Parser = struct {
     in_type_decl: bool = false,
     in_labeled_call: bool = false,
     in_type_alias: bool = false,
-    add_exec_decls: bool = false,
     func: ?*Node = null,
     class: ?*Node = null,
-    m_literals: ds.ArrayList(NameTuple),
     mode: ParseMode,
-    decls: std.StringHashMap(Token),
+    m_literals: ds.ArrayList(NameTuple),
+    imports: ds.StringHashMap(u32),
+    decls: ds.StringHashMap(Token),
 
     const NameTuple = struct{*Node, *Node, bool};
 
@@ -68,8 +85,17 @@ pub const Parser = struct {
       return .{
         .m_literals = ds.ArrayList(NameTuple).init(al),
         .mode = mode,
-        .add_exec_decls = mode == .User,
-        .decls = std.StringHashMap(Token).init(al)
+        .decls = ds.StringHashMap(Token).init(al),
+        .imports = ds.StringHashMap(u32).init(al),
+      };
+    }
+
+    fn initForImport(al: std.mem.Allocator, mode: ParseMode) @This() {
+      return .{
+        .m_literals = ds.ArrayList(NameTuple).init(al),
+        .mode = mode,
+        .decls = ds.StringHashMap(Token).init(al),
+        .imports = undefined,
       };
     }
   };
@@ -174,11 +200,13 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkElse
     .{.bp = .None, .prefix = null, .infix = null},                      // TkElif
     .{.bp = .None, .prefix = null, .infix = null},                      // TkCase
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkFrom
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkTrue
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkVoid
     .{.bp = .None, .prefix = Self.selfExpr, .infix = null},             // TkSelf
     .{.bp = .None, .prefix = null, .infix = null},                      // TkWith
     .{.bp = .None, .prefix = null, .infix = null},                      // TkClass
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkConst
     .{.bp = .None, .prefix = null, .infix = null},                      // TkTrait
     .{.bp = .None, .prefix = null, .infix = null},                      // TkBreak
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkFalse
@@ -188,8 +216,10 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkWhere
     .{.bp = .None, .prefix = null, .infix = null},                      // TkWhile
     .{.bp = .None, .prefix = null, .infix = null},                      // TkResult
+    .{.bp = .Term, .prefix = null, .infix = null},                      // TkImport
     .{.bp = .Term, .prefix = null, .infix = Self.orElseExpr},           // TkOrElse
     .{.bp = .None, .prefix = null, .infix = null},                      // TkReturn
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkBuiltin
     .{.bp = .None, .prefix = null, .infix = null},                      // TkContinue
     .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkNoReturn
     .{.bp = .None, .prefix = Self.number, .infix = null},               // TkNumber
@@ -200,15 +230,36 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkEof
   };
 
-  pub fn init(src: *[]const u8, filename: *const[]const u8, mode: ParseMode, al: std.mem.Allocator) Self {
+  pub fn init(src: *[]const u8, filename: *const[]const u8, cwd: []const u8, mode: ParseMode, al: std.mem.Allocator) Self {
     return Self {
       .current_tok = undefined,
       .previous_tok = undefined,
-      .lexer = lex.Lexer.init(src.*, mode, al),
+      .lexer = lex.Lexer.init(src.*, 1, al),
       .diag = Diagnostic.init(al, filename, src),
       .namegen = util.NameGen.init(al),
       .meta = ParseMeta.init(al, mode),
-      // use the arena allocator for allocating general nodes.
+      .imports = ds.StringHashMap(Program).init(al),
+      .cwd = cwd,
+      .allocator = al,
+    };
+  }
+
+  pub fn initForCore(src: *[]const u8, filename: *const[]const u8, cwd: []const u8, mode: ParseMode, al: std.mem.Allocator) Self {
+    var self = Self.init(src, filename, cwd, mode, al);
+    self.lexer.file = 0;
+    return self;
+  }
+
+  pub fn initForImport(src: *[]const u8, cwd: []const u8, mode: ParseMode, diag: Diagnostic, al: std.mem.Allocator) Self {
+    return Self {
+      .current_tok = undefined,
+      .previous_tok = undefined,
+      .lexer = lex.Lexer.init(src.*, diag.getFile(), al),
+      .diag = diag,
+      .namegen = util.NameGen.init(al),
+      .meta = ParseMeta.initForImport(al, mode),
+      .imports = undefined,
+      .cwd = cwd,
       .allocator = al,
     };
   }
@@ -353,8 +404,8 @@ pub const Parser = struct {
     self.assertBuiltinIdentNotInUse(self.previous_tok);
   }
 
-  inline fn getDisambiguator(self: *Self, comptime T: type) std.StringHashMap(T) {
-    return std.StringHashMap(T).init(self.allocator);
+  inline fn getDisambiguator(self: *Self, comptime T: type) ds.StringHashMap(T) {
+    return ds.StringHashMap(T).init(self.allocator);
   }
 
   inline fn getNodeList(self: *Self) NodeList {
@@ -436,9 +487,8 @@ pub const Parser = struct {
   inline fn assertUniqueTParams(self: *Self, alias: *Generic, param: *Type) void {
     for (alias.getSlice()) |typ| {
       // `param` and `typ` have Variable.tokens equal to size 1.
-      var token = param.variable().tokens.getLast();
-      if (token.valueEql(typ.variable().tokens.getLast())) {
-        return self.softErrMsg(token, "redefinition of type parameter");
+      if (param.variable().value.valueEql(typ.variable().value)) {
+        return self.softErrMsg(param.variable().value, "redefinition of type parameter");
       }
     }
   }
@@ -463,13 +513,20 @@ pub const Parser = struct {
     }
   }
 
+  inline fn consumeIdentAndAssertNoDiscard(self: *Self) !Token {
+    try self.consumeIdent();
+    const ident = self.previous_tok;
+    self.assertDiscardIdentNotInUse(ident);
+    return ident;
+  }
+
   fn assertUniqueDecl(self: *Self, token: Token, comptime what: []const u8, put: bool) void {
     const lxm = token.lexeme();
     if (self.meta.decls.get(lxm)) |tk| {
       self.softErrMsg(token, "illegal duplicate declaration (" ++ what ++ ").");
       self.softErrFmt(tk, 4, 2, "'{s}' is also declared here:", .{lxm});
     } else if (put) {
-      self.meta.decls.put(lxm, token) catch {};
+      self.meta.decls.set(lxm, token);
     }
   }
 
@@ -480,7 +537,7 @@ pub const Parser = struct {
         switch (gen.base.info) {
           .Variable => |*vr| {
             if (vr.eql(&tvar.info.Variable)) {
-              return vr.getFirst();
+              return vr.value;
             }
           },
           else => {}
@@ -547,7 +604,7 @@ pub const Parser = struct {
       .Generic => |*gen| {
         if (rhs_ty.isTaggedUnion()) {
           for (gen.getSlice()) |param| {
-            const token = param.variable().tokens.getLast();
+            const token = param.variable().value;
             for (rhs_ty.taggedUnion().variants.items()) |tag| {
               if (token.valueEql(tag.tag().name)) {
                 return self.softWarnMsg(token, warning);
@@ -556,7 +613,7 @@ pub const Parser = struct {
           }
         } else {
           for (gen.getSlice()) |param| {
-            const token = param.variable().tokens.getLast();
+            const token = param.variable().value;
             if (token.valueEql(rhs_ty.tag().name)) {
               return self.softWarnMsg(token, warning);
             }
@@ -1011,10 +1068,7 @@ pub const Parser = struct {
   fn aliasParam(self: *Self, can_have_bounds: bool) !Type {
     const debug = self.current_tok;
     try self.consumeIdent();
-    var typ = Type.newVariableWToken(debug, self.allocator);
-    if (self.check(.TkDot)) {
-      return self.errMsg(self.current_tok, "expected single identifier, found multiple");
-    }
+    var typ = Type.newVariableWToken(debug);
     if (can_have_bounds and self.match(.TkColon)) {
       var ty = try self.annotation();
       if (self.check(.TkPlus)) {
@@ -1063,7 +1117,7 @@ pub const Parser = struct {
     // TypeName       :=  Ident AbsTypeParams?
     // AbsTypeParams  :=  "{" Ident ( "," Ident )* "}"
     try self.consumeIdent();
-    var typ = Type.newVariableWToken(self.previous_tok, self.allocator);
+    var typ = Type.newVariableWToken(self.previous_tok);
     return (
       if (!self.check(.TkLCurly)) typ
       else try self.abstractTypeParams(typ.box(self.allocator), can_have_bounds)
@@ -1096,12 +1150,7 @@ pub const Parser = struct {
 
   fn refType(self: *Self) !Type {
     try self.consumeIdent();
-    var typ = Type.newVariableWToken(self.previous_tok, self.allocator);
-    while (self.match(.TkDot)) {
-      try self.consumeIdent();
-      typ.variable().appendTok(self.previous_tok, self.allocator);
-    }
-    return typ;
+    return Type.newVariableWToken(self.previous_tok);
   }
 
   fn builtinOrRefType(self: *Self) !Type {
@@ -1129,7 +1178,7 @@ pub const Parser = struct {
     try self.consume(.TkFn);
     var params = TypeList.init();
     try self.consume(.TkLBracket);
-    var fun = Function.init(undefined, null, null, self.allocator);
+    var fun = Function.init(undefined, null, null, null, self.allocator);
     while (!self.check(.TkEof) and !self.check(.TkRBracket)) {
       if (params.isNotEmpty()) try self.consume(.TkComma);
       params.append(try self._typing(), self.allocator);
@@ -1152,8 +1201,7 @@ pub const Parser = struct {
     gen = ret.generic();
     while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
       if (gen.tparams.isNotEmpty()) try self.consume(.TkComma);
-      var param = try self.tExpr();
-      gen.append(param.box(self.allocator), self.allocator);
+      gen.append(try self.tExpr(), self.allocator);
     }
     try self.consume(.TkRCurly);
     self.assertNonEmptyTParams(gen.tparamsLen());
@@ -1167,8 +1215,7 @@ pub const Parser = struct {
     var list = TypeList.init();
     while (!self.check(.TkEof) and !self.check(.TkRCurly)) {
       if (list.isNotEmpty()) try self.consume(.TkComma);
-      var param = try self.tExpr();
-      list.append(param.box(self.allocator), self.allocator);
+      list.append(try self.tExpr(), self.allocator);
     }
     cls.initTParamSlice(list.items(), null);
     try self.consume(.TkRCurly);
@@ -1192,18 +1239,18 @@ pub const Parser = struct {
     return typ;
   }
 
-  fn tPrimary(self: *Self) ParseError!Type {
+  fn tPrimary(self: *Self) ParseError!*Type {
     // Primary  := ( Generic | Constant | Concrete | Function | “(“ Expression “)” ) "?"?
-    var typ: Type = undefined;
+    var typ: *Type = undefined;
     self.builtinTaggedUnionToIdent();
     switch (self.current_tok.ty) {
       // Generic
       .TkIdent, .TkList, .TkMap, .TkTuple, .TkError => {
-        typ = try self.tGeneric();
+        typ = (try self.tGeneric()).box(self.allocator);
       },
       // Function
       .TkFn => {
-        typ = try self.funType();
+        typ = (try self.funType()).box(self.allocator);
       },
       // “(“ Expression “)”
       .TkLBracket => {
@@ -1223,47 +1270,46 @@ pub const Parser = struct {
           else => unreachable,
         };
         // direct 'unit' types such as listed above do not need names
-        typ = Type.newConcrete(tkind);
+        typ = Type.newConcrete(tkind).box(self.allocator);
         try self.advance();
       },
       // Constant
       else => {
-        typ = try self.constantType();
+        typ = (try self.constantType()).box(self.allocator);
       },
     }
     if (!self.meta.in_type_alias and self.match(.TkQMark)) {
-      typ = Type.newTaggedNullable(
-        typ.box(self.allocator),
-        self.allocator, null
-      ).*;
+      typ = Type.newTaggedNullable(typ, self.allocator, null);
     }
     return typ;
   }
 
-  fn tExpr(self: *Self) !Type {
-    // Expression := Primary
-    return self.tPrimary();
+  fn tExpr(self: *Self) !*Type {
+    // Expression := Primary (. Primary)*
+    var typ = try self.tPrimary();
+    while (self.match(.TkDot)) {
+      typ = Type.newDot(typ, try self.tPrimary(), self.allocator);
+    }
+    return typ;
   }
 
   fn typing(self: *Self, assignable: bool) !*Node { 
     _ = assignable;
     const token = self.current_tok;
-    const typ = try self.tExpr();
-    return self.newNode(.{.NdType = tir.TypeNode.init(typ.box(self.allocator), token)});
+    return self.newNode(.{.NdType = tir.TypeNode.init(try self.tExpr(), token)});
   }
 
   fn typingTypeNode(self: *Self) !*tir.TypeNode {
     const token = self.current_tok;
-    const typ = try self.tExpr();
     return util.box(
       tir.TypeNode,
-      tir.TypeNode.init(typ.box(self.allocator), token),
+      tir.TypeNode.init(try self.tExpr(), token),
       self.allocator
     );
   }
 
   inline fn _typing(self: *Self) !*Type { 
-    return (try self.tExpr()).box(self.allocator);
+    return try self.tExpr();
   }
 
   const annotation = _typing;
@@ -1313,7 +1359,7 @@ pub const Parser = struct {
           if (disamb.get(value) != null) {
             self.softErrMsg(name, "duplicate param handle");
           } else {
-            disamb.put(value, 1) catch {};
+            disamb.set(value, 1);
           }
         }
         typ.tag().appendField(param, self.allocator);
@@ -1333,7 +1379,7 @@ pub const Parser = struct {
     var typ = try self.taggedPrimary();
     if (self.check(.TkPipe)) {
       var disamb = self.getDisambiguator(u32);
-      if (typ.isTag()) disamb.put(typ.tag().name, 1) catch {};
+      if (typ.isTag()) disamb.set(typ.tag().name, 1);
       var uni = TaggedUnion.init();
       uni.set(typ.box(self.allocator), self.allocator);
       while (self.match(.TkPipe)) {
@@ -1342,7 +1388,7 @@ pub const Parser = struct {
           if (disamb.get(typ.tag().name) != null) {
             self.softErrMsg(self.current_tok, "duplicate tag");
           } else {
-            disamb.put(typ.tag().name, 1) catch {};
+            disamb.set(typ.tag().name, 1);
           }
         }
         uni.set(typ.box(self.allocator), self.allocator);
@@ -1374,11 +1420,13 @@ pub const Parser = struct {
     );
   }
 
-  fn typeAlias(self: *Self) !*Node {
+  fn typeAlias(self: *Self, is_pub: bool) !*Node {
     // TypeAlias   := "alias" AbstractType "=" ConcreteType
     defer self.meta.in_type_alias = false;
     self.meta.in_type_alias = true;
     const alias_typ = (try self.abstractType(false)).box(self.allocator);
+    const aspec = tir.AccessSpecifier.getASpec(is_pub);
+    alias_typ.aspec = aspec;
     const alias = util.box(
       tir.TypeNode,
       tir.TypeNode.init(alias_typ, self.current_tok),
@@ -1386,29 +1434,34 @@ pub const Parser = struct {
     );
     try self.consume(.TkEqual);
     const aliasee = try self.typingTypeNode();
+    aliasee.typ.aspec = aspec;
     // check that generic type variable parameters in `AbstractType` are not generic in `ConcreteType`
     self.assertNoGenericParameterTypeVariable(alias_typ, aliasee.typ);
     return self.newNode(.{.NdAlias = tir.AliasNode.init(alias, aliasee)});
   }
 
-  fn typeDecl(self: *Self) !*Node {
+  fn typeDecl(self: *Self, is_pub: bool) !*Node {
     // “type” AbstractType = ID (“(“TypeParam (“,” TypeParam)* “)”)?  (“|”   ID (“(“TypeParam (“,” TypeParam)* “)”)?)*
     const name = self.current_tok;
     if (self.inBuiltinMode()) {
       self.builtinTaggedUnionToIdent();
     }
     const typ_name = (try self.abstractType(false)).box(self.allocator);
+    const aspec = tir.AccessSpecifier.getASpec(is_pub);
+    typ_name.aspec = aspec;
     const alias = util.box(tir.TypeNode, tir.TypeNode.init(typ_name, name), self.allocator);
     try self.consume(.TkEqual);
     self.meta.in_type_decl = true;
     defer self.meta.in_type_decl = false;
     const aliasee = try self.taggedTypingAnn();
+    aliasee.typ.aspec = aspec;
     // check that generic type variable parameters in `AbstractType` are not generic in `ConcreteType`
     self.assertNoGenericParameterTypeVariable(typ_name, aliasee.typ);
     self.warnIfGenericParamsMatchesTagNames(typ_name, aliasee.typ);
     if (aliasee.typ.isTaggedUnion()) {
       // forbid a type whose name collides with its variants
       for (aliasee.typ.taggedUnion().variants.items()) |ty| {
+        ty.aspec = aspec;
         if (ty.tag().nameEql(name.lexeme())) {
           self.softErrArgs(name, "type with name '{s}' shadows one of its variants", .{name.lexeme()});
         }
@@ -1417,11 +1470,9 @@ pub const Parser = struct {
     return self.newNode(.{.NdAlias = tir.AliasNode.init(alias, aliasee)});
   }
 
-  fn varDecl(self: *Self) !*Node {
+  fn varDecl(self: *Self, is_pub: bool, is_const: bool) !*Node {
     // let var (: type)? = expr
-    try self.consumeIdent();
-    const ident = self.previous_tok;
-    self.assertDiscardIdentNotInUse(ident);
+    const ident = try self.consumeIdentAndAssertNoDiscard();
     var anot_ty: ?*Type = null;
     if (self.match(.TkColon)) {
       anot_ty = try self.annotation();
@@ -1429,7 +1480,11 @@ pub const Parser = struct {
     }
     try self.consume(.TkEqual);
     const val = try self.parseExpr();
-    return self.newNode(.{.NdVarDecl = tir.VarDeclNode.init(ident, val, anot_ty)});
+    const decl = (
+      if (!is_const) self.newNode(.{.NdVarDecl = tir.VarDeclNode.init(ident, val, anot_ty)})
+      else self.newNode(.{.NdConstVarDecl = tir.VarDeclNode.init(ident, val, anot_ty)})
+    );
+    return if (!is_pub) decl else self.newNode(.{.NdPubVarDecl = .{.decl = decl}});
   }
 
   fn exprStmt(self: *Self) !*Node {
@@ -1497,14 +1552,10 @@ pub const Parser = struct {
     // for (counter ,)? ident in iterable do? ... end
     self.incLoop();
     defer self.decLoop();
-    try self.consumeIdent();
-    var id1 = self.previous_tok;
-    self.assertDiscardIdentNotInUse(id1);
+    const id1 = try self.consumeIdentAndAssertNoDiscard();
     var id2: ?Token = null;
     if (self.match(.TkComma)) {
-      try self.consumeIdent();
-      self.assertDiscardIdentNotInUse(self.previous_tok);
-      id2 = self.previous_tok;
+      id2 = try self.consumeIdentAndAssertNoDiscard();
     }
     try self.consume(.TkIn);
     const itrbl = try self.parseExpr();
@@ -1527,16 +1578,14 @@ pub const Parser = struct {
         if (params.isNotEmpty()) {
           try self.consume(.TkComma);
         }
-        try self.consumeIdent();
-        const ident = self.previous_tok;
-        self.assertDiscardIdentNotInUse(ident);
+        const ident = try self.consumeIdentAndAssertNoDiscard();
         if (disamb.get(ident.lexeme())) |_| {
           self.softErrMsg(
             ident,
             "duplicate parameter is illegal in parameter list"
           );
         } else {
-          disamb.put(ident.lexeme(), 0) catch {};
+          disamb.set(ident.lexeme(), 0);
         }
         if (!self.match(.TkStar)) {
           try self.consume(.TkColon);
@@ -1590,10 +1639,10 @@ pub const Parser = struct {
         }
       }
       var ty = try self.aliasParam(true);
-      if (disamb.get(ty.variable().getFirstLexeme()) != null) {
-        self.softErrMsg(ty.variable().getFirst(), "duplicate type parameter found");
+      if (disamb.get(ty.variable().lexeme()) != null) {
+        self.softErrMsg(ty.variable().value, "duplicate type parameter found");
       } else {
-        disamb.put(ty.variable().getFirstLexeme(), 1) catch {};
+        disamb.set(ty.variable().lexeme(), 1);
       }
       params.append(ty.box(self.allocator), self.allocator);
     }
@@ -1624,7 +1673,7 @@ pub const Parser = struct {
         }
       }
       if (!resolved) {
-        self.softErrMsg(ty.variable().getFirst(), "the type used here is not defined");
+        self.softErrMsg(ty.variable().value, "the type used here is not defined");
       }
     }
   }
@@ -1927,13 +1976,13 @@ pub const Parser = struct {
         ).box(self.allocator)
       );
     }
-    self.assertBuiltinIdentNotInUse(self.current_tok);
     const id = try self.variable(false);
     const token = id.NdTVar.token;
     if (!self.check(.TkLBracket) and !self.check(.TkLCurly)) {
       // check if this pattern starts with uppercase
       if (!std.ascii.isUpper(token.lexeme()[0])) {
         // at this point, this is a capture_pattern
+        self.assertBuiltinIdentNotInUse(token);
         return (
           Pattern.init(
             ptn.Variable.init(id).toVariant(self.allocator),
@@ -1975,7 +2024,7 @@ pub const Parser = struct {
         if (disamb.get(value)) |_| {
           self.softErrMsg(start, "duplicate field pattern");
         } else {
-          disamb.put(value, 1) catch {};
+          disamb.set(value, 1);
         }
         val.alat.field = arg.variant.vari.ident;
         args.append(val);
@@ -2247,7 +2296,7 @@ pub const Parser = struct {
       } else {
         fields.append(self.newNode(.{.NdField = tir.FieldNode.init(id, val, field_ty)}));
       }
-      disamb.put(value, id) catch {};
+      disamb.set(value, id);
     }
     // ClassMethods
     var mdisamb = self.getDisambiguator(Token);
@@ -2284,9 +2333,9 @@ pub const Parser = struct {
           for (tp.items()) |tvar| {
             for (method.NdGenericFun.params) |ty| {
               if (tvar.variable().eql(ty.variable())) {
-                const debug = ty.variable().getFirst();
+                const debug = ty.variable().value;
                 self.softErrArgs(debug, "Duplicate generic type variable '{s}'", .{debug.lexeme()});
-                self.softErrFmt(tvar.variable().getFirst(), 4, 2, "Type variable also specified here:", .{});
+                self.softErrFmt(tvar.variable().value, 4, 2, "Type variable also specified here:", .{});
                 break;
               }
             }
@@ -2295,7 +2344,7 @@ pub const Parser = struct {
         method = self.newNode(.{.NdGenericMtd = tir.GenericMtdNode.init(method)});
       }
       methods.append(method, self.allocator);
-      mdisamb.put(value, token) catch {};
+      mdisamb.set(value, token);
     }
     try self.consume(.TkEnd);
     return self.newNode(.{.NdClass = tir.StructNode.init(
@@ -2359,9 +2408,9 @@ pub const Parser = struct {
           for (tp.items()) |tvar| {
             for (method.NdGenericFun.params) |ty| {
               if (tvar.variable().eql(ty.variable())) {
-                const debug = ty.variable().getFirst();
+                const debug = ty.variable().value;
                 self.softErrArgs(debug, "Duplicate generic type variable '{s}'", .{debug.lexeme()});
-                self.softErrFmt(tvar.variable().getFirst(), 4, 2, "Type variable also specified here:", .{});
+                self.softErrFmt(tvar.variable().value, 4, 2, "Type variable also specified here:", .{});
                 break;
               }
             }
@@ -2370,7 +2419,7 @@ pub const Parser = struct {
         method = self.newNode(.{.NdGenericMtd = tir.GenericMtdNode.init(method)});
       }
       methods.append(method, self.allocator);
-      mdisamb.put(value, token) catch {};
+      mdisamb.set(value, token);
     }
     try self.consume(.TkEnd);
     return self.newNode(.{.NdTrait = tir.StructNode.init(
@@ -2380,19 +2429,227 @@ pub const Parser = struct {
     )});
   }
 
-  fn discardStatement(self: *Self) !*Node {
+  fn builtinStmt(self: *Self, is_pub: bool) !*Node {
+    if (!self.inBuiltinMode()) {
+      self.softErrArgs(
+        self.previous_tok,
+        "cannot use '{s}' statement modifier in this context",
+        .{self.previous_tok.lexeme()}
+      );
+    }
+    if (self.match(.TkClass)) {
+      const node = try self.classStmt();
+      node.NdClass.data.public = is_pub;
+      node.NdClass.data.builtin = true;
+      return node;
+    } else {
+      const node = try self.funStmt(false, false, false, false);
+      const bfun = node.getBasicFun();
+      bfun.data.public = is_pub;
+      bfun.data.builtin = true;
+      return node;
+    }
+  }
+
+  fn pubStmt(self: *Self) !*Node {
+    if (self.match(.TkBuiltin)) {
+      return self.builtinStmt(true);
+    } else if (self.match(.TkClass)) {
+      var node = try self.classStmt();
+      node.NdClass.data.public = true;
+      return node;
+    } else if (self.match(.TkTrait)) {
+      var node = try self.traitStmt();
+      node.NdTrait.data.public = true;
+      return node;
+    } else if (self.check(.TkDef)) {
+      var node = try self.funStmt(false, false, false, false);
+      node.getBasicFun().data.public = true;
+      return node;
+    } else if (self.match(.TkType)) {
+      return self.typeDecl(true);
+    } else if (self.match(.TkAlias)) {
+      return try self.typeAlias(true);
+    } else if (self.match(.TkLet)) {
+      return try self.varDecl(true, false);
+    } else if (self.match(.TkConst)) {
+      return try self.varDecl(true, true);
+    } else {
+      return self.errMsg(
+        self.current_tok,
+        "token found at an invalid position. Expected 'class', 'trait' or 'def'.",
+      );
+    }
+  }
+
+  fn discardStmt(self: *Self) !*Node {
     try self.advance();
     try self.consume(.TkEqual);
     return self.exprStmt();
   }
 
+  fn resolveImportPathFromDir(self: *Self, _fp: []const u8, _dir: std.fs.Dir) !?FileHandle {
+    // import foo
+    // cwd/foo.veb -- cwd may be src
+    // cwd/foo/src/lib.veb
+    // |-
+    // lib_path/foo.veb
+    // lib_path/foo/src/lib.veb
+
+    // try cwd, cwd/foo.veb
+    var file: ?std.fs.File = _dir.openFile(_fp, .{}) catch null;
+    if (file) |f| {
+      return .{.filename = _fp, .file = f};
+    }
+    // try cwd/foo/src/lib.veb
+    var fp = _fp[0.._fp.len - 4];
+    var subdir: ?std.fs.Dir = _dir.openDir(fp, .{}) catch null;
+    if (subdir) |s| {
+      file = s.openFile(ks.SrcDir ++ std.fs.path.sep_str ++ ks.LibDotVeb, .{}) catch null;
+      if (file) |f| {
+        const filename = try std.fs.path.join(self.allocator, &[_][]const u8{fp, ks.SrcDir, ks.LibDotVeb});
+        return .{.filename = filename, .file = f};
+      }
+    }
+    return null;
+  }
+
+  fn resolveImportPath(self: *Self, cwd: []const u8, dir: ?[]const u8, node: *tir.ImportNode) !FileHandle {
+    var fp = node.getRawFilePath(self.allocator);
+    // start from cwd, check if this path exists as a dir or file,
+    const dir_obj = std.fs.cwd();
+    var file_handle = self.resolveImportPathFromDir(fp, dir_obj) catch null;
+    if (file_handle) |handle| {
+      return handle;
+    }
+    // try dir
+    if (dir) |_dir| {
+      var tmp = std.fs.path.join(self.allocator, &[_][]const u8{_dir, fp}) catch "";
+      file_handle = self.resolveImportPathFromDir(tmp, dir_obj) catch null;
+      if (file_handle) |handle| {
+        return handle;
+      }
+      if (!std.mem.endsWith(u8, cwd, _dir)) {
+        tmp = std.fs.path.join(self.allocator, &[_][]const u8{cwd, tmp}) catch "";
+        file_handle = self.resolveImportPathFromDir(tmp, dir_obj) catch null;
+        if (file_handle) |handle| {
+          return handle;
+        }
+      }
+    }
+    // try src dir
+    if (node.data.import.name.len >= 2) {
+      // if foo.bar -> try foo/src/bar
+      const first = node.data.import.name[0].lexeme();
+      var end = fp[first.len + std.fs.path.sep_str.len..];
+      var tmp = std.fs.path.join(self.allocator, &[_][]const u8{first, ks.SrcDir, end}) catch "";
+      file_handle = self.resolveImportPathFromDir(tmp, dir_obj) catch null;
+      if (file_handle) |handle| {
+        return handle;
+      }
+      tmp = std.fs.path.join(self.allocator, &[_][]const u8{lib_path, tmp}) catch "";
+      file_handle = self.resolveImportPathFromDir(tmp, dir_obj) catch null;
+      if (file_handle) |handle| {
+        return handle;
+      }
+    }
+    // try lib_path
+    var _lib_path = std.fs.path.join(self.allocator, &[_][]const u8{lib_path, fp}) catch lib_path;
+    file_handle = self.resolveImportPathFromDir(_lib_path, dir_obj) catch null;
+    if (file_handle) |handle| {
+      return handle;
+    }
+    // TODO: try deps path
+    return self.errMsg(node.getToken(), "could not resolve import path");
+  }
+
+  fn parseImport(self: *Self, dir: ?[]const u8, node: *tir.ImportNode) ParseError!void {
+    var handle = try self.resolveImportPath(self.cwd, dir, node);
+    const filename = handle.filename;
+    node.data.import.filepath = filename;
+    if (self.meta.imports.getPtr(filename)) |n| {
+      if (n.* > MAX_IMPORT_RES_CYCLE) {
+        return self.errMsg(node.getToken(), "cyclic import detected");
+      } else {
+        n.* += 1;
+      }
+    } else {
+      self.meta.imports.set(filename, 1);
+    }
+    if (self.imports.get(filename)) |pg| {
+      node.program = pg.node;
+      node.data.import.src = pg.src;
+      logger.debug("using cached import: {s}\n", .{filename});
+      return;
+    }
+    var src = util.readFileHandle(handle.file, self.allocator) catch return error.ParseError;
+    self.diag.srcs.set(filename, src);
+    var ps = Parser.initForImport(&src, self.cwd, .User, self.diag, self.allocator);
+    ps.meta.imports = self.meta.imports;
+    ps.imports = self.imports;
+    const fn_ = ps.diag.filename;
+    ps.diag.filename = &filename;
+    defer ps.diag.filename = fn_;
+    node.program = try ps.parse(true);
+    // we need to update this as parse() assigns the main filepath to the imported program
+    node.program.NdProgram.filepath = filename;
+    self.imports.set(filename, .{.node = node.program, .src = src});
+    if (util.inDebugMode()) {
+      var u8w = util.U8Writer.init(ps.allocator);
+      node.program.render(0, &u8w) catch unreachable;
+      logger.debug("Import ({s}):\n{s}\n", .{filename, u8w.view()});
+    }
+  }
+
+  fn getImports(self: *Self) !NodeItems {
+    var imports = self.getNodeList();
+    while (self.match(.TkImport)) {
+      // import pub? IDENT (.IDENT)* (as IDENT)?
+      var is_pub = self.match(.TkPub);
+      var name = ds.ArrayListUnmanaged(Token).init();
+      if (self.check(.TkIdent)) {
+        name.append(try self.consumeIdentAndAssertNoDiscard(), self.allocator);
+        while (self.match(.TkDot)) {
+          name.append(try self.consumeIdentAndAssertNoDiscard(), self.allocator);
+        }
+        var alias: ?Token = null;
+        if (self.match(.TkAs)) {
+          alias = try self.consumeIdentAndAssertNoDiscard();
+        }
+        imports.append(self.newNode(
+          .{.NdImport = tir.ImportNode.init(
+            .{.name = name.items(), .alias = alias},
+            null,
+            is_pub,
+            self.allocator)
+          }));
+      }
+      // TODO: entity imports
+    }
+    return imports.items();
+  }
+
+  fn updateImports(self: *Self, list: *NodeList, imports: []const *Node, start: usize) !void {
+    if (imports.len != 0) {
+      const dir = std.fs.path.dirname(self.diag.getFilename());
+      var i = start;
+      for (imports) |node| {
+        try self.parseImport(dir, &node.NdImport);
+        list.items()[i] = node;
+        i += 1;
+      }
+    }
+  }
+
   fn statement(self: *Self) !*Node {
     if (self.match(.TkLet)) {
-      return self.varDecl();
+      return self.varDecl(false, false);
+    } else if (self.match(.TkConst)) {
+      return self.varDecl(false, true);
     } else if (self.match(.TkAlias)) {
-      return self.typeAlias();
+      return self.typeAlias(false);
     } else if (self.match(.TkType)) {
-      return self.typeDecl();
+      return self.typeDecl(false);
     } else if (self.check(.TkDo)) {
       return self.blockStmt(false, true);
     } else if (self.match(.TkIf)) {
@@ -2413,19 +2670,23 @@ pub const Parser = struct {
       return self.traitStmt();
     } else if (self.match(.TkMatch)) {
       return self.matchStmt(true);
+    } else if (self.match(.TkPub)) {
+      return self.pubStmt();
+    } else if (self.match(.TkBuiltin)) {
+      return self.builtinStmt(false);
     } else if (self.isDiscardIdent()) {
-      return self.discardStatement();
+      return self.discardStmt();
     }
     return self.exprStmt();
   }
-
+  
   fn recover(self: *Self) void {
     while (!self.check(.TkEof)) {
       switch (self.current_tok.ty) {
         .TkLet, .TkAlias, .TkType, .TkDo,
         .TkIf, .TkWhile, .TkBreak, .TkContinue,
         .TkDef, .TkReturn, .TkClass, .TkTrait,
-        .TkMatch => break,
+        .TkMatch, .TkPub, .TkConst => break,
         else => {
           if (self.isDiscardIdent()) break;
           self.advance() catch {};
@@ -2438,44 +2699,48 @@ pub const Parser = struct {
     list.append(try self.statement());
   }
 
-  fn addToplevel(self: *Self, list: *NodeList) void {
-    if (self.meta.add_exec_decls) {
-      list.ensureTotalCapacity(prelude.ExecsDecls);
-      for (0..prelude.ExecsDecls) |_| {
+  fn addToplevel(self: *Self, list: *NodeList) struct{[]const *Node, usize} {
+    const imports = self.getImports() catch &[_]*Node{};
+    if (self.meta.mode == .User) {
+      for (prelude.CoreNode.NdProgram.decls) |decl| {
+        const token = decl.getToken();
+        self.meta.decls.set(token.lexeme(), token);
+      }
+    }
+    const start = list.len();
+    if (imports.len != 0) {
+      list.ensureTotalCapacity(list.len() + imports.len);
+      for (0..imports.len) |_| {
         list.appendAssumeCapacity(&empty_node);
       }
     }
-    if (self.meta.mode == .User) {
-      // parse Builtins & Execs for dedups
-      var src = comptime prelude.NoExecsSrc ++ prelude.ExecsSrc;
-      var parser = Parser.init(
-        @constCast(&@as([]const u8, src)),
-        &ks.PreludeFilename, .Builtin, self.allocator,
-      );
-      const execs = parser.parse(true) catch unreachable;
-      for (execs.NdProgram.decls) |decl| {
-        const token = decl.getToken();
-        self.meta.decls.put(token.lexeme(), token) catch {};
-      }
-    }
+    return .{imports, start};
   }
 
   pub fn parse(self: *Self, display_diag: bool) !*Node {
+    defer {
+      if (self.diag.hasAny()) {
+        if (display_diag) self.diag.display();
+      }
+    }
     try self.advance();
     var entry = self.createNode();
+    // cache the entry module
+    if (self.imports.isEmpty()) {
+      self.diag.addSrcFile(ks.PreludeFilename, prelude.CoreSrc);
+      self.diag.addSrcFile(self.diag.getFilename(), self.diag.getSrc());
+      self.imports.set(self.diag.getFilename(), .{.node = entry, .src = self.diag.getSrc()});
+    }
     var list = self.getNodeList();
-    self.addToplevel(&list);
+    const import_info = self.addToplevel(&list);
     while (!self.match(.TkEof)) {
       self.addStatement(&list) catch self.recover();
     }
-    if (self.diag.hasAny()) {
-      const has_error = self.diag.hasErrors();
-      if (display_diag) self.diag.display();
-      if (has_error) {
-        return error.ParseError;
-      }
+    entry.* = .{.NdProgram = tir.ProgramNode.init(self.diag.getFilename(), list.items())};
+    try self.updateImports(&list, import_info.@"0", import_info.@"1");
+    if (self.diag.hasErrors()) {
+      return error.ParseError;
     }
-    entry.* = .{.NdProgram = tir.ProgramNode.init(list.items())};
     return entry;
   }
 };

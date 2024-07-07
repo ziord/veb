@@ -1,0 +1,5 @@
+pub type Maybe{@T} = Just(@T) | None
+
+pub type Result{@T, @E} = Ok(@T) | Error(@E)
+
+pub alias never = never

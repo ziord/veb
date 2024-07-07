@@ -1,0 +1,39 @@
+pub type @MapEntry{K, V} = @Key(K) | @Value(V)
+
+pub builtin class Map{K, V}
+  pub def set(key: K, value: V): bool
+    #[[internal]]
+  end
+
+  pub def get(key: K): Maybe{V}
+    #[[internal]]
+  end
+
+  pub def delete(key: K): bool
+    #[[internal]]
+  end
+
+  pub def remove(key: K): bool
+    #[[internal]]
+  end
+
+  pub def keys(): List{K}
+    #[[internal]]
+  end
+
+  pub def values(): List{V}
+    #[[internal]]
+  end
+ 
+  pub def items(): List{Tuple{K, V}}
+    #[[internal]]
+  end
+
+  pub def entries(): List{@MapEntry{K, V}}
+    #[[internal]]
+  end
+
+  pub def len(): num
+    #[[internal]]
+  end
+end

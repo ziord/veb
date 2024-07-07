@@ -1,0 +1,49 @@
+pub class range: Iter{num} | Iterator{num}
+  curr: num
+  start: num
+  step: num
+  stop: Maybe{num}
+
+  def init(start: num, stop: Maybe{num}, step: Maybe{num})
+    self.start = start
+    self.curr = start
+    self.stop = stop
+    self.step = match step
+      case Just(s) => s
+      case None => 1
+    end
+  end
+
+  pub def next()
+    match self.stop
+      case Just(stop) => do
+        if self.curr >= stop then
+          return None
+        end
+        let res = Just(self.curr)
+        self.curr += self.step
+        return res
+      end
+      case None => do
+        let res = Just(self.curr)
+        self.curr += self.step
+        return res
+      end
+    end
+  end
+
+  pub def iter()
+    return self
+  end
+end
+
+pub def zip{T, U}(x: Iterator{T}, y: Iterator{U}): List{Tuple{T, U}}
+  let res = [] as List{Tuple{T, U}}
+  while true
+    match (x.next(), y.next())
+      case (Just(a), Just(b)) => res.append((a, b))
+      case _ => break
+    end
+  end
+  return res
+end

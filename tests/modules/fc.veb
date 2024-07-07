@@ -1,0 +1,14 @@
+import pub std.collections as sc
+import std.collections as pc
+
+
+for i, j in sc.range(1, Just(5), None)
+    println(i, j)
+end
+_ = sc.zip([1, 2, 3, 4].iter(), ['a', 'b', 'c'].iter()) |> println
+_ = [1, 2, 3, 4].iter().zip(['a', 'b', 'c'].iter()) |> println
+_ = [1, 2, 3, 4].iter().zip(sc.range(1, Just(12), Just(2))) |> println
+for kv in {'a': 1, 'b': 2, 'c': 3, 'd': 4}.items()
+    println(kv[0], kv[1])
+end
+pc.range(1, Just(5), None) |> println

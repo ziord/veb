@@ -708,14 +708,14 @@ pub const MatchCompiler = struct {
   const SelectionHeuristic = struct {
     row: RowMap,
     col: ColumnMap,
-    disamb: std.StringHashMap(u32),
+    disamb: ds.StringHashMap(u32),
     /// store a constructor's row and it's total frequency in the pattern matrix
     const Row = struct {pos: usize, count: usize};
     /// store a constructor's name and its column position
     const Column = struct {name: []const u8, column: usize};
 
-    const RowMap = std.StringHashMap(Row);
-    const ColumnMap = std.HashMap(Column, usize, ColumnContext, std.hash_map.default_max_load_percentage);
+    const RowMap = ds.StringHashMap(Row);
+    const ColumnMap = ds.HashMap(Column, usize, ColumnContext, std.hash_map.default_max_load_percentage);
 
     const ColumnContext = struct {
       pub fn hash(this: @This(), s: Column) u64 {
@@ -734,7 +734,7 @@ pub const MatchCompiler = struct {
       return .{
         .row = RowMap.init(al),
         .col = ColumnMap.init(al),
-        .disamb = std.StringHashMap(u32).init(al)
+        .disamb = ds.StringHashMap(u32).init(al)
       };
     }
 
@@ -744,20 +744,20 @@ pub const MatchCompiler = struct {
       const name = cons.cname();
       if (self.row.get(name)) |row| {
         if (row.pos != i) {
-          self.row.put(name, .{.pos = row.pos, .count = row.count + 1}) catch {};
+          self.row.set(name, .{.pos = row.pos, .count = row.count + 1});
         }
       } else {
-        self.row.put(name, .{.pos = i, .count = 1}) catch {};
+        self.row.set(name, .{.pos = i, .count = 1});
       }
     }
 
     /// save this constructor's column in the pattern matrix, and its frequency of occurrence
     /// accross the column, in the matrix
     fn addColumn(self: *@This(), cons: *Constructor, i: usize) void {
-      if (self.col.getEntry(.{.name = cons.cname(), .column = i})) |entry| {
-        self.col.put(entry.key_ptr.*, entry.value_ptr.* + 1) catch {};
+      if (self.col.map.getEntry(.{.name = cons.cname(), .column = i})) |entry| {
+        self.col.set(entry.key_ptr.*, entry.value_ptr.* + 1);
       } else {
-        self.col.put(.{.name = cons.cname(), .column = i}, 1) catch {};
+        self.col.set(.{.name = cons.cname(), .column = i}, 1);
       }
     }
 
@@ -768,9 +768,9 @@ pub const MatchCompiler = struct {
         if (rel.pattern.isConstructor()) {
           const cons_name = rel.pattern.variant.cons.cname();
           if (self.disamb.get(cons_name)) |val| {
-            self.disamb.put(cons_name, val + 1) catch {};
+            self.disamb.set(cons_name, val + 1);
           } else {
-            self.disamb.put(cons_name, 1) catch {};
+            self.disamb.set(cons_name, 1);
           }
           if (self.disamb.get(best)) |val| {
             if (val > 1) {
@@ -1389,14 +1389,14 @@ pub const MatchCompiler = struct {
     }
     self.case_id = @intCast(node.cases.len);
     // we match on m_expr
-    if (util.getMode() == .Debug) {
+    if (util.inDebugMode()) {
       node.render(0, &self.u8w) catch {};
       logger.debug("match ast dump:\n{s}\n", .{self.u8w.items()});
     }
     var m_expr = node.expr;
     self.convertPtnToRelationPtn(m_expr, node.cases);
     const tree = try self.compileCase(m_expr, node.cases);
-    if (util.getMode() == .Debug) {
+    if (util.inDebugMode()) {
       tree.render(0, &self.u8w) catch {};
       logger.debug("decision tree dump:\n{s}\n", .{self.u8w.items()});
     }

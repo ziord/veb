@@ -10,19 +10,9 @@ test "recursive types" {
   \\ alias V2 = Map{V, V2}
   \\ let p = (1, (2,), 3, (1, 2, [3]))
   \\ let x = {
-  \\   {
-  \\      A('abc') as K: {
-  \\          A('abc') as K: C(123) as K,
-  \\          B(true): C(0xff), A('obs'): A('fin')
-  \\      } as V
-  \\    }:
-  \\   ({
-  \\      C(0.123) as K: {
-  \\          A('abc') as K: C(123) as K,
-  \\          B(true): C(0xff), A('obs'): A('fin')
-  \\      } as V
-  \\    })
-  \\  } as V2
+  \\   { A('abc') as K: { A('abc') as K: C(123) as K, B(true): C(0xff), A('obs'): A('fin') } } as V :
+  \\   { C(0.123) as K: { A('abc') as K: C(123) as K, B(true): C(0xff), A('obs'): A('fin') } }
+  \\ }
   \\ print(x)
   ;
   try doStaticTest(src);

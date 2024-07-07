@@ -1,0 +1,35 @@
+import fj as t
+
+let tree: t.Tree{num} = t.Node(
+   1,
+   t.Node (
+     2,
+     t.Node (3, t.Empty, t.Empty),
+     t.Node (4, t.Empty, t.Empty)
+   ),
+   t.Node (
+     5,
+     t.Node (6, t.Empty, t.Empty),
+     t.Node (7, t.Empty, t.Empty)
+   )
+)
+
+t.print_tree(tree)
+t.show(1, 2, 3, 4, 5)
+
+let j = [] as List{num}
+j.append(12)
+j.append(13)
+j.append(14)
+println(j)
+let k = j.iter().filter(def (n: num) => n % 2 == 0)
+println(k, k.iter().map(def (n: num) => @string(n)))
+
+let r = j.iter().reduce(def (x: num, y: num) => x + y, None)
+r |> println
+r == 39 |> assert(*, 'should be 39')
+
+let j = ['f', 'i', 'n', 'd', 'e', 'r']
+let conc = j.iter().reduce(def (x: str, y: str) => x <> y, Just(''))
+conc |> println
+conc == 'finder' |> assert(*, 'should be finder')

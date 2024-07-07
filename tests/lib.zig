@@ -8,13 +8,15 @@ pub const link = @import("../src/link.zig");
 pub const check = @import("../src/check.zig");
 pub const diagnostics = @import("../src/diagnostics.zig");
 pub const VebAllocator = @import("../src/allocator.zig");
+pub const cli = @import("../src/cli.zig");
 
 pub fn doRuntimeTest(src: []const u8) !void {
   var cna = VebAllocator.init(std.heap.ArenaAllocator.init(std.heap.page_allocator));
   defer cna.deinit();
   const filename = @as([]const u8, "test.veb");
-  var al = cna.getArenaAllocator();
-  var parser = parse.Parser.init(@constCast(&src), &filename, .User, cna.getArenaAllocator());
+  const al = cna.getArenaAllocator();
+  try cli.loadCore(try cli.findLibPath(al), al);
+  var parser = parse.Parser.init(@constCast(&src), &filename, "", .User, cna.getArenaAllocator());
   const node = try parser.parse(true);
   var tych = check.TypeChecker.init(al, &parser.diag, parser.namegen);
   try tych.typecheck(node, true);
@@ -37,8 +39,9 @@ pub fn doParsingTest(src: []const u8) !void {
   var cna = VebAllocator.init(std.heap.ArenaAllocator.init(std.testing.allocator));
   defer cna.deinit();
   const filename = @as([]const u8, "test.veb");
-  var al = cna.getArenaAllocator();
-  var parser = parse.Parser.init(@constCast(&src), &filename, .User, al);
+  const al = cna.getArenaAllocator();
+  try cli.loadCore(try cli.findLibPath(al), al);
+  var parser = parse.Parser.init(@constCast(&src), &filename, "", .User, al);
   _ = try parser.parse(true);
 }
 
@@ -46,8 +49,9 @@ pub fn doStaticTest(src: []const u8) !void {
   var cna = VebAllocator.init(std.heap.ArenaAllocator.init(std.testing.allocator));
   defer cna.deinit();
   const filename = @as([]const u8, "test.veb");
-  var al = cna.getArenaAllocator();
-  var parser = parse.Parser.init(@constCast(&src), &filename, .User, al);
+  const al = cna.getArenaAllocator();
+  try cli.loadCore(try cli.findLibPath(al), al);
+  var parser = parse.Parser.init(@constCast(&src), &filename, "", .User, al);
   const node = try parser.parse(true);
   var tych = check.TypeChecker.init(al, &parser.diag, parser.namegen);
   try tych.typecheck(node, true);
@@ -63,7 +67,7 @@ fn checkEql(diag: *diagnostics.Diagnostic, comptime size: comptime_int, exp_slic
   var got = @as(usize, 0);
   var i = @as(usize, 0);
   for (exp_slice[0..]) |exp| {
-    for (diag.data.items[i..]) |itm| {
+    for (diag.data.items()[i..]) |itm| {
       i += 1;
       if (std.mem.containsAtLeast(u8, itm.msg, 1, exp)) {
         got += 1;
@@ -78,8 +82,9 @@ pub fn doErrorTest(src: []const u8, comptime size: comptime_int, exp_slice: [siz
   var cna = VebAllocator.init(std.heap.ArenaAllocator.init(std.testing.allocator));
   defer cna.deinit();
   const filename = @as([]const u8, "test.veb");
-  var al = cna.getArenaAllocator();
-  var parser = parse.Parser.init(@constCast(&src), &filename, .User, al);
+  const al = cna.getArenaAllocator();
+  try cli.loadCore(try cli.findLibPath(al), al);
+  var parser = parse.Parser.init(@constCast(&src), &filename, "", .User, al);
   const node = parser.parse(false) catch {
     try checkEql(&parser.diag, size, exp_slice);
     return;

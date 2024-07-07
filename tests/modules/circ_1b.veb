@@ -1,0 +1,9 @@
+import circ_1a as a
+
+pub def okay(y: num)
+    return a.aha@(y << 1)
+end
+
+const r = a.thingy(7)
+assert(r == 168, 'should be 168')
+r |> println

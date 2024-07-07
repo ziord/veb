@@ -24,7 +24,7 @@ pub fn Items(comptime T: type) type {
 }
 
 // tir node types
-pub const NodeType = enum {
+pub const NodeType = enum (u8) {
   NdNumber,
   NdString,
   NdBool,
@@ -40,6 +40,8 @@ pub const NodeType = enum {
   NdField,
   NdPubField,
   NdVarDecl,
+  NdPubVarDecl,
+  NdConstVarDecl,
   NdBlock,
   NdType,
   NdAlias,
@@ -47,6 +49,7 @@ pub const NodeType = enum {
   NdCondition,
   NdMCondition,
   NdEmpty,
+  NdPipeHolder,
   NdCast,
   NdSimpleIf,
   NdWhile,
@@ -70,8 +73,8 @@ pub const NodeType = enum {
   NdDiagStartMarker,
   NdRet,
   NdScope,
+  NdImport,
   NdTVar,
-  NdPipeHolder,
   NdProgram,
 };
 
@@ -160,7 +163,7 @@ pub const BinaryNode = struct {
   allow_rested: bool = false,
   allow_consts: bool = false,
   // op meta
-  op_origin: lex.SrcKind,
+  op_origin: u8, // file
   op_tkty: TokenType,
   op_offset: u32,
   // nodes
@@ -174,7 +177,7 @@ pub const BinaryNode = struct {
       .right = right,
       .op_tkty = op_token.ty,
       .op_offset = op_token.offset,
-      .op_origin = op_token.src_kind,
+      .op_origin = @intCast(op_token.file),
     };
   }
 
@@ -184,7 +187,7 @@ pub const BinaryNode = struct {
       .right = right,
       .op_tkty = op_token.ty,
       .op_offset = op_token.offset,
-      .op_origin = op_token.src_kind,
+      .op_origin = @intCast(op_token.file),
       .allow_rested = true
     };
   }
@@ -417,9 +420,7 @@ pub const ParamNode = struct {
   }
 
   pub inline fn new(name: Token, typ: *Type, al: Allocator) *@This() {
-    const obj = util.alloc(ParamNode, al);
-    obj.* = .{.name = name, .typ = typ};
-    return obj;
+    return util.box(ParamNode, .{.name = name, .typ = typ}, al);
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -496,7 +497,7 @@ pub const PubFieldNode = struct {
   }
 };
 
-/// NdVarDecl
+/// NdVarDecl, NdConstVarDecl
 pub const VarDeclNode = struct {
   name: IdentToken,
   value: *Node,
@@ -512,14 +513,17 @@ pub const VarDeclNode = struct {
     return new;
   }
 
-  pub fn clone(self: *@This(), al: Allocator) *Node {
-    return Node.new(.{
-      .NdVarDecl = .{
-        .name = self.name,
-        .value = self.value.clone(al),
-        .typ = if (self.typ) |typ| typ.clone(al) else null,
-      }
-    }, al);
+  pub fn clone(self: *@This(), node: *Node, al: Allocator) *Node {
+    const data: VarDeclNode = .{
+      .name = self.name,
+      .value = self.value.clone(al),
+      .typ = if (self.typ) |typ| typ.clone(al) else null,
+    };
+    return switch (node.*) {
+      .NdVarDecl => Node.new(.{.NdVarDecl = data}, al),
+      .NdConstVarDecl => Node.new(.{.NdConstVarDecl = data}, al),
+      else => unreachable
+    };
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
@@ -529,6 +533,31 @@ pub const VarDeclNode = struct {
     _ = try writer.write(decl);
     try Node.render(self.value, depth, u8w);
     _ = try writer.write("\n");
+  }
+};
+
+/// NdPubVarDecl
+pub const PubVarDeclNode = struct {
+  decl: *Node,
+
+  pub fn init(decl: *Node) PubVarDeclNode {
+    return .{.decl = decl};
+  }
+
+  pub fn getVarDecl(self: *PubVarDeclNode) *VarDeclNode {
+    return switch (self.decl.*) {
+      .NdVarDecl => |*nd| nd,
+      .NdConstVarDecl => |*nd| nd,
+      else => unreachable,
+    };
+  }
+
+  pub fn clone(self: *@This(), al: Allocator) *Node {
+    return Node.new(.{.NdPubVarDecl = .{.decl = self.decl.clone(al)}}, al);
+  }
+
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
+    return self.decl.render(depth, u8w);
   }
 };
 
@@ -1293,17 +1322,19 @@ pub const StructNode = struct {
     methods: NodeListU,
     params: ?TypeItems,
     builtin: bool,
+    public: bool,
     checked: bool,
     tktype: TokenType,
 
     pub inline fn init(
       fields: NodeItems, methods: NodeListU, params: ?TypeItems,
-      checked: bool, builtin: bool, tktype: TokenType
+      checked: bool, builtin: bool, public: bool, tktype: TokenType,
     ) @This() {
       return .{
         .fields = fields, .methods = methods,
         .params = params, .checked = checked,
-        .builtin = builtin, .tktype = tktype
+        .builtin = builtin, .tktype = tktype,
+        .public = public,
       };
     }
 
@@ -1320,6 +1351,7 @@ pub const StructNode = struct {
         .methods = self.methods.clone(al),
         .params = params,
         .builtin = self.builtin,
+        .public = self.public,
         .checked = self.checked,
         .tktype = self.tktype,
       }), al);
@@ -1339,7 +1371,7 @@ pub const StructNode = struct {
       .trait = trait, 
       .data = util.box(
         StructData, StructData.init(
-          fields, methods, params, checked, builtin, name.ty
+          fields, methods, params, checked, builtin, false, name.ty
         ), al
       )
     };
@@ -1506,12 +1538,123 @@ pub const ScopeNode = struct {
   }
 };
 
+pub const Tokens = Items(Token);
+pub const Entities = Items(Entity);
+
+pub const Import = struct {
+  name: Tokens,
+  alias: ?Token,
+  filepath: ?[]const u8 = null,
+  src: []const u8 = "",
+};
+
+pub const Entity = struct {
+  name: Token,
+  public: bool,
+  alias: ?Token,
+
+  pub fn getName(self: *const Entity) Token {
+    return self.alias orelse self.name;
+  }
+};
+
+pub const ImportData = struct {
+  /// the actual module name e.g. foo.bar.baz
+  import: Import,
+  /// import visibility
+  public: bool,
+  /// names imported directly e.g. {foo, bar} from foobar
+  entities: ?Entities,
+};
+
+/// NdImport
+pub const ImportNode = struct {
+  data: *ImportData,
+  program: *Node = undefined,
+  typ: ?*Type = null,
+
+  pub inline fn init(import: Import, entities: ?Entities, public: bool, al: Allocator) @This() {
+    return .{.data = util.box(
+      ImportData,
+      .{.import = import, .public = public, .entities = entities},
+      al
+    )};
+  }
+
+  pub inline fn getToken(self: *ImportNode) Token {
+    return self.data.import.name[0];
+  }
+
+  pub inline fn getImportNameToken(self: *ImportNode) Token {
+    if (self.data.import.alias) |alias| {
+      return alias;
+    }
+    return self.data.import.name[self.data.import.name.len - 1];
+  }
+
+  pub inline fn getImportName(self: *ImportNode) []const u8 {
+    return self.getImportNameToken().lexeme();
+  }
+
+  pub fn getRawFilePath(self: *ImportNode, al: Allocator) []const u8 {
+    var list = ds.ArrayList(u8).initCapacity(self.data.import.name[0].len, al);
+    var writer = list.writer();
+    const last = self.data.import.name.len - 1;
+    for (self.data.import.name, 0..) |name, i| {
+      _ = writer.write(name.lexeme()) catch 0;
+      if (i < last) {
+        _ = writer.write(std.fs.path.sep_str) catch 0;
+      }
+    }
+    _ = writer.write(".veb") catch 0;
+    return list.items();
+  }
+
+  pub fn getFilePath(self: *ImportNode, directory: ?[]const u8, al: Allocator) []const u8 {
+    if (self.data.import.filepath) |path| {
+      return path;
+    }
+    var list = ds.ArrayList(u8).initCapacity(self.data.import.name[0].len, al);
+    var writer = list.writer();
+    if (directory) |dir| {
+      _ = writer.write(dir) catch 0;
+      _ = writer.write(std.fs.path.sep_str) catch 0;
+    }
+    const last = self.data.import.name.len - 1;
+    for (self.data.import.name, 0..) |name, i| {
+      _ = writer.write(name.lexeme()) catch 0;
+      if (i < last) {
+        _ = writer.write(std.fs.path.sep_str) catch 0;
+      }
+    }
+    _ = writer.write(".veb") catch 0;
+    const path = list.items();
+    self.data.import.filepath = path;
+    return path;
+  }
+
+  pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
+    _ = self;
+    _ = depth;
+    _ = try u8w.writer().write("<import>\n");
+  }
+};
+
 /// NdProgram
 pub const ProgramNode = struct {
+  filepath: []const u8,
   decls: NodeItems,
 
-  pub inline fn init(decls: NodeItems) @This() {
-    return .{.decls = decls,};
+  pub inline fn init(filepath: []const u8, decls: NodeItems) @This() {
+    return .{.filepath = filepath, .decls = decls};
+  }
+
+  pub fn getModuleName(self: *@This()) []const u8 {
+    const modname = std.fs.path.basename(self.filepath);
+    if (std.mem.lastIndexOf(u8, modname, ".veb")) |pos| {
+      return modname[0..pos];
+    }
+    return modname;
   }
 
   pub fn clone(self: *@This(), al: Allocator) *Node {
@@ -1529,7 +1672,7 @@ pub const ProgramNode = struct {
   }
 };
 
-pub const Node = union(NodeType)  {
+pub const Node = union(NodeType) {
   NdNumber: NumberNode,
   NdString: SymNode,
   NdBool: SymNode,
@@ -1545,6 +1688,8 @@ pub const Node = union(NodeType)  {
   NdField: FieldNode,
   NdPubField: PubFieldNode,
   NdVarDecl: VarDeclNode,
+  NdConstVarDecl: VarDeclNode,
+  NdPubVarDecl: PubVarDeclNode,
   NdBlock: BlockNode,
   NdType: TypeNode,
   NdAlias: AliasNode,
@@ -1576,6 +1721,7 @@ pub const Node = union(NodeType)  {
   NdDiagStartMarker: MarkerNode,
   NdRet: RetNode,
   NdScope: ScopeNode,
+  NdImport: ImportNode,
   NdTVar: TVarNode,
   NdProgram: ProgramNode,
 
@@ -1584,9 +1730,7 @@ pub const Node = union(NodeType)  {
   }
 
   pub inline fn new(data: anytype, al: Allocator) *Node {
-    const n = util.alloc(Node, al);
-    n.* = data;
-    return n;
+    return util.box(Node, data, al);
   }
 
   pub inline fn isDeref(self: *const @This()) bool {
@@ -1605,7 +1749,21 @@ pub const Node = union(NodeType)  {
 
   pub inline fn isVarDecl(self: *const @This()) bool {
     return switch (self.*) {
-      .NdVarDecl => true,
+      .NdVarDecl, .NdConstVarDecl, => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isPubVarDecl(self: *const @This()) bool {
+    return switch (self.*) {
+      .NdPubVarDecl => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isConstVarDecl(self: *const @This()) bool {
+    return switch (self.*) {
+      .NdConstVarDecl => true,
       else => false,
     };
   }
@@ -1746,6 +1904,13 @@ pub const Node = union(NodeType)  {
   pub inline fn isScope(self: *const @This()) bool {
     return switch (self.*) {
       .NdScope => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isImport(self: *const @This()) bool {
+    return switch (self.*) {
+      .NdImport => true,
       else => false,
     };
   }
@@ -1984,10 +2149,12 @@ pub const Node = union(NodeType)  {
     return switch (node.*) {
       .NdNumber, .NdString, .NdBool, .NdAlias,
       .NdEmpty, .NdFailMarker, .NdGenericFun,
-      .NdRedunMarker, .NdScope, .NdDiagStartMarker, .NdPipeHolder => node,
+      .NdRedunMarker, .NdScope, .NdDiagStartMarker,
+      .NdPipeHolder, .NdImport => node,
       .NdBinary, .NdAssign => |*nd| nd.clone(node, al),
       .NdList, .NdTuple => |*nd| nd.clone(node, al),
       .NdClass, .NdTrait => |*nd| nd.clone(node, al),
+      .NdVarDecl, .NdConstVarDecl => |*nd| nd.clone(node, al),
       inline else => |*nd| nd.clone(al),
     };
   }
@@ -1997,10 +2164,11 @@ pub const Node = union(NodeType)  {
       .NdString => |*nd| Node.new(.{.NdString = .{.token = nd.token, .typ = nd.typ}}, al),
       .NdBool => |*nd| Node.new(.{.NdBool = .{.token = nd.token, .typ = nd.typ}}, al),
       .NdAlias, .NdEmpty, .NdControl, .NdFailMarker, .NdGenericFun,
-      .NdRedunMarker, .NdScope, .NdDiagStartMarker, .NdPipeHolder => node,
+      .NdRedunMarker, .NdScope, .NdDiagStartMarker, .NdPipeHolder, .NdImport => node,
       .NdBinary, .NdAssign => |*nd| nd.clone(node, al),
       .NdList, .NdTuple => |*nd| nd.clone(node, al),
       .NdClass, .NdTrait => |*nd| nd.clone(node, al),
+      .NdVarDecl, .NdConstVarDecl => |*nd| nd.clone(node, al),
       inline else => |*nd| nd.clone(al),
     };
   }
@@ -2021,7 +2189,7 @@ pub const Node = union(NodeType)  {
       .NdBinary, .NdAssign => |*nd| Token.fromBinaryNode(nd),
       .NdUnary => |*nd| nd.op.token(),
       .NdExprStmt => |*nd| nd.expr.getToken(),
-      .NdVarDecl => |*nd| nd.name.toToken(),
+      .NdVarDecl, .NdConstVarDecl => |*nd| nd.name.toToken(),
       .NdType => |*nd| nd.tkbit.toToken(),
       .NdAlias => |*nd| nd.alias.tkbit.toToken(),
       .NdCast => |*nd| nd.typn.tkbit.toToken(),
@@ -2158,8 +2326,9 @@ pub const Node = union(NodeType)  {
       .NdWhile, .NdFor, .NdForCounter, .NdControl,
       .NdScope, .NdLblArg, .NdFailMarker, .NdRedunMarker,
       .NdEmpty, .NdDiagStartMarker, .NdProgram,
-      .NdClass, .NdTrait, .NdMatch, .NdPipeHolder => null,
-      .NdBasicCall => |*nd| nd.typ,
+      .NdClass, .NdTrait, .NdMatch, .NdPipeHolder,
+      .NdImport => null,
+      .NdPubVarDecl => |*nd| nd.getVarDecl().typ,
       .NdGenericCall => |*nd| nd.call.getType(),
       inline else => |*nd| nd.typ,
     };
@@ -2179,7 +2348,7 @@ pub const Node = union(NodeType)  {
       .NdSubscript => |*nd| nd.typ = typ,
       .NdDeref => |*nd| nd.typ = typ,
       .NdString, .NdBool => |*nd| nd.typ = typ,
-      .NdScope => {},
+      .NdScope, .NdImport, => {},
       else => {
         util.logger.debug("Attempt to set type on node: {}", .{self});
       },
@@ -2208,16 +2377,17 @@ pub const Node = union(NodeType)  {
       .NdNumber, .NdString, .NdBool, .NdParam,
       .NdField, .NdPubField, .NdType, .NdAlias,
       .NdCondition, .NdMCondition, .NdEmpty,
-      .NdControl, .NdFailMarker,
-      .NdRedunMarker, .NdScope, .NdTVar,
-      .NdDiagStartMarker, .NdPipeHolder => false,
+      .NdControl, .NdFailMarker, .NdRedunMarker,
+      .NdScope, .NdTVar, .NdDiagStartMarker,
+      .NdPipeHolder, .NdImport => false,
       .NdOrElse, .NdMatch, .NdDeref, .NdFor, .NdForCounter => true,
       .NdBinary => |*nd| nd.op_tkty == .TkPipeGthan or nd.op_tkty == .TkGthanLthan or nd.left.hasSugar() or nd.right.hasSugar(),
       .NdAssign => |*nd| nd.right.hasSugar() or nd.left.hasSugar(),
       .NdSubscript => |*nd| nd.expr.hasSugar() or nd.index.hasSugar(),
       .NdUnary => |*nd| nd.expr.hasSugar(),
       .NdExprStmt => |*nd| nd.has_sugar,
-      .NdVarDecl => |*nd| nd.value.hasSugar(),
+      .NdVarDecl, .NdConstVarDecl => |*nd| nd.value.hasSugar(),
+      .NdPubVarDecl => |*nd| nd.decl.hasSugar(),
       .NdCast => |*nd| nd.expr.hasSugar(),
       .NdSimpleIf => |*nd| nd.cond.hasSugar() or nd.then.hasSugar() or nd.els.hasSugar(),
       .NdWhile => |*nd| nd.cond.hasSugar() or nd.then.hasSugar(),
@@ -2391,7 +2561,8 @@ pub const Node = union(NodeType)  {
         }
       },
       .NdExprStmt => |*nd| return nd.expr.containsField(field),
-      .NdVarDecl => |*nd| return nd.value.containsField(field),
+      .NdVarDecl, .NdConstVarDecl => |*nd| return nd.value.containsField(field),
+      .NdPubVarDecl => |*nd| return nd.decl.containsField(field),
       .NdBlock => |*nd| {
         for (nd.nodes) |n| {
           if (n.containsField(field)) |tk| {
@@ -2471,14 +2642,16 @@ pub const TypeInfo = union(enum) {
   Concrete: Concrete,
   Constant: Constant,
   Variable: Variable,
+  Dot: Dot,
   Union: Union,
   TaggedUnion: TaggedUnion,
-  Tag: Tag,
   Generic: Generic,
   Function: Function,
+  Tag: Tag,
   Class: Class,
   Trait: Trait,
   Instance: Instance,
+  Module: Module,
   Recursive: Recursive,
   TagOrClass: TagOrClass,
   Top: Top,
@@ -2501,11 +2674,13 @@ pub const Type = struct {
   alias: ?*Type = null,
   info: TypeInfo,
   /// how this type can be accessed
-  aspec: AccessSpecifier = .SpecPublic,
+  aspec: AccessSpecifier = .SpecPrivate,
   /// only applies to function types; whether this function type is variadic
   variadic: bool = false,
   /// whether this type was inferred automatically i.e not an annotation
   inferred: bool = true,
+  /// whether this type can be modified
+  mutable: bool = true,
 
   const Self = @This();
 
@@ -2639,15 +2814,17 @@ pub const Type = struct {
     ty1.variadic = ty2.variadic;
     ty1.inferred = ty2.inferred;
     ty1.aspec = ty2.aspec;
+    ty1.mutable = ty2.mutable;
   }
 
   fn _clone(self: *Self, map: *TypeHashMap, al: Allocator) *Self {
     switch (self.info) {
-      .Constant, .Concrete, .Variable, .Recursive, .TagOrClass => return self,
+      .Constant, .Concrete, .Variable,
+      .Recursive, .TagOrClass, .Module, => return self,
       .Function => |*fun| {
         if (map.get(self)) |ty| return ty;
         const node = if (fun.data.node) |nd| if (!nd.isGenericMtd()) nd else nd.clone(al) else fun.data.node;
-        var new = Type.init(.{.Function = Function.init(fun.data.ret._clone(map, al), null, node, al)}).box(al);
+        var new = Type.init(.{.Function = Function.init(fun.data.ret._clone(map, al), null, node, fun.data.module, al)}).box(al);
         map.set(self, new, al);
         var _fun = new.function();
         if (fun.tparams) |tparams| {
@@ -2671,7 +2848,7 @@ pub const Type = struct {
         var methods = TypeList.initCapacity(cls.data.methods.len(), al);
         var ret = Type.init(.{.Class = Class.init(
           cls.data.name, cls.tktype, fields, methods, null,
-          cls.data.node, cls.empty, cls.builtin, null, al
+          cls.data.node, cls.empty, cls.builtin, cls.data.public, null, al
         )}).box(al);
         map.set(self, ret, al);
         for (cls.data.fields.items()) |itm| {
@@ -2699,9 +2876,9 @@ pub const Type = struct {
         if (map.get(self)) |ty| return ty;
         var fields =  ds.ArrayListUnmanaged(*Node).initCapacity(trt.data.fields.len(), al);
         var methods = TypeList.initCapacity(trt.data.methods.len(), al);
-        var ret = Type.init(.{.Trait = Class.init(
+        var ret = Type.init(.{.Trait = Trait.init(
           trt.data.name, trt.tktype, fields, methods, null,
-          trt.data.node, trt.empty, trt.builtin, null, al
+          trt.data.node, trt.empty, trt.builtin, trt.data.public, null, al
         )}).box(al);
         map.set(self, ret, al);
         for (trt.data.fields.items()) |itm| {
@@ -2732,6 +2909,12 @@ pub const Type = struct {
           new.tparams.appendAssumeCapacity(ty._clone(map, al));
         }
         var ret = Type.init(.{.Generic = new}).box(al);
+        ret.setRestFields(self);
+        return ret;
+      },
+      .Dot => |*dt| {
+        const new = Dot.init(dt.lhs._clone(map, al), dt.rhs._clone(map, al));
+        var ret = Type.init(.{.Dot = new}).box(al);
         ret.setRestFields(self);
         return ret;
       },
@@ -2795,13 +2978,15 @@ pub const Type = struct {
   }
 
   pub fn box(self: Self, allocator: Allocator) *Self {
-    const al = allocate(Self, allocator);
-    al.* = self;
-    return al;
+    return util.box(Self, self, allocator);
   }
 
   pub inline fn newConcrete(kind: TypeKind) Self {
     return Self.init(.{.Concrete = Concrete.init(kind)});
+  }
+
+  pub inline fn newModule(node: *Node, alias: []const u8, al: Allocator) *Self {
+    return Self.init(.{.Module = Module.init(node, alias, al)}).box(al);
   }
 
   pub fn newBoolUnion(al: Allocator) *Self {
@@ -2844,16 +3029,12 @@ pub const Type = struct {
     return Self.init(.{.Variable = Variable.init()});
   }
 
-  pub inline fn newVariableWToken(token: Token, al: Allocator) Self {
-    var tvar = Self.init(.{.Variable = Variable.init()});
-    tvar.variable().appendTok(token, al);
-    return tvar;
+  pub inline fn newVariableWToken(token: Token) Self {
+    return Self.init(.{.Variable = Variable.initValue(token)});
   }
 
   pub inline fn newVariableAToken(token: Token, al: Allocator) *Self {
-    var tvar = Self.init(.{.Variable = Variable.init()}).box(al);
-    tvar.variable().appendTok(token, al);
-    return tvar;
+    return Self.init(.{.Variable = Variable.initValue(token)}).box(al);
   }
 
   pub inline fn newUnion() Self {
@@ -2868,8 +3049,8 @@ pub const Type = struct {
     return Self.init(.{.Generic = Generic.init(base)});
   }
 
-  pub inline fn newFunction(ret: *Self, al: Allocator) Self {
-    return Self.init(.{.Function = Function.init(ret, null, null, al)});
+  pub inline fn newFunction(ret: *Self, mod_ty: ?*Type, al: Allocator) Self {
+    return Self.init(.{.Function = Function.init(ret, null, null, mod_ty, al)});
   }
 
   pub inline fn newTop(child: *Type) Self {
@@ -2878,6 +3059,10 @@ pub const Type = struct {
 
   pub inline fn newInstance(cls: *Type) Self {
     return Self.init(.{.Instance = Instance.init(cls)});
+  }
+
+  pub inline fn newDot(lhs: *Type, rhs: *Type, al: Allocator) *Self {
+    return Self.init(.{.Dot = Dot.init(lhs, rhs)}).box(al);
   }
 
   pub inline fn newClass(name: []const u8, tktype: TokenType, allocator: Allocator) Self {
@@ -2905,9 +3090,7 @@ pub const Type = struct {
   }
 
   pub fn newNever(allocator: Allocator) *Self {
-    var ty = newVariable();
-    ty.variable().append(deriveToken(ks.NeverVar), allocator);
-    return ty.box(allocator);
+    return newVariableWToken(deriveToken(ks.NeverVar)).box(allocator);
   }
 
   pub inline fn newVoid() Self {
@@ -2960,7 +3143,7 @@ pub const Type = struct {
   }
 
   /// simple/concrete 'unit' type
-  pub inline fn isSimple(self: *Self) bool {
+  pub inline fn isSimple(self: *const Self) bool {
     return switch (self.info) {
       .Concrete => true,
       else => false,
@@ -2968,17 +3151,12 @@ pub const Type = struct {
   }
 
   /// simple/concrete 'unit' type
-  pub inline fn isConcrete(self: *Self) bool {
+  pub inline fn isConcrete(self: *const Self) bool {
     return self.isSimple();
   }
 
-  /// a compound type that may also be generic
-  pub inline fn isCompound(self: *Self) bool {
-    return !self.isSimple();
-  }
-
   /// a type that may require some form of substitution
-  pub inline fn isGeneric(self: *Self) bool {
+  pub inline fn isGeneric(self: *const Self) bool {
     return switch (self.info) {
       .Generic => true,
       else => false,
@@ -2986,7 +3164,7 @@ pub const Type = struct {
   }
 
   /// a type that may require some form of substitution
-  pub inline fn isClsParameterized(self: *Self) bool {
+  pub inline fn isClsParameterized(self: *const Self) bool {
     return switch (self.info) {
       .Class => |*cls| cls.isParameterized(),
       else => false,
@@ -2994,7 +3172,7 @@ pub const Type = struct {
   }
 
   /// a type that may require some form of substitution
-  pub inline fn isTraitParameterized(self: *Self) bool {
+  pub inline fn isTraitParameterized(self: *const Self) bool {
     return switch (self.info) {
       .Trait => |*trt| trt.isParameterized(),
       else => false,
@@ -3002,7 +3180,7 @@ pub const Type = struct {
   }
 
   /// a type that may require some form of substitution
-  pub inline fn isClsOrTraitParameterized(self: *Self) bool {
+  pub inline fn isClsOrTraitParameterized(self: *const Self) bool {
     return switch (self.info) {
       .Class, .Trait => |*t| t.isParameterized(),
       else => false,
@@ -3010,7 +3188,7 @@ pub const Type = struct {
   }
 
   /// a type that may require some form of substitution
-  pub inline fn isTagParameterized(self: *Self) bool {
+  pub inline fn isTagParameterized(self: *const Self) bool {
     return switch (self.info) {
       .Tag => |*tg| tg.isParameterized(),
       else => false,
@@ -3018,7 +3196,7 @@ pub const Type = struct {
   }
 
   /// a compile-time constant type
-  pub inline fn isConstant(self: *Self) bool {
+  pub inline fn isConstant(self: *const Self) bool {
     return switch (self.info) {
       .Constant => true,
       else => false,
@@ -3026,7 +3204,7 @@ pub const Type = struct {
   }
 
   /// a nullable type
-  pub inline fn isNullable(self: *Self) bool {
+  pub inline fn isNullable(self: *const Self) bool {
     return switch (self.info) {
       .Union => |*uni| uni.isNullable(),
       else => false,
@@ -3034,7 +3212,7 @@ pub const Type = struct {
   }
 
   /// a tagged nullable type
-  pub inline fn isTaggedNullable(self: *Self) bool {
+  pub inline fn isTaggedNullable(self: *const Self) bool {
     return switch (self.info) {
       .TaggedUnion => |*uni| uni.isNullable(),
       else => false,
@@ -3042,7 +3220,7 @@ pub const Type = struct {
   }
 
   /// an error union type
-  pub inline fn isErrorTaggedUnion(self: *Self) bool {
+  pub inline fn isErrorTaggedUnion(self: *const Self) bool {
     return switch (self.info) {
       .TaggedUnion => |*uni| uni.isErrorUnion(),
       else => false,
@@ -3050,7 +3228,7 @@ pub const Type = struct {
   }
 
   /// a union type
-  pub inline fn isUnion(self: *Self) bool {
+  pub inline fn isUnion(self: *const Self) bool {
     return switch (self.info) {
       .Union => true,
       else => false,
@@ -3058,7 +3236,7 @@ pub const Type = struct {
   }
 
   /// a tagged union type
-  pub inline fn isTaggedUnion(self: *Self) bool {
+  pub inline fn isTaggedUnion(self: *const Self) bool {
     return switch (self.info) {
       .TaggedUnion => true,
       else => false,
@@ -3066,15 +3244,23 @@ pub const Type = struct {
   }
 
   /// a name/variable type
-  pub inline fn isVariable(self: *Self) bool {
+  pub inline fn isVariable(self: *const Self) bool {
     return switch (self.info) {
       .Variable => true,
       else => false,
     };
   }
 
+  /// a dot type
+  pub inline fn isDot(self: *const Self) bool {
+    return switch (self.info) {
+      .Dot => true,
+      else => false,
+    };
+  }
+
   /// a function type
-  pub inline fn isFunction(self: *Self) bool {
+  pub inline fn isFunction(self: *const Self) bool {
     return switch (self.info) {
       .Function => true,
       else => false,
@@ -3082,7 +3268,7 @@ pub const Type = struct {
   }
 
   /// an instance type
-  pub inline fn isInstance(self: *Self) bool {
+  pub inline fn isInstance(self: *const Self) bool {
     return switch (self.info) {
       .Instance => true,
       else => false,
@@ -3090,7 +3276,7 @@ pub const Type = struct {
   }
 
   /// a class type
-  pub inline fn isClass(self: *Self) bool {
+  pub inline fn isClass(self: *const Self) bool {
     return switch (self.info) {
       .Class => true,
       else => false,
@@ -3106,7 +3292,7 @@ pub const Type = struct {
   }
 
   /// a class or trait type
-  pub inline fn isClassOrTrait(self: *Self) bool {
+  pub inline fn isClassOrTrait(self: *const Self) bool {
     return switch (self.info) {
       .Trait, .Class => true,
       else => false,
@@ -3114,7 +3300,7 @@ pub const Type = struct {
   }
 
   /// a recursive type
-  pub inline fn isRecursive(self: *Self) bool {
+  pub inline fn isRecursive(self: *const Self) bool {
     return switch (self.info) {
       .Recursive => true,
       else => false,
@@ -3122,7 +3308,7 @@ pub const Type = struct {
   }
 
   /// a tag type
-  pub inline fn isTag(self: *Self) bool {
+  pub inline fn isTag(self: *const Self) bool {
     return switch (self.info) {
       .Tag => true,
       else => false,
@@ -3137,8 +3323,17 @@ pub const Type = struct {
     };
   }
 
+
+  /// a module type
+  pub inline fn isModule(self: *const Self) bool {
+    return switch (self.info) {
+      .Module => true,
+      else => false,
+    };
+  }
+
   /// a top type
-  pub inline fn isTop(self: *Self) bool {
+  pub inline fn isTop(self: *const Self) bool {
     return switch (self.info) {
       .Top => true,
       else => false,
@@ -3146,7 +3341,7 @@ pub const Type = struct {
   }
 
   /// a top type with a 'child' class type
-  pub inline fn isClassFromTop(self: *Self) bool {
+  pub inline fn isClassFromTop(self: *const Self) bool {
     return switch (self.info) {
       .Top => |*tp| tp.child.isClass(),
       else => false,
@@ -3246,11 +3441,7 @@ pub const Type = struct {
   }
 
   pub inline fn isNeverTy(self: *Self) bool {
-    return (
-      self.isVariable() and
-      self.variable().len() == 1 and
-      self.variable().tokens.getLast().valueEql(ks.NeverVar)
-    );
+    return (self.isVariable() and self.variable().value.valueEql(ks.NeverVar));
   }
 
   pub fn isListTy(self: *Self) bool {
@@ -3303,6 +3494,10 @@ pub const Type = struct {
     return &self.info.Variable;
   }
 
+  pub inline fn dot(self: *Self) *Dot {
+    return &self.info.Dot;
+  }
+
   pub inline fn union_(self: *Self) *Union {
     return &self.info.Union;
   }
@@ -3347,6 +3542,10 @@ pub const Type = struct {
     return if (self.isClass()) &self.info.Class else &self.info.Trait;
   }
 
+  pub inline fn module(self: *Self) *Module {
+    return &self.info.Module;
+  }
+
   pub inline fn recursive(self: *Self) Recursive {
     return self.info.Recursive;
   }
@@ -3371,8 +3570,8 @@ pub const Type = struct {
   /// check if a type contains a variable type (param)
   pub fn hasVariable(self: *Self) bool {
     return switch (self.info) {
-      .Concrete, .Constant, .Instance => false,
       .Variable, .Generic, .Recursive => true,
+      .Concrete, .Constant, .Instance, .Module => false,
       .Class, .Trait => |*cls| {
         if (cls.tparams) |tparams| {
           for (tparams) |ty| {
@@ -3430,6 +3629,7 @@ pub const Type = struct {
         }
         return false;
       },
+      .Dot => |*dt| dt.lhs.hasVariable() or dt.rhs.hasVariable(),
       .Top => |*tp| tp.child.hasVariable(),
       else => false,
     };
@@ -3442,8 +3642,8 @@ pub const Type = struct {
     }
     map.set(self, self, al);
     return switch (self.info) {
-      .Concrete, .Constant, .Instance => false,
       .Variable, .Generic, .Recursive => true,
+      .Concrete, .Constant, .Instance, .Module => false,
       .Class, .Trait => |*cls| {
         if (cls.tparams) |tparams| {
           for (tparams) |ty| {
@@ -3501,6 +3701,10 @@ pub const Type = struct {
         }
         return false;
       },
+      .Dot => |*dt| (
+        dt.lhs._hasVariableSafe(map, al) or
+        dt.rhs._hasVariableSafe(map, al)
+      ),
       .Top => |*tp| tp.child._hasVariableSafe(map, al),
       else => false,
     };
@@ -3576,6 +3780,10 @@ pub const Type = struct {
         }
         return false;
       },
+      .Dot => |*dt| (
+        dt.lhs.hasThisVariable(typ) or
+        dt.rhs.hasThisVariable(typ)
+      ),
       .Recursive => false, 
       else => false,
     };
@@ -3583,7 +3791,7 @@ pub const Type = struct {
 
   pub fn getName(self: *Self) []const u8 {
     return switch (self.info) {
-      .Variable => |*name| name.tokens.getLast().lexeme(),
+      .Variable => |*name| name.lexeme(),
       else => "",
     };
   }
@@ -3612,7 +3820,7 @@ pub const Type = struct {
       .Class => |*cls| {
         self.tid = 5 << ID_SEED;
         for (cls.data.name) |ch| {
-          self.tid += @as(u8, ch);
+          self.tid += ch;
         }
         for (cls.getSlice()) |typ| {
           self.tid += typ.typeid();
@@ -3622,7 +3830,7 @@ pub const Type = struct {
             self.tid += typ.typeid();
           } else {
             for (nd.getFieldLexeme()) |ch| {
-              self.tid += @as(u8, ch);
+              self.tid += ch;
             }
           }
         }
@@ -3630,7 +3838,7 @@ pub const Type = struct {
       .Trait => |*trt| {
         self.tid = 19 << ID_SEED;
         for (trt.data.name) |ch| {
-          self.tid += @as(u8, ch);
+          self.tid += ch;
         }
         for (trt.getSlice()) |typ| {
           self.tid += typ.typeid();
@@ -3640,7 +3848,7 @@ pub const Type = struct {
             self.tid += typ.typeid();
           } else {
             for (nd.getFieldLexeme()) |ch| {
-              self.tid += @as(u8, ch);
+              self.tid += ch;
             }
           }
         }
@@ -3655,7 +3863,7 @@ pub const Type = struct {
         self.tid = 7 << ID_SEED;
         // TODO: more efficient approach
         for (cons.val) |ch| {
-          self.tid += @as(u8, ch);
+          self.tid += ch;
         }
       },
       .Function => |*fun| {
@@ -3678,11 +3886,9 @@ pub const Type = struct {
       },
       .Variable => |*vr| {
         self.tid = 17 << ID_SEED;
-        for (vr.tokens.items()) |tok| {
-          self.tid += @as(u32, @intFromEnum(TokenType.TkIdent));
-          for (tok.lexeme()) |ch| {
-            self.tid += @as(u8, ch);
-          }
+        self.tid += @as(u32, @intFromEnum(TokenType.TkIdent));
+        for (vr.lexeme()) |ch| {
+          self.tid += ch;
         }
       },
       .Recursive => |*rec| {
@@ -3691,7 +3897,7 @@ pub const Type = struct {
       .Tag => |*tg| {
         self.tid = 15 << ID_SEED;
         for (tg.name) |ch| {
-          self.tid += @as(u8, ch);
+          self.tid += ch;
         }
         if (tg.fields) |params| {
           self.tid += @intCast(params.len());
@@ -3709,9 +3915,20 @@ pub const Type = struct {
       .TagOrClass => |*tc| {
         self.tid = 18 << ID_SEED;
         for (tc.name) |ch| {
-          self.tid += @as(u8, ch);
+          self.tid += ch;
         }
       },
+      .Module => |*mod| {
+        self.tid = 20 << ID_SEED;
+        for (mod.name()) |ch| {
+          self.tid += ch;
+        }
+      },
+      .Dot => |*dt| {
+        self.tid = 21 << ID_SEED;
+        self.tid += dt.lhs.typeid();
+        self.tid += dt.rhs.typeid();
+      }
     }
     std.debug.assert(self.tid != 0);
     return self.tid;
@@ -3739,8 +3956,8 @@ pub const Type = struct {
     }
     switch (typ.info) {
       // TODO: unfold function & method like generic
-      .Concrete, .Variable, .Constant, .Top,
-      .Function, .Instance, .TagOrClass => list.append(typ, al),
+      .Concrete, .Variable, .Constant, .Top, .Dot,
+      .Function, .Instance, .TagOrClass, .Module, => list.append(typ, al),
       .Generic => |*gen| {
         gen.base._unfoldRecursive(step + 1, list, al, visited);
         for (gen.tparams.items()) |param| {
@@ -3793,7 +4010,7 @@ pub const Type = struct {
     switch (self.info) {
       // TODO: unfold function & method like generic
       .Concrete, .Constant, .Variable, .Top, .Function,
-      .Instance, .TagOrClass => list.append(self, al),
+      .Instance, .TagOrClass, .Module, .Dot, => list.append(self, al),
       .Generic => |*gen| {
         gen.base._unfold(list, al);
         for (gen.tparams.items()) |param| {
@@ -4021,21 +4238,6 @@ pub const Type = struct {
     return tu.toType(al).box(al);
   }
 
-  fn writeName(tokens: *Variable.TokenList, u8w: *U8Writer) !void {
-    var writer = u8w.writer();
-    for (tokens.items(), 0..) |tok, i| {
-      // variables starting with $ are generated and internal, so use this symbol instead
-      const value = tok.lexeme();
-      _ = if (value.len > 0 and value[0] != ks.GeneratedVarMarker)
-            try writer.write(value)
-          else try writer.write(ks.GeneratedTypeVar);
-      if (i != tokens.len() - 1) {
-        // compound names are separated via '.'
-        _ = try writer.write(".");
-      }
-    }
-  }
-
   fn _typename(self: *Self, depth: *usize, u8w: *U8Writer) !void {
     depth.* = depth.* + 1;
     defer depth.* = depth.* - 1;
@@ -4130,7 +4332,7 @@ pub const Type = struct {
           }
         }
         _ = try writer.write(")");
-        if (!fun.data.ret.isVariable() or fun.data.ret.variable().getFirst().ty != .TkEof) {
+        if (!fun.data.ret.isVariable() or fun.data.ret.variable().token().ty != .TkEof) {
           _ = try writer.write(": ");
           try fun.data.ret._typename(depth, u8w);
         }
@@ -4170,7 +4372,24 @@ pub const Type = struct {
           }
         }
       },
-      .Variable => |*vr| try writeName(&vr.tokens, u8w),
+      .Module => |*mod| {
+        _ = try u8w.writer().write("{module ");
+        _ = try u8w.writer().write(mod.name());
+        _ = try u8w.writer().write("}");
+      },
+      .Variable => |*vr| {
+        const value = vr.lexeme();
+        _ = (
+          if (value.len > 0 and value[0] != ks.GeneratedVarMarker)
+            try u8w.writer().write(value)
+          else try u8w.writer().write(ks.GeneratedTypeVar)
+        );
+      },
+      .Dot => |*dt| {
+        try dt.lhs._typename(depth, u8w);
+        _ = try u8w.writer().write(".");
+        try dt.rhs._typename(depth, u8w);
+      },
       .Recursive => _ = try u8w.writer().write("{...}"),
     }
   }
@@ -4342,8 +4561,9 @@ pub const Type = struct {
         }
         return Self.compressTaggedTypes(&new_uni, null, allocator);
       },
-      .Constant, .Concrete, .Generic, .Variable, .Top,
-      .Function, .Class, .Trait, .Instance, .Tag, .TagOrClass => return error.Negation,
+      .Constant, .Concrete, .Generic, .Variable,
+      .Top, .Function, .Class, .Trait, .Dot,
+      .Instance, .Tag, .TagOrClass, .Module => return error.Negation,
       .Recursive => return t1,
     }
   }
@@ -4395,6 +4615,11 @@ pub const Type = struct {
           return t1;
         }
       },
+      .Module => |*mod| {
+        if (t2.isModule() and mod.eql(t2.module())) {
+          return t1;
+        }
+      },
       .Union => |*uni| {
         for (uni.variants.values()) |ty| {
           if (is(ty, t2, al)) |typ| {
@@ -4418,6 +4643,7 @@ pub const Type = struct {
           return t1;
         }
       },
+      .Dot => {},
       .Function => |*fun| {
         if (t2.isFunction() and fun.eql(t2.function(), al)) {
           return t1;
@@ -4495,8 +4721,8 @@ pub const Concrete = struct {
         }
         return false;
       },
-      .Generic, .Variable, .Recursive, .Function, .Trait,
-      .Top, .Instance, .Tag, .TaggedUnion, .TagOrClass => return false,
+      .Generic, .Variable, .Recursive, .Function, .Trait, .Top,
+      .Instance, .Tag, .TaggedUnion, .TagOrClass, .Module, .Dot => return false,
     }
     return false;
   }
@@ -4540,8 +4766,8 @@ pub const Constant = struct {
         }
         return false;
       },
-      .Union, .Generic, .Variable, .Recursive, .Function,
-      .Top, .Instance, .Tag, .TaggedUnion, .TagOrClass, .Trait => return false,
+      .Union, .Generic, .Variable, .Recursive, .Function, .Top, .Dot,
+      .Instance, .Tag, .TaggedUnion, .TagOrClass, .Trait, .Module => return false,
     }
     return false;
   }
@@ -4582,7 +4808,7 @@ pub const Union = struct {
     }
   }
 
-  pub inline fn isNullable(self: *@This()) bool {
+  pub inline fn isNullable(self: *const @This()) bool {
     for (self.variants.values()) |ty| {
       if (ty.isNilTy()) return true;
     }
@@ -4619,8 +4845,8 @@ pub const Union = struct {
         }
         return true;
       },
-      .Constant, .Concrete, .Generic, .Variable, .Recursive,
-      .Function, .Class, .Top, .Instance, .TagOrClass, .Trait, => {
+      .Constant, .Concrete, .Generic, .Variable, .Recursive, .Function,
+      .Class, .Top, .Instance, .TagOrClass, .Trait, .Module, .Dot, => {
         if (this.isBoolUnionTy() and other.isBoolTy()) return true;
         if (ctx == .RCTypeParams) return false;
         // related if there exists a variant of T1 that is related to T2
@@ -4675,8 +4901,8 @@ pub const TaggedUnion = struct {
     }
   }
 
-  pub inline fn isNullable(self: *@This()) bool {
-    for (self.variants.items()) |ty| {
+  pub inline fn isNullable(self: *const @This()) bool {
+    for (self.variants.list.items) |ty| {
       if (ty.tag().nameEql(ks.NoneVar)) {
         return true;
       }
@@ -4684,9 +4910,9 @@ pub const TaggedUnion = struct {
     return false;
   }
 
-  pub inline fn isErrorUnion(self: *@This()) bool {
+  pub inline fn isErrorUnion(self: *const @This()) bool {
     if (self.isNullable()) return false;
-    for (self.variants.items()) |ty| {
+    for (self.variants.list.items) |ty| {
       if (ty.isErrorTy()) {
         return true;
       }
@@ -4740,8 +4966,8 @@ pub const TaggedUnion = struct {
           return i;
         }
       },
-      .Constant, .Concrete, .Generic, .Variable, .Function,
-      .Class, .Top, .Instance, .Tag, .TagOrClass, .Trait => {
+      .Constant, .Concrete, .Generic, .Variable, .Function, .Class,
+      .Top, .Instance, .Tag, .TagOrClass, .Trait, .Module, .Dot => {
         if (ctx == .RCTypeParams) return null;
         // related if there exists a variant of T1 that is related to T2
         for (this.variants.items(), 0..) |variant, i| {
@@ -4803,53 +5029,35 @@ pub const Generic = struct {
       },
       .Concrete, .Constant, .Union, .Variable,
       .Recursive, .Function, .Class, .Top, .Trait,
-      .Instance, .Tag, .TaggedUnion, .TagOrClass => return false,
+      .Instance, .Tag, .TaggedUnion, .TagOrClass,
+      .Module, .Dot => return false,
     }
     return false;
   }
 };
 
 pub const Variable = struct {
-  tokens: TokenList,
+  value: Token,
   bounds: ?*Type = null,
 
-  pub const TokenList = ds.ArrayListUnmanaged(Token);
-
-
   pub inline fn init() @This() {
-    return .{.tokens = TokenList.init()};
+    return .{.value = Token.getDefaultToken()};
   }
 
-  pub inline fn appendTok(self: *@This(), name: Token, al: Allocator) void {
-    self.tokens.append(name, al);
+  pub inline fn initValue(value: Token) @This() {
+    return .{.value = value};
   }
 
-  pub const append = appendTok;
-
-  pub fn eql(self: *@This(), other: *@This()) bool {
-    if (other.tokens.len() != self.tokens.len()) return false;
-    for (other.tokens.items(), self.tokens.items()) |a, b| {
-      if (!std.mem.eql(u8, a.lexeme(), b.lexeme())) {
-        return false;
-      }
-    }
-    return true;
+  pub inline fn eql(self: *@This(), other: *@This()) bool {
+    return std.mem.eql(u8, self.value.lexeme(), other.value.lexeme());
   }
 
-  pub inline fn len(self: *@This()) usize {
-    return self.tokens.len();
+  pub inline fn token(self: *@This()) Token {
+    return self.value;
   }
 
-  pub inline fn getTokens(self: *@This()) *TokenList {
-    return &self.tokens;
-  }
-
-  pub inline fn getFirst(self: *@This()) Token {
-    return self.tokens.items()[0];
-  }
-
-  pub inline fn getFirstLexeme(self: *@This()) []const u8 {
-    return self.tokens.items()[0].lexeme();
+  pub inline fn lexeme(self: *@This()) []const u8 {
+    return self.value.lexeme();
   }
 
   pub fn isRelatedTo(this: *Variable, other: *Type, ctx: RelationContext, al: Allocator) bool {
@@ -4859,7 +5067,31 @@ pub const Variable = struct {
       .Variable => |*vr| this.eql(vr),
       .Constant, .Concrete, .Union, .Recursive,
       .Function, .Generic, .Class, .Top, .Trait,
-      .Instance, .Tag, .TaggedUnion, .TagOrClass => false,
+      .Instance, .Tag, .TaggedUnion, .TagOrClass,
+      .Module, .Dot => false,
+    };
+  }
+};
+
+pub const Dot = struct {
+  lhs: *Type,
+  rhs: *Type,
+
+  pub fn init(lhs: *Type, rhs: *Type) @This() {
+    return .{.lhs = lhs, .rhs = rhs};
+  }
+
+  pub fn isRelatedTo(this: *Dot, other: *Type, ctx: RelationContext, al: Allocator) bool {
+    return switch (other.info) {
+      .Dot => |*dt| {
+        return (
+          this.lhs.isRelatedTo(dt.lhs, ctx, al) and
+          this.rhs.isRelatedTo(dt.rhs, ctx, al)
+        );
+      },
+      .Variable, .Constant, .Concrete, .Union, .Recursive,
+      .Function, .Generic, .Class, .Top, .Trait,
+      .Instance, .Tag, .TaggedUnion, .TagOrClass, .Module => false,
     };
   }
 };
@@ -4872,13 +5104,17 @@ pub const Function = struct {
     params: []*Type,
     ret: *Type,
     node: ?*Node,
+    module: ?*Type,
   };
 
-  pub inline fn init(ret: *Type, tparams: ?[]*Type, node: ?*Node, al: Allocator) @This() {
+  pub inline fn init(ret: *Type, tparams: ?[]*Type, node: ?*Node, module: ?*Type, al: Allocator) @This() {
     return .{
       .tparams = tparams,
       .data = util.box(
-        FunctionData, .{.params = &[_]*Type{}, .ret = ret, .node = node}, al
+        FunctionData, .{
+          .params = &[_]*Type{}, .ret = ret, .node = node,
+          .module = module,
+        }, al
       )
     };
   }
@@ -4913,13 +5149,18 @@ pub const Function = struct {
     return true;
   }
 
+  pub fn getName(self: *@This()) Token {
+    return self.data.node.?.getBasicFun().data.name.?;
+  }
+
   pub fn isRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, al: Allocator) bool {
     _ = ctx;
     return switch (other.info) {
       .Function => |*fun| this.eql(fun, al),
       .Variable, .Constant, .Concrete, .Union,
       .Recursive, .Generic, .Class, .Top, .Trait,
-      .Instance, .Tag, .TaggedUnion, .TagOrClass => false,
+      .Instance, .Tag, .TaggedUnion, .TagOrClass,
+      .Module, .Dot => false,
     };
   }
 };
@@ -4937,13 +5178,14 @@ pub const Class = struct {
     name: []const u8,
     fields: ds.ArrayListUnmanaged(*Node),
     methods: TypeList,
+    public: bool,
     node: ?*Node,
     trait: ?*Type,
   };
 
   pub inline fn init(
     name: []const u8, tktype: TokenType, fields: ds.ArrayListUnmanaged(*Node), methods: TypeList,
-    tparams: ?[]*Type, node: ?*Node, empty: bool, builtin: bool, trait: ?*Type, al: Allocator
+    tparams: ?[]*Type, node: ?*Node, empty: bool, builtin: bool, public: bool, trait: ?*Type, al: Allocator
   ) @This() {
     return .{
       .empty = empty,
@@ -4954,13 +5196,14 @@ pub const Class = struct {
         .name = name,
         .fields = fields,
         .methods = methods,
+        .public = public,
         .node = node,
         .trait = trait,
       }, al), 
     };
   }
 
-  fn isBuiltin(tkty: TokenType) bool {
+  inline fn isBuiltin(tkty: TokenType) bool {
     return switch (tkty) {
       .TkList, .TkTuple, .TkMap, .TkStr => true,
       else => false, 
@@ -4972,7 +5215,7 @@ pub const Class = struct {
       name, tktype,
       ds.ArrayListUnmanaged(*Node).init(),
       TypeList.init(),
-      null, null, false, false, null, al
+      null, null, false, false, false, null, al
     );
     cls.immutable = tktype.is(.TkTuple);
     cls.builtin = isBuiltin(tktype);
@@ -4985,7 +5228,7 @@ pub const Class = struct {
     }
   }
 
-  pub inline fn isParameterized(self: *@This()) bool {
+  pub inline fn isParameterized(self: *const @This()) bool {
     return self.tparams != null;
   }
 
@@ -5035,11 +5278,15 @@ pub const Class = struct {
   }
 
   pub inline fn toType(self: @This()) Type {
-    return Type.init(.{.Class = self});
+    var typ = Type.init(.{.Class = self});
+    typ.aspec = AccessSpecifier.getASpec(self.data.public);
+    return typ;
   }
 
   pub inline fn toTraitType(self: @This()) Type {
-    return Type.init(.{.Trait = self});
+    var typ = Type.init(.{.Trait = self});
+    typ.aspec = AccessSpecifier.getASpec(self.data.public);
+    return typ;
   }
 
   pub inline fn eql(self: *@This(), other: *@This()) bool {
@@ -5052,6 +5299,10 @@ pub const Class = struct {
 
   pub fn setAsResolved(self: *@This()) void {
     self.resolved = true;
+  }
+
+  pub inline fn getName(self: *@This()) Token {
+    return self.data.node.?.NdClass.name.toToken();
   }
 
   pub fn getField(self: *@This(), name: []const u8) ?*Node {
@@ -5107,7 +5358,7 @@ pub const Class = struct {
 
   pub fn getMethodTy(self: *@This(), name: []const u8) ?*Type {
     for (self.data.methods.items()) |mth| {
-      if (mth.function().data.node.?.getBasicFun().data.name.?.valueEql(name)) {
+      if (mth.function().getName().valueEql(name)) {
         return mth;
       }
     }
@@ -5149,8 +5400,8 @@ pub const Class = struct {
       .Concrete => |*conc| {
         return this.isStringClass() and conc.kind == .TyString;
       },
-      .Variable, .Union, .Recursive, .Function,
-      .Generic, .Top, .Tag, .TaggedUnion, .Trait => false,
+      .Variable, .Union, .Recursive, .Function, .Dot,
+      .Generic, .Top, .Tag, .TaggedUnion, .Trait, .Module => false,
     };
   }
 
@@ -5203,13 +5454,115 @@ pub const Class = struct {
         }
         return false;
       },
-      .TagOrClass, .Constant, .Concrete, .Variable,
+      .TagOrClass, .Constant, .Concrete, .Variable, .Module, .Dot,
       .Recursive, .Function, .Generic, .Top, .Tag, .TaggedUnion, => false,
     };
   }
 };
 
 pub const Trait = Class;
+
+pub const Module = struct {
+  resolved: bool = false,
+  env: *Env,
+  node: *Node,
+
+  pub const TypeData = struct {
+    typ: *Type,
+    aspec: AccessSpecifier,
+  };
+
+  pub const Env = struct {
+    alias: []const u8,
+    var_scope: ds.StringHashMapUnmanaged(TypeData),
+    typ_scope: ds.StringHashMapUnmanaged(TypeData),
+    modules: ds.ArrayListUnmanaged(*Module) = ds.ArrayListUnmanaged(*Module).init(),
+
+    fn init(alias: []const u8, al: Allocator) *Env {
+      return util.box(Env, .{
+        .alias = alias,
+        .var_scope = ds.StringHashMapUnmanaged(TypeData).init(),
+        .typ_scope = ds.StringHashMapUnmanaged(TypeData).init(),
+      }, al);
+    }
+
+    pub fn addTypes(self: *Env, scope: anytype, al: Allocator) void {
+      var itr = scope.map.iterator();
+      while (itr.next()) |entry| {
+        const typ = entry.value_ptr.*;
+        const aspec = typ.aspec;
+        self.typ_scope.set(entry.key_ptr.*, .{.typ = typ, .aspec = aspec}, al);
+      }
+    }
+  };
+
+  pub inline fn init(node: *Node, alias: []const u8, al: Allocator) @This() {
+    return .{.node = node, .env = Env.init(alias, al)};
+  }
+
+  pub inline fn name(self: *@This()) []const u8 {
+    // file path must've been set already for this to work.
+    return self.node.NdProgram.filepath;
+  }
+
+  pub inline fn declsLen(self: *@This()) usize {
+    return self.maps.decls.len();
+  }
+
+  pub inline fn addModule(self: *@This(), ty: *Type, al: Allocator) void {
+    self.env.modules.append(ty.module(), al);
+  }
+
+  pub inline fn setIdTy(self: *@This(), id: []const u8, typ: *Type, aspec: AccessSpecifier, al: Allocator) void {
+    self.env.var_scope.set(id, .{.typ = typ, .aspec = aspec}, al);
+  }
+
+  pub fn getIdTy(self: *const @This(), id: []const u8) ?TypeData {
+    return self.env.var_scope.get(id);
+  }
+
+  pub inline fn setTy(self: *@This(), id: []const u8, typ: *Type, aspec: AccessSpecifier, al: Allocator) void {
+    self.env.typ_scope.set(id, .{.typ = typ, .aspec = aspec}, al);
+  }
+
+  pub fn getTy(self: *const @This(), id: []const u8) ?TypeData {
+    return self.env.typ_scope.get(id);
+  }
+
+  pub fn getTyOnly(self: *const @This(), id: []const u8) ?*Type {
+    if (self.env.typ_scope.get(id)) |td| {
+      return td.typ;
+    }
+    return null;
+  }
+
+  pub inline fn toType(self: @This()) Type {
+    return Type.init(.{.Module = self});
+  }
+
+  pub inline fn eql(self: *@This(), other: *@This()) bool {
+    return std.mem.eql(u8, self.name(), other.name());
+  }
+
+  pub fn setAsResolved(self: *@This()) void {
+    self.resolved = true;
+  }
+
+  pub fn isRelatedTo(this: *@This(), other: *Type, ctx: RelationContext, al: Allocator) bool {
+    _ = ctx;
+    _ = al;
+    switch (other.info) {
+      .Module => |*mod| {
+        return this.eql(mod);
+      },
+      .Concrete, .Constant, .Union, .Variable,
+      .Recursive, .Function, .Class, .Top, .Trait,
+      .Instance, .Tag, .TaggedUnion, .TagOrClass,
+      .Generic, .Dot, => return false,
+    }
+    return false;
+  }
+};
 
 pub const Tag = struct {
   name: []const u8,
@@ -5239,11 +5592,11 @@ pub const Tag = struct {
     return .{.name = name, .fields = null, .ty = ty};
   }
 
-  pub inline fn isParameterized(self: *@This()) bool {
+  pub inline fn isParameterized(self: *const @This()) bool {
     return self.fields != null;
   }
 
-  pub inline fn isInstantiated(self: *@This()) bool {
+  pub inline fn isInstantiated(self: *const @This()) bool {
     return self.instantiated;
   }
 
@@ -5348,7 +5701,7 @@ pub const TagOrClass = struct {
     return .{.name = name, .tktype = tktype};
   }
 
-  pub inline fn nameEql(self: *@This(), name: []const u8) bool {
+  pub inline fn nameEql(self: *const @This(), name: []const u8) bool {
     return std.mem.eql(u8, self.name, name);
   }
 
@@ -5385,8 +5738,8 @@ pub const Instance = struct {
       .Instance => |*oth| this.cls.isRelatedTo(oth.cls, ctx, al),
       .Class => if (ctx == .RCIs) this.cls.isRelatedTo(other, ctx, al) else false,
       .TagOrClass => if (ctx == .RCIs) this.cls.isRelatedTo(other, ctx, al) else false,
-      .Function, .Variable, .Constant, .Concrete, .Union,
-      .Recursive, .Generic, .Top, .Tag, .TaggedUnion, .Trait, => false,
+      .Function, .Variable, .Constant, .Concrete, .Union, .Module,
+      .Recursive, .Generic, .Top, .Tag, .TaggedUnion, .Trait, .Dot, => false,
     };
   }
 };

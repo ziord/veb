@@ -323,12 +323,12 @@ pub const CompUnit = struct {
   /// whole program
   program: *FlowGraph,
 
-  pub fn init(al: Allocator) @This() {
-    return .{
+  pub fn init(al: Allocator) *@This() {
+    return util.box(CompUnit, .{
       .funcs = ds.ArrayList(*FlowGraph).init(al),
       .classes = ds.ArrayList(*FlowGraph).init(al),
       .program = undefined,
-    };
+    }, al);
   }
 
   pub fn putFunc(self: *@This(), info: *FlowGraph) void {

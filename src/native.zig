@@ -161,7 +161,7 @@ fn createStringClass(vm: *VM) *vl.ObjClass {
   var cls = vl.createClass(vm, methods.len);
   vm.classes.string = cls;
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
-    cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
+    cls.items[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
   }
   cls.name = newString(vm, ks.StrVar);
   return cls;
@@ -234,7 +234,7 @@ fn createListClass(vm: *VM) *vl.ObjClass {
   const names = [_]usize{4, 5, 8, 10, 18};
   var cls = vl.createClass(vm, methods.len);
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
-    cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
+    cls.items[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
   }
   cls.name = newString(vm, ks.ListVar);
   vm.classes.list = cls;
@@ -259,7 +259,7 @@ fn createTupleClass(vm: *VM) *vl.ObjClass {
   const names = [_]usize{5};
   var cls = vl.createClass(vm, methods.len);
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
-    cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
+    cls.items[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
   }
   cls.name = newString(vm, ks.TupleVar);
   vm.classes.tuple = cls;
@@ -367,7 +367,7 @@ fn createMapClass(vm: *VM) *vl.ObjClass {
   const names = [_]usize{5, 9, 15, 16, 10, 11, 12, 14, 5};
   var cls = vl.createClass(vm, methods.len);
   for (methods, arities, names, 0..) |mtd, arity, name, i| {
-    cls.methods[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
+    cls.items[i] = vl.objVal(vl.createNativeFn(vm, mtd, arity, name));
   }
   cls.name = newString(vm, ks.MapVar);
   vm.classes.map = cls;

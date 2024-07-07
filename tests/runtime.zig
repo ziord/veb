@@ -3786,7 +3786,7 @@ test "patterns-51.<match on lists (guarded rested)>" {
   const src =
   \\ let z = false
   \\ match {'a': false, 'b': true, 'c': false}.entries()
-  \\  case [Key('a'), Value(false), ..] as t if z => assert(z, 'should be false')
+  \\  case [@Key('a'), @Value(false), ..] as t if z => assert(z, 'should be false')
   \\  case [..] as t if z => assert(z, 'should be false')
   \\  case _ => z = true
   \\ end
@@ -5142,32 +5142,70 @@ test "traits <Iterator.zip>" {
   try doRuntimeTest(src);
 }
 
-test "traits <range>" {
+test "traits <Iterator.map>" {
   const src =
-  \\ range(1, Just(12), Just(2)).iter().count()
+  \\ let j = [12, 13, 14]
+  \\ let k = j.iter().map(def (n: num) => @string(n))
+  \\ assert(k.len() == 3, 'should be 2')
+  \\ assert(k[0] == '12', 'should be 12')
+  \\ assert(k[1] == '13', 'should be 13')
+  \\ assert(k[2] == '14', 'should be 14')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <Iterator.filter>" {
+  const src =
+  \\ let j = [12, 13, 14]
+  \\ let k = j.iter().filter(def (n: num) => n % 2 == 0)
+  \\ assert(k.len() == 2, 'should be 2')
+  \\ assert(k[0] == 12, 'should be 12')
+  \\ assert(k[1] == 14, 'should be 14')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <Iterator.reduce>" {
+  const src =
+  \\ let j = [12, 13, 14]
+  \\ let r = j.iter().reduce(def (x: num, y: num) => x + y, None)
+  \\ assert(r == 39, 'should be 39')
+  \\
+  \\ let j = ['f', 'i', 'n', 'd', 'e', 'r']
+  \\ let conc = j.iter().reduce(def (x: str, y: str) => x <> y, Just(''))
+  \\ conc == 'finder' |> assert(*, 'should be finder')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "traits <std.collections.range>" {
+  const src =
+  \\ import std.collections
+  \\ collections.range(1, Just(12), Just(2)).iter().count()
   \\ |> assert(* == 6, 'should be 6')
   \\
-  \\ range(1, Just(12), None).iter().count()
+  \\ collections.range(1, Just(12), None).iter().count()
   \\ |> assert(* == 11, 'should be 6')
   \\
-  \\ let r = range(1, Just(12), None)
+  \\ let r = collections.range(1, Just(12), None)
   \\ assert(r.next().?? == 1, 'should be 1')
   \\ assert(r.next().?? == 2, 'should be 2')
   \\
-  \\ let r = range(1, Just(12), None).iter()
+  \\ let r = collections.range(1, Just(12), None).iter()
   \\ assert(r.next().?? == 1, 'should be 1')
   \\ assert(r.next().?? == 2, 'should be 2')
   ;
   try doRuntimeTest(src);
 }
 
-test "traits <zip>" {
+test "traits <std.collections.zip>" {
   const src =
-  \\ zip([1, 2, 3, 4].iter(), ['a', 'b', 'c'].iter())
+  \\ import std
+  \\ std.collections.zip([1, 2, 3, 4].iter(), ['a', 'b', 'c'].iter())
   \\  .iter().count()
   \\ |> assert(* == 3, 'should be 3')
   \\
-  \\ let r = zip([1, 2, 3].iter(), ['a', 'b', 'c', 'd'].iter())
+  \\ let r = std.collections.zip([1, 2, 3].iter(), ['a', 'b', 'c', 'd'].iter())
   \\ assert(r[0][0] == 1, 'should be 1')
   \\ assert(r[0][1] == 'a', 'should be a')
   \\ assert(r[-1][0] == 3, 'should be 1')
@@ -5176,10 +5214,11 @@ test "traits <zip>" {
   try doRuntimeTest(src);
 }
 
-test "traits <range & Iterator.zip>" {
+test "traits <std.collections.range & Iterator.zip>" {
   const src =
+  \\ import std.collections as c
   \\ let k = [10, 11, 12, 13]
-  \\ let r = k.iter().zip(range(1, Just(12), Just(2)).iter())
+  \\ let r = k.iter().zip(c.range(1, Just(12), Just(2)).iter())
   \\ assert(r.len() == 4, 'should be 4')
   \\ assert(r[0][0] == 10, 'should be 10')
   \\ assert(r[0][1] == 1, 'should be 1')
@@ -5236,6 +5275,8 @@ test "parameter resolution" {
 
 test "for loop" {
   const src =
+  \\ import std.collections
+  \\ const range = collections.range
   \\ let i = 'a'
   \\ let j = 'b'
   \\ let l = [] as List{fn(): num}

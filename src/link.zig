@@ -3,6 +3,7 @@ const util = @import("util.zig");
 const diagnostics = @import("diagnostics.zig");
 const ds = @import("ds.zig");
 const FlowNode = @import("fir.zig").FlowNode;
+const TypeChecker = @import("check.zig").TypeChecker;
 pub const tir = @import("tir.zig");
 
 const Allocator = tir.Allocator;
@@ -18,6 +19,8 @@ const Recursive = tir.Recursive;
 const Node = tir.Node;
 const Diagnostic = diagnostics.Diagnostic;
 const U8Writer = util.U8Writer;
+const assert = std.debug.assert;
+const TypeCheckError = TypeChecker.TypeCheckError;
 
 fn CreateMap(comptime K: type, comptime V: type) type {
   return struct {
@@ -41,6 +44,10 @@ fn CreateMap(comptime K: type, comptime V: type) type {
 
     pub fn del(self: *@This(), key: K) bool {
       return self.map.remove(key);
+    }
+
+    pub fn copy(self: *const @This()) @This() {
+      return .{.map = self.map.clone() catch unreachable};
     }
   };
 }
@@ -146,6 +153,17 @@ pub fn GenScope(comptime K: type, comptime V: type) type {
     pub fn clear(self: *@This()) void {
       self.decls.clearRetainingCapacity();
     }
+
+    pub fn copy(self: *@This()) @This() {
+      var decls = ds.ArrayList(ScopeMap).initCapacity(
+        self.decls.len(),
+        self.decls.allocator(),
+      );
+      for (self.decls.items()) |decl| {
+        decls.appendAssumeCapacity(decl.copy());
+      }
+      return .{.decls = decls};
+    }
   };
 }
 
@@ -157,6 +175,8 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
     typ_scope: TypScope,
     /// scope for other declarations, e.g. variables, functions, etc.
     var_scope: VarScope,
+    /// modules in this context
+    modules: TypeList,
     /// data
     data: ContextData,
 
@@ -167,6 +187,7 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
         .core_typ_scope = TypScope.init(al),
         .typ_scope = TypScope.init(al),
         .var_scope = VarScope.init(al),
+        .modules = TypeList.init(),
         .data = .{},
       };
     }
@@ -187,9 +208,54 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
       self.var_scope.popScope();
     }
 
+    pub inline fn enterTVScope(self: *Self) void {
+      self.typ_scope.pushScope();
+      self.var_scope.pushScope();
+    }
+
+    pub inline fn leaveTVScope(self: *Self) void {
+      self.typ_scope.popScope();
+      self.var_scope.popScope();
+    }
+
+    pub inline fn enterPreludeModule(self: *Self, typ: *Type) void {
+      assert(self.modules.isEmpty());
+      self.modules.append(typ, self.allocator());
+    }
+
+    pub inline fn enterModule(self: *Self, typ: *Type) void {
+      self.modules.append(typ, self.allocator());
+    }
+
+    pub inline fn leaveModule(self: *Self) void {
+      _ = self.modules.pop();
+    }
+
+    pub inline fn cmt(self: *Self) *Type {
+      return self.modules.getLast();
+    }
+
+    pub inline fn cm(self: *Self) *tir.Module {
+      return self.modules.getLast().module();
+    }
+
     pub inline fn copyType(self: *Self, typ: *Type) *Type {
       // we need to deepcopy typ
       return typ.clone(self.typ_scope.allocator());
+    }
+
+    pub inline fn lookupInTypScope(self: *Self, name: []const u8) ?*Type {
+      if (self.typ_scope.lookup(name) orelse self.cm().getTyOnly(name)) |t| return t;
+      var i = self.cm().env.modules.len();
+      for (0..self.cm().env.modules.len()) |_| {
+        if (self.cm().env.modules.itemAt(i - 1).getTy(name)) |info| {
+          if (info.aspec.isPublic()) {
+            return info.typ;
+          }
+        }
+        i -= 1;
+      }
+      return null;
     }
   };
 }
@@ -217,6 +283,7 @@ pub const TypeLinker = struct {
   resolved_tvars: TypeMap,
   diag: *Diagnostic,
   u8w: *U8Writer,
+  tc: *TypeChecker = undefined,
 
   const TypeMap = CreateMap([]const u8, *Type);
   const MultiPair = struct {setter: *Type, key: *Type, value: *Type};
@@ -227,17 +294,17 @@ pub const TypeLinker = struct {
 
   const Self = @This();
 
-  pub fn init(ctx: *TContext, diag: *Diagnostic, u8w: *U8Writer) @This() {
+  pub fn init(ctx: *TContext, diag: *Diagnostic, u8w: *U8Writer, al: Allocator) @This() {
     return .{
       .ctx = ctx,
-      .cyc_scope = PairScope.init(ctx.allocator()),
+      .cyc_scope = PairScope.init(al),
+      .resolved_tvars = TypeMap.init(al),
       .diag = diag,
       .u8w = u8w,
-      .resolved_tvars = TypeMap.init(ctx.allocator()),
     };
   }
 
-  fn error_(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) TypeLinkError {
+  fn error_(self: *Self, token: Token, comptime fmt: []const u8, args: anytype) TypeCheckError {
     self.diag.addDiagnosticsWithLevel(.DiagError, token, "Error: " ++ fmt, args);
     return error.TypeLinkError;
   }
@@ -257,17 +324,12 @@ pub const TypeLinker = struct {
     return self.u8w.items();
   }
 
-  inline fn getVarName(self: *Self, typ: *Type) []const u8 {
-    var tvar = typ.variable();
-    return if (tvar.len() == 1) tvar.getFirstLexeme() else self.getConcatName(tvar);
-  }
-
   fn insertTVar(self: *Self, typ: *Type, data: MultiPair) void {
-    self.cyc_scope.insert(self.getVarName(typ), data);
+    self.cyc_scope.insert(typ.variable().lexeme(), data);
   }
 
   fn checkTVar(self: *Self, typ: *Type, found: *Type) ?*Type {
-    if (self.cyc_scope.lookup(self.getVarName(typ))) |pair| {
+    if (self.cyc_scope.lookup(typ.variable().lexeme())) |pair| {
       // extra p.o.c;
       if (pair.key == found) {
         return pair.value;
@@ -277,7 +339,7 @@ pub const TypeLinker = struct {
   }
 
   fn delTVar(self: *Self, typ: *Type) void {
-    const name = self.getVarName(typ);
+    const name = typ.variable().lexeme();
     if (self.cyc_scope.lookup(name)) |pair| {
       // only delete this pair if `typ` is its exact setter
       if (pair.setter == typ) {
@@ -291,32 +353,11 @@ pub const TypeLinker = struct {
   }
 
   inline fn lookup(self: *Self, name: []const u8) ?*Type {
-    return self.ctx.typ_scope.lookup(name);
+    return self.ctx.lookupInTypScope(name);
   }
 
   pub inline fn lookupTypeVariable(self: *Self, typ: *Type) ?*Type {
-    var tokens = typ.variable().tokens.items();
-    if (tokens.len == 1) {
-      return self.lookup(tokens[0].lexeme());
-    } else {
-      // TODO: context type
-      self.ctx.enterScope();
-      defer self.ctx.leaveScope();
-      const end = tokens.len - 1;
-      for (tokens, 0..) |tk, i| {
-        if (self.lookup(tk.lexeme())) |ty| {
-          if (ty.isTaggedUnion()) {
-            // bring the variants into scope
-            for (ty.taggedUnion().variants.items()) |_ty| {
-              self.insert(_ty.tag().name, _ty);
-            }
-          } else if (i == end) {
-            return ty;
-          }
-        }
-      }
-      return null;
-    }
+    return self.lookup(typ.variable().lexeme());
   }
 
   fn findType(self: *Self, typ: *Type, from_gen: bool) ?*Type {
@@ -356,10 +397,6 @@ pub const TypeLinker = struct {
   }
 
   inline fn assertMaxSubStepsNotExceeded(self: *Self, emit: bool, debug: Token) !void {
-    errdefer {
-      self.cyc_scope.decls.clearAndFree();
-      self.cyc_scope = PairScope.init(self.ctx.allocator());
-    }
     if (self.sub_steps >= MAX_DEPTH) {
       if (!emit) return error.TypeLinkError;
       return self.error_(
@@ -396,8 +433,97 @@ pub const TypeLinker = struct {
     }
   }
 
+  fn resolveDotType(self: *Self, typ: *Type, debug: Token, al: Allocator) !*Type {
+    var dot = typ.dot();
+    var lhs = try self.resolveType(dot.lhs, debug, al);
+    if (lhs.isModule()) {
+      if (!lhs.module().resolved) {
+        try self.tc.resolveModuleType(lhs);
+      }
+      if (dot.rhs.isVariable()) {
+        const token = dot.rhs.variable().value;
+        const info = try self.tc.checkModuleAccess(lhs, token, token.lexeme());
+        return info.@"0";
+      } else if (dot.rhs.isGeneric()) {
+        var gen = dot.rhs.generic();
+        assert(gen.base.isVariable());
+        const token = gen.base.variable().value;
+        const info = try self.tc.checkModuleAccess(lhs, token, token.lexeme());
+        var ty = info.@"0".clone(al);
+        if (info.@"1" and !ty.isClassOrTrait()) {
+          self.tc.typeReferenceError(token, ty);
+          return error.TypeLinkError;
+        }
+        if (ty.isTaggedUnion()) {
+          if (ty.alias) |alias| {
+            if (alias.isGeneric() and alias.generic().tparamsLen() == gen.tparamsLen()) {
+              self.ctx.enterScope();
+              defer self.ctx.leaveScope();
+              if (alias.generic().base.isVariable()) {
+                self.insert(alias.generic().base.getName(), ty);
+              }
+              for (alias.generic().getSlice(), gen.getSlice()) |tvar, t| {
+                const _t = try self.resolveType(t, debug, al);
+                self.insert(tvar.getName(), _t);
+              }
+              if (!self.in_inf and alias.isLikeParameterized()) {
+                self.cyc_scope.pushScope();
+                defer self.cyc_scope.popScope();
+                self.in_inf = try self.resolveTypeAbs(alias, debug);
+              }
+              return self.resolveType(ty, debug, al);
+            }
+          }
+        } else if (ty.isGeneric() and ty.generic().tparamsLen() == gen.tparamsLen()) {
+          var slice = ty.generic().getSlice();
+          for (gen.getSlice(), 0..) |t, i| {
+            slice[i] = try self.resolveType(t, debug, al);
+          }
+          return self.resolveType(ty, debug, al);
+        } else if (ty.isClassOrTrait() and ty.klassOrTrait().tparamsLen() == gen.tparamsLen()) {
+          self.ctx.enterScope();
+          defer self.ctx.leaveScope();
+          for (ty.klassOrTrait().getSlice(), gen.getSlice()) |tvar, t| {
+            self.insert(tvar.getName(), try self.resolveType(t, debug, al));
+          }
+          return self.resolveType(ty, debug, al);
+        }
+        return self.error_(
+          debug, "bad generic type reference: {s}",
+          .{self.tc.getTypename(ty)}
+        );
+      } else {
+        return self.error_(
+          debug, "expected variable or generic type in rhs: {s}",
+          .{dot.rhs.typename(self.u8w)}
+        );
+      }
+    } else if (lhs.isTaggedUnion()) {
+      if (dot.rhs.isVariable()) {
+        if (lhs.taggedUnion().getTag(dot.rhs.variable().lexeme())) |ty| {
+          return ty;
+        } else {
+          return self.error_(
+            debug, "type '{s}' has no tag '{s}'",
+            .{self.tc.getTypename(lhs), self.tc.getTypename(dot.rhs)}
+          );
+        }
+      } else {
+        return self.error_(
+          debug, "expected variable type in rhs: {s}",
+          .{self.tc.getTypename(dot.rhs)}
+        );
+      }
+    } else {
+      return self.error_(
+        debug, "expected module or tagged union type: {s}",
+        .{self.tc.getTypename(typ)}
+      );
+    }
+  }
+
   /// resolve a type alias abstractly by walking the alias chain without substituting
-  fn resolveTypeAbs(self: *Self, typ: *Type, debug: Token) TypeLinkError!bool {
+  fn resolveTypeAbs(self: *Self, typ: *Type, debug: Token) !bool {
     if (typ.isRecursive()) return true;
     if (typ.isGeneric()) {
       var gen = typ.generic();
@@ -457,6 +583,12 @@ pub const TypeLinker = struct {
       }
       return false;
     }
+    if (typ.isDot()) {
+      if (try self.resolveTypeAbs(typ.dot().lhs, debug)) {
+        return true;
+      }
+      return self.resolveTypeAbs(typ.dot().rhs, debug);
+    }
     if (typ.isVariable()) {
       // if this variable occurs in the pair stack before we push it, then it's cyclic/recursive
       // when we begin resolving a variable - we push it on the pair stack
@@ -477,10 +609,35 @@ pub const TypeLinker = struct {
     return false;
   }
 
-  fn resolveType(self: *Self, typ: *Type, debug: Token, al: Allocator) TypeLinkError!*Type {
+  fn resolveType(self: *Self, typ: *Type, debug: Token, al: Allocator) TypeCheckError!*Type {
     try self.assertMaxSubStepsNotExceeded(false, debug);
     if (typ.isSimple() or typ.isConstant() or typ.isRecursive()) {
       return typ;
+    }
+    if (typ.isVariable()) {
+      // if this variable occurs in the pair stack before we push it, then it's cyclic/recursive
+      // when we begin resolving a variable - we push it on the pair stack
+      var eqn = try self.lookupType(typ, false, debug);
+      var alias_info = if (eqn.isRecursive()) eqn.recursive().base.alias else eqn.alias;
+      if (alias_info) |alias| {
+        if (alias.isGeneric()) {
+          // check if this is a regular generic type called without instantiation, 
+          // or a recursive generic type called without instantiation
+          if ((self.using_tvar == 0 or eqn.isRecursive()) and !eqn.isTaggedUnion()) {
+            if (!eqn.isTrait()) {
+              return self.error_(
+                debug,
+                "generic type '{s}' may not have been instantiated correctly",
+                .{typ.typename(self.u8w)}
+              );
+            }
+          }
+        }
+      }
+      const sol = try self.resolveType(eqn, debug, al);
+      // when we finish resolving the variable - we pop it off the pair stack
+      self.delTVar(typ);
+      return sol;
     }
     if (typ.isGeneric()) {
       self.sub_steps += 1;
@@ -517,16 +674,15 @@ pub const TypeLinker = struct {
         var alias_gen = alias.generic();
         var resolved_params = TypeList.init();
         for (alias_gen.getSlice(), 0..) |tvar, i| {
-          std.debug.assert(tvar.variable().len() == 1);
           const tsub = gen.tparams.itemAt(i);
           const r_tsub = try self.resolveType(tsub, debug, al);
           resolved_params.append(r_tsub, al);
-          if (self.resolved_tvars.get(tvar.variable().getFirstLexeme()) == null) {
-            self.resolved_tvars.put(tvar.variable().getFirstLexeme(), r_tsub);
+          if (self.resolved_tvars.get(tvar.variable().lexeme()) == null) {
+            self.resolved_tvars.put(tvar.variable().lexeme(), r_tsub);
           }
         }
         for (alias_gen.getSlice(), resolved_params.items()) |tvar, tsub| {
-          self.insert(tvar.variable().getFirstLexeme(), tsub);
+          self.insert(tvar.variable().lexeme(), tsub);
         }
         var slice = eqn.klassOrTrait().getSlice();
         for (0..slice.len) |i| {
@@ -546,16 +702,15 @@ pub const TypeLinker = struct {
       var alias_gen = alias.generic();
       var resolved_params = TypeList.init();
       for (alias_gen.getSlice(), 0..) |tvar, i| {
-        std.debug.assert(tvar.variable().len() == 1);
         const tsub = gen.tparams.itemAt(i);
         const r_tsub = try self.resolveType(tsub, debug, al);
         resolved_params.append(r_tsub, al);
-        if (self.resolved_tvars.get(tvar.variable().getFirstLexeme()) == null) {
-          self.resolved_tvars.put(tvar.variable().getFirstLexeme(), r_tsub);
+        if (self.resolved_tvars.get(tvar.variable().lexeme()) == null) {
+          self.resolved_tvars.put(tvar.variable().lexeme(), r_tsub);
         }
       }
       for (alias_gen.getSlice(), resolved_params.items()) |tvar, tsub| {
-        self.insert(tvar.variable().getFirstLexeme(), tsub);
+        self.insert(tvar.variable().lexeme(), tsub);
       }
       // `eqn` is the type alias' aliasee, and may not be generic, so we add an extra guard.
       // for ex: type Foo{T} = T  # <-- aliasee/eqn 'T' is not generic here.
@@ -616,35 +771,13 @@ pub const TypeLinker = struct {
       self.insert(typ.tag().name, typ);
       return typ;
     }
-    if (typ.isVariable()) {
-      // if this variable occurs in the pair stack before we push it, then it's cyclic/recursive
-      // when we begin resolving a variable - we push it on the pair stack
-      var eqn = try self.lookupType(typ, false, debug);
-      var alias_info = if (eqn.isRecursive()) eqn.recursive().base.alias else eqn.alias;
-      if (alias_info) |alias| {
-        if (alias.isGeneric()) {
-          // check if this is a regular generic type called without instantiation, 
-          // or a recursive generic type called without instantiation
-          if ((self.using_tvar == 0 or eqn.isRecursive()) and !eqn.isTaggedUnion()) {
-            if (!eqn.isTrait()) {
-              return self.error_(
-                debug,
-                "generic type '{s}' may not have been instantiated correctly",
-                .{typ.typename(self.u8w)}
-              );
-            }
-          }
-        }
-      }
-      const sol = try self.resolveType(eqn, debug, al);
-      // when we finish resolving the variable - we pop it off the pair stack
-      self.delTVar(typ);
-      return sol;
+    if (typ.isDot()) {
+      return self.resolveDotType(typ, debug, al);
     }
     return typ;
   }
 
-  fn tryResolveType(self: *Self, typ: *Type, debug: Token) TypeLinkError!*Type {
+  fn tryResolveType(self: *Self, typ: *Type, debug: Token) !*Type {
     self.sub_steps = 0;
     self.in_inf = false;
     if (typ.isLikeParameterized()) {
@@ -669,8 +802,8 @@ pub const TypeLinker = struct {
   }
 
   pub fn resolve(self: *Self, typ: *Type, debug: Token) !*Type {
-    self.ctx.enterScope();
-    defer self.ctx.leaveScope();
+    self.ctx.enterTVScope();
+    defer self.ctx.leaveTVScope();
     self.resolved_tvars.map.clearRetainingCapacity();
     const ty = try self.tryResolveType(typ, debug);
     // set alias info for debugging
@@ -694,9 +827,9 @@ pub const TypeLinker = struct {
         var slice = new_alias.generic().getSlice();
         for (alias.generic().getSlice(), 0..) |_ty, i| {
           if (_ty.isVariable()) {
-            if (self.lookup(_ty.variable().getFirstLexeme())) |_typ| {
+            if (self.lookup(_ty.variable().lexeme())) |_typ| {
               slice[i] = self.ctx.copyType(_typ);
-            } else if (self.resolved_tvars.get(_ty.variable().getFirstLexeme())) |_typ| {
+            } else if (self.resolved_tvars.get(_ty.variable().lexeme())) |_typ| {
               slice[i] = self.ctx.copyType(_typ);
             }
           }
@@ -752,9 +885,11 @@ pub const TypeLinker = struct {
   pub fn linkAlias(self: *Self, node: *tir.AliasNode) !void {
     var aliasee = node.aliasee.typ;
     var typ = node.alias.typ;
-    const lexeme = if (typ.isGeneric()) typ.generic().base.variable().getFirstLexeme()
-      else typ.variable().getFirstLexeme();
-    self.ctx.typ_scope.insert(lexeme, aliasee);
+    const lexeme = (
+      if (typ.isGeneric()) typ.generic().base.variable().lexeme()
+      else typ.variable().lexeme()
+    );
+    self.insert(lexeme, aliasee);
     // set tags
     typ = aliasee;
     if (typ.isTaggedUnion()) {
@@ -775,6 +910,15 @@ pub const TypeLinker = struct {
           typ.tag().fields.?.items()[0].tdecl = node.alias.typ;
         }
       }
+    } else if (!node.alias.typ.isGeneric() and !aliasee.isNeverTy()) {
+      self.diag.skipEntry();
+      defer self.diag.resumeEntry();
+      const ty = self.resolve(aliasee, node.aliasee.tkbit.toToken()) catch {
+        self.insert(lexeme, node.aliasee.typ);
+        return;
+      };
+      node.aliasee.typ = ty;
+      self.insert(lexeme, node.aliasee.typ);
     }
   }
 
@@ -856,7 +1000,7 @@ pub const TypeLinker = struct {
   }
 
   pub fn linkTrait(self: *Self, node: *tir.StructNode, allow_generic: bool) !void {
-    std.debug.assert(!node.data.builtin and node.data.fields.len == 0);
+    assert(!node.data.builtin and node.data.fields.len == 0);
     if (node.isParameterized()) {
       if (!allow_generic) return;
       self.ban_alias = node.data.params;
@@ -874,17 +1018,7 @@ pub const TypeLinker = struct {
     }
   }
 
-  fn linkProgram(self: *Self, node: *tir.ProgramNode) !void {
-    self.ctx.enterScope();
-    for (node.decls) |item| {
-      self.link(item) catch {};
-    }
-    // only pop off varScope, since typScope needs to be 
-    // reused by the type checker
-    self.ctx.var_scope.popScope();
-  }
-
-  pub fn link(self: *Self, node: *tir.Node) TypeLinkError!void {
+  pub fn link(self: *Self, node: *tir.Node) TypeCheckError!void {
     return switch (node.*) {
       .NdUnary => |*nd| self.link(nd.expr),
       .NdBinary, .NdAssign => |*nd| {
@@ -925,7 +1059,8 @@ pub const TypeLinker = struct {
       .NdLblArg => |*nd| self.link(nd.value),
       .NdList, .NdTuple => |*nd| self.linkList(nd),
       .NdMap => |*nd| self.linkMap(nd),
-      .NdVarDecl => |*nd| self.linkVarDecl(nd),
+      .NdVarDecl, .NdConstVarDecl  => |*nd| self.linkVarDecl(nd),
+      .NdPubVarDecl => |*nd| self.linkVarDecl(nd.getVarDecl()),
       .NdBlock => |*nd| self.linkBlock(nd),
       .NdType => |*nd| self.linkType(nd),
       .NdAlias => |*nd| self.linkAlias(nd),
@@ -936,11 +1071,10 @@ pub const TypeLinker = struct {
       .NdClass => |*nd| self.linkClass(nd, node.getToken(), false),
       .NdTrait => |*nd| self.linkTrait(nd, false),
       .NdRet => |*nd| self.linkRet(nd),
-      .NdProgram => |*nd| self.linkProgram(nd),
-      .NdNumber, .NdString, .NdBool, .NdControl, .NdScope,
-      .NdCondition, .NdMCondition, .NdEmpty, .NdMatch,
+      .NdImport, .NdNumber, .NdString, .NdBool, .NdControl,
+      .NdScope, .NdCondition, .NdMCondition, .NdEmpty, .NdMatch,
       .NdFailMarker, .NdRedunMarker, .NdDiagStartMarker,
-      .NdPipeHolder, .NdFor, .NdForCounter, .NdGenericMtd => {},
+      .NdPipeHolder, .NdFor, .NdForCounter, .NdGenericMtd, .NdProgram => {},
     };
   }
 };

@@ -240,6 +240,7 @@ pub const ObjId = enum(u8) {
   objinstance,
   objmethod,
   objstruct,
+  objmodule,
   objtag,
 };
 
@@ -305,6 +306,7 @@ pub const ObjFn = extern struct {
   arity: u8,
   envlen: usize,
   code: Code,
+  module: *ObjModule,
   name: *const ObjString,
 
   pub inline fn getName(self: *const ObjFn) []const u8 {
@@ -375,12 +377,12 @@ pub const ObjError = extern struct {
 
 pub const ObjClass = extern struct {
   obj: Obj,
-  mlen: usize,
+  len: usize,
   name: *const ObjString,
-  methods: [*]Value,
+  items: [*]Value,
 
   pub inline fn getMethodWithName(self: *@This(), name: *const ObjString) ?Value {
-    for (self.methods[0..self.mlen]) |mtd| {
+    for (self.items[0..self.len]) |mtd| {
       if (asClosure(mtd).fun.name == name) {
         return mtd;
       }
@@ -389,7 +391,7 @@ pub const ObjClass = extern struct {
   }
 
   pub inline fn getNativeMethodWithName(self: *@This(), name: *const ObjString) ?Value {
-    for (self.methods[0..self.mlen]) |mtd| {
+    for (self.items[0..self.len]) |mtd| {
       if (asNativeFn(mtd).name == name) {
         return mtd;
       }
@@ -421,6 +423,7 @@ pub const ObjTag = extern struct {
 
 /// structs are just classes with fields for methods
 pub const ObjStruct = ObjClass;
+pub const ObjModule = ObjClass;
 
 pub const ObjInstance = extern struct {
   obj: Obj,
@@ -647,6 +650,10 @@ pub inline fn isStruct(val: Value) bool {
   return isObjType(val, .objstruct);
 }
 
+pub inline fn isModule(val: Value) bool {
+  return isObjType(val, .objmodule);
+}
+
 pub inline fn isTag(val: Value) bool {
   return isObjType(val, .objtag);
 }
@@ -744,6 +751,10 @@ pub inline fn asClass(val: Value) *ObjClass {
 }
 
 pub inline fn asStruct(val: Value) *ObjStruct {
+  return @ptrCast(asObj(val));
+}
+
+pub inline fn asModule(val: Value) *ObjModule {
   return @ptrCast(asObj(val));
 }
 
@@ -850,13 +861,16 @@ pub fn printObject(val: Value) void {
     .objclass => {
       util.print("{s}", .{asClass(val).nameStr()});
     },
+    .objmodule => {
+      util.print("{{module {s}}}", .{asModule(val).nameStr()});
+    },
     .objstruct => {
       const st = asStruct(val);
       util.print("{s}", .{st.nameStr()});
-      if (st.mlen > 0) {
+      if (st.len > 0) {
         util.print("(", .{});
-        const stop = st.mlen -| 1;
-        for (st.methods[0..st.mlen], 0..) |vl, i| {
+        const stop = st.len -| 1;
+        for (st.items[0..st.len], 0..) |vl, i| {
           @call(.always_inline, display, .{vl});
           if (i < stop) {
             util.print(", ", .{});
@@ -981,11 +995,16 @@ fn _objToString(val: Value, vm: *VM, uw: *ValueStringWriter.Writer) void {
       uw.write(asClass(val).nameStr());
       uw.write("}");
     },
+    .objmodule => {
+      uw.write("{module ");
+      uw.write(asModule(val).nameStr());
+      uw.write("}");
+    },
     .objstruct => {
       var stk = asStruct(val);
       uw.write(stk.nameStr());
       uw.write("(");
-      @call(.always_inline, writeValues, .{stk.methods[0..stk.mlen], stk.mlen -| 1, vm, uw});
+      @call(.always_inline, writeValues, .{stk.items[0..stk.len], stk.len -| 1, vm, uw});
       uw.write(")");
     },
     .objtag => {
@@ -1076,7 +1095,7 @@ pub fn hashObject(val: Value, vm: *VM) u64 {
     .objstring => asString(val).hash,
     .objclass, .objstruct => {
       const it = asClass(val);
-      return it.name.hash ^ hashBits(@intCast(it.mlen));
+      return it.name.hash ^ hashBits(@intCast(it.len));
     },
     .objinstance => {
       const inst = asInstance(val);
@@ -1216,11 +1235,11 @@ pub fn createError(vm: *VM, val: Value) *ObjError {
   return err;
 }
 
-pub fn createClass(vm: *VM, mlen: usize) *ObjClass {
-  const methods = vm.mem.allocBuf(Value, mlen, vm);
+pub fn createClass(vm: *VM, len: usize) *ObjClass {
+  const methods = vm.mem.allocBuf(Value, len, vm);
   var cls = @call(.always_inline, createObject, .{vm, .objclass, null, ObjClass});
-  cls.mlen = mlen;
-  cls.methods = methods.ptr;
+  cls.len = len;
+  cls.items = methods.ptr;
   cls.name = undefined;
   return cls;
 }
@@ -1229,6 +1248,13 @@ pub fn createStruct(vm: *VM, flen: usize) *ObjStruct {
   var strukt = createClass(vm, flen);
   strukt.obj.id = .objstruct;
   return strukt;
+}
+
+pub fn createModule(vm: *VM, len: usize, name: []const u8) *ObjModule {
+  var module = createClass(vm, len);
+  module.obj.id = .objmodule;
+  module.name = createString(vm, &vm.strings, name, false);
+  return module;
 }
 
 pub fn createTag(vm: *VM, name: []const u8) Value {
@@ -1290,7 +1316,7 @@ pub fn createFiber(vm: *VM, clo: ?*ObjClosure, origin: FiberOrigin, caller: ?*Ob
 pub fn structVal(vm: *VM, val: Value, name: []const u8) Value {
   var just = createStruct(vm, 1);
   just.name = createString(vm, &vm.strings, name, false);
-  just.methods[0] = val;
+  just.items[0] = val;
   return objVal(just);
 }
 

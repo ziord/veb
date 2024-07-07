@@ -85,9 +85,9 @@ pub const Analysis = struct {
           }
         }
         if (node.isCondition()) {
-          var tmp = flo_node.getOutgoingNodes(.ETrue, self.diag.data.allocator);
+          var tmp = flo_node.getOutgoingNodes(.ETrue, self.diag.data.allocator());
           try self.checkDeadCodeWithTypes(&tmp, start);
-          tmp = flo_node.getOutgoingNodes(.EFalse, self.diag.data.allocator);
+          tmp = flo_node.getOutgoingNodes(.EFalse, self.diag.data.allocator());
           try self.checkDeadCodeWithTypes(&tmp, start);
         }
       }
@@ -98,7 +98,7 @@ pub const Analysis = struct {
   }
 
   pub fn analyzeDeadCodeWithTypes(self: *Self, node: FlowNode) !void {
-    var nodes = node.getOutgoingNodes(.ESequential, self.diag.data.allocator);
+    var nodes = node.getOutgoingNodes(.ESequential, self.diag.data.allocator());
     return try self.checkDeadCodeWithTypes(&nodes, self.diag.count());
   }
 };

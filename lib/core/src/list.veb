@@ -1,0 +1,43 @@
+pub builtin class List{T}: Iter{T}
+  pub def append(item: T): void
+    #[[internal]]
+  end
+
+  pub def len(): num
+    #[[internal]]
+  end
+
+  pub def pop(): Maybe{T}
+    #[[internal]]
+  end
+
+  pub def get(index: num): Maybe{T}
+    #[[internal]]
+  end
+
+  pub def slice(start_index: num, end_index: num): List{T}
+    #[[internal]]
+  end
+
+  pub def iter(): Iterator{T}
+    #[[internal]]
+  end
+end
+
+pub class ListIterator{T}: Iterator{T}
+  cursor = 0
+  list: List{T}
+  def init(list: List{T})
+    self.list = list
+  end
+ 
+  pub def next(): Maybe{T}
+    let ret = self.list.get(self.cursor)
+    self.cursor += 1
+    return ret
+  end
+
+  pub def iter()
+    return self
+  end
+end

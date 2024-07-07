@@ -1,0 +1,43 @@
+pub type Foo = A | B | C
+pub type Oops = X | Y
+pub alias Bar = Foo
+pub type Tree{a} =
+  | Node(val: a, lhs: Tree{a}, rhs: Tree{a})
+  | Empty
+
+pub def show_foo(f: Foo)
+  match f
+    case A => println('A')
+    case B => println('B')
+    case C => println('C')
+  end
+end
+
+pub class Fish
+  pub x: num
+  def init(x: num)
+    self.x = x
+  end
+
+  pub def swim()
+    println('swimming for', self.x, 'seconds')
+  end
+end
+
+pub const CAPITAL = 0x500
+pub const NO_CAPS = 0x600
+
+pub def foo{T}(x: T)
+  println(x)
+end
+
+pub class Bonkers{T}
+  t: T
+  def init(t: T)
+    self.t = t
+  end
+  pub def scream(): T
+    println('arrrrhhhh', self.t)
+    return self.t
+  end
+end

@@ -1,12 +1,11 @@
 const std = @import("std");
-const BuiltinsSrc = @import("prelude.zig").BuiltinsSrc;
+const prelude = @import("prelude.zig");
 const OpCode = @import("opcode.zig").OpCode;
 const VebAllocator = @import("allocator.zig");
 const util = @import("util.zig");
 pub const ks = @import("constants.zig");
 
 pub const Keywords = std.ComptimeStringMap(TokenType, .{
-  .{"return", .TkReturn},
   .{"if", .TkIf},
   .{"in", .TkIn},
   .{"else", .TkElse},
@@ -25,17 +24,22 @@ pub const Keywords = std.ComptimeStringMap(TokenType, .{
   .{"end", .TkEnd},
   .{"not", .TkNot},
   .{"case", .TkCase},
+  .{"from", .TkFrom},
   .{"match", .TkMatch},
   .{"try", .TkTry},
   .{"alias", .TkAlias},
   .{"pub", .TkPub},
+  .{"const", .TkConst},
   .{"type", .TkType},
   .{"then", .TkThen},
   .{"break", .TkBreak},
   .{"with", .TkWith},
   .{"class", .TkClass},
   .{"trait", .TkTrait},
+  .{"import", .TkImport},
   .{"orelse", .TkOrElse},
+  .{"return", .TkReturn},
+  .{"builtin", .TkBuiltin},
   .{"continue", .TkContinue},
   .{ks.OkVar, .TkOk},
   .{ks.SelfVar, .TkSelf},
@@ -124,11 +128,13 @@ pub const TokenType = enum (u8) {
   TkElse,           // else
   TkElif,           // elif
   TkCase,           // case
+  TkFrom,           // from
   TkTrue,           // true
   TkVoid,           // void
   TkSelf,           // self
   TkWith,           // with
   TkClass,          // class
+  TkConst,          // const
   TkTrait,          // trait
   TkBreak,          // break
   TkFalse,          // false
@@ -138,8 +144,10 @@ pub const TokenType = enum (u8) {
   TkWhere,          // where
   TkWhile,          // while
   TkResult,         // result
+  TkImport,         // import
   TkOrElse,         // orelse
   TkReturn,         // return
+  TkBuiltin,        // builtin
   TkContinue,       // continue
   TkNoReturn,       // noreturn
   TkNumber,         // <number>
@@ -256,8 +264,10 @@ pub const TokenType = enum (u8) {
       .TkElse => "else",
       .TkElif => "elif",
       .TkCase => "case",
+      .TkFrom => "from",
       .TkWith => "with",
       .TkClass => "class",
+      .TkConst => "const",
       .TkTrait => "trait",
       .TkBreak => "break",
       .TkOk => ks.OkVar,
@@ -281,8 +291,10 @@ pub const TokenType = enum (u8) {
       .TkMatch => "match",
       .TkWhere => "where",
       .TkWhile => "while",
+      .TkImport => "import",
       .TkOrElse => "orelse",
       .TkReturn => "return",
+      .TkBuiltin => "builtin",
       .TkContinue => "continue",
       .TkNumber => "<num>",
       .TkString => "<str>",
@@ -363,15 +375,16 @@ pub const OpType = enum (u8) {
 
 pub const Optr = struct {
   ty: TokenType,
+  file: u16,
   pos: u32,
   line: u32,
 
   pub fn init(tok: Token) @This() {
-    return .{.ty = tok.ty, .pos = tok.offset, .line = tok.line};
+    return .{.ty = tok.ty, .pos = tok.offset, .line = tok.line, .file = tok.file};
   }
 
   pub inline fn token(self: Optr) Token {
-    return Token.init(self.ty, self.pos, .User, self.ty.str(), self.line);
+    return Token.init(self.ty, self.pos, self.file, self.ty.str(), self.line);
   }
 
   pub inline fn str(self: @This()) []const u8 {
@@ -385,38 +398,36 @@ pub const Optr = struct {
 
 const U8Writer = util.U8Writer;
 
-pub const SrcKind = ParseMode;
-
 pub const TokenBit = struct {
   pos: u32,
   ty: TokenType,
-  line: u31,
-  src_kind: SrcKind,
+  line: u32,
+  file: u16,
 
   pub inline fn init(token: Token) TokenBit {
     return TokenBit{
       .pos = token.offset, .ty = token.ty,
-      .line = @intCast(token.line), .src_kind = token.src_kind,
+      .line = @intCast(token.line), .file = token.file,
     };
   }
 
   pub inline fn toToken(self: TokenBit) Token {
-    return Token.init(self.ty, self.pos, self.src_kind, self.ty.str(), self.line);
+    return Token.init(self.ty, self.pos, self.file, self.ty.str(), self.line);
   }
 };
 
 pub const IdentToken = struct {
   val: [*]const u8,
   len: u8,
+  file: u8,
   line: u16,
-  offset: u31,
-  src_kind: SrcKind,
+  offset: u32,
 
   pub inline fn init(token: Token) IdentToken {
     return IdentToken{
       .val = token.val, .len = @intCast(token.len),
       .line = @intCast(token.line), .offset = @intCast(token.offset),
-      .src_kind = token.src_kind,
+      .file = @intCast(token.file),
     };
   }
 
@@ -427,7 +438,7 @@ pub const IdentToken = struct {
 
   pub inline fn toToken(self: IdentToken) Token {
     @setRuntimeSafety(false);
-    return Token.init(.TkIdent, self.offset, self.src_kind, self.val[0..@intCast(self.len)], @intCast(self.line));
+    return Token.init(.TkIdent, self.offset, @intCast(self.file), self.val[0..@intCast(self.len)], @intCast(self.line));
   }
 };
 
@@ -436,13 +447,17 @@ pub const Token = struct {
   offset: u32,
   len: u32,
   line: u32,
+  file: u16,
   ty: TokenType,
-  src_kind: SrcKind,
 
-  const DefaultToken = Token.init(.TkEof, 0, SrcKind.User, "", 1);
+  const DefaultToken = Token.init(.TkEof, 0, 1, "", 1);
 
-  pub inline fn init(ty: TokenType, offset: u32, src_kind: SrcKind, val: []const u8, line: u32) Token {
-    return Token{.val = val.ptr, .offset = offset, .len = @intCast(val.len), .ty = ty, .src_kind = src_kind, .line = line};
+  pub inline fn init(ty: TokenType, offset: u32, file: usize, val: []const u8, line: u32) Token {
+    return Token{.val = val.ptr, .offset = offset, .len = @intCast(val.len), .ty = ty, .file = @intCast(file), .line = line};
+  }
+
+  pub inline fn init2(ty: TokenType, offset: u32, file: u16, val: []const u8, line: u32) Token {
+    return Token{.val = val.ptr, .offset = offset, .len = @intCast(val.len), .ty = ty, .file = file, .line = line};
   }
 
   pub inline fn is(self: *const Token, ty: TokenType) bool {
@@ -472,12 +487,8 @@ pub const Token = struct {
     return DefaultToken;
   }
 
-  pub inline fn getToken(val: []const u8, ty: TokenType) Token {
-    return Token.init(ty, 0, .User, val, 0);
-  }
-
   pub inline fn dupTk(self: Token, ty: TokenType) Token {
-    return Token.init(ty, self.offset, self.src_kind, self.lexeme(), self.line);
+    return Token.init2(ty, self.offset, self.file, self.lexeme(), self.line);
   }
 
   pub inline fn isTkErr(self: Token) bool {
@@ -494,7 +505,7 @@ pub const Token = struct {
   }
 
   pub inline fn tkFrom(self: *const @This(), val: []const u8, ty: TokenType) Token {
-    return Token.init(ty, self.offset, self.src_kind, val, self.line);
+    return Token.init2(ty, self.offset, self.file, val, self.line);
   }
 
   pub fn parseNum(self: *const @This()) !f64 {
@@ -541,11 +552,11 @@ pub const Token = struct {
   }
 
   pub fn column(self: *const @This(), src: []const u8) usize {
-    return if (self.src_kind == .User) self._column(src) else self._column(BuiltinsSrc);
+    return self._column(src);
   }
 
   pub fn getLine(self: *const @This(), src: []const u8) []const u8 {
-    return if (self.src_kind == .User) self._getLine(src) else self._getLine(BuiltinsSrc);
+    return self._getLine(src);
   }
 };
 
@@ -569,10 +580,10 @@ pub const Lexer = struct {
   column: usize,
   current: usize,
   start: usize,
+  file: usize,
   at_error: bool,
   src: []const u8,
   allocator: std.mem.Allocator,
-  mode: ParseMode,
 
   const Self = @This();
   const LexError = error {
@@ -605,7 +616,7 @@ pub const Lexer = struct {
     };
   }
 
-  pub fn init(src: []const u8, mode: ParseMode, allocator: std.mem.Allocator) Self {
+  pub fn init(src: []const u8, file: usize, allocator: std.mem.Allocator) Self {
     return Self {
       .line = 1,
       .column = 1,
@@ -613,7 +624,7 @@ pub const Lexer = struct {
       .current = 0,
       .at_error = false,
       .src = src,
-      .mode = mode,
+      .file = file,
       .allocator = allocator,
     };
   }
@@ -636,7 +647,7 @@ pub const Lexer = struct {
 
   inline fn isAlpha(self: *Self, char: u8) bool {
     _ = self;
-    return std.ascii.isAlphanumeric(char) or char == '_';
+    return std.ascii.isAlphanumeric(char) or char == '_' or char == '@';
   }
 
   inline fn match(self: *Self, char: u8) bool {
@@ -661,7 +672,7 @@ pub const Lexer = struct {
   }
 
   fn newToken(self: *Self, ty: TokenType) Token {
-    return Token.init(ty, @intCast(self.start), self.mode, self.src[self.start..self.current], @intCast(self.line));
+    return Token.init(ty, @intCast(self.start), self.file, self.src[self.start..self.current], @intCast(self.line));
   }
 
   fn advance(self: *Self) u8 {

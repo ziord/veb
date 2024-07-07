@@ -304,11 +304,11 @@ pub const FlowGraph = struct {
 
   fn getVisited(self: *@This(), al: Allocator) []bool {
     if (self.visited) |v| {
-      var slice = v[0..self.data.len()];
+      const slice = v[0..self.data.len()];
       @memset(slice, false);
       return slice;
     }
-    var visited = util.allocSlice(bool, self.data.len(), al);
+    const visited = util.allocSlice(bool, self.data.len(), al);
     @memset(visited, false);
     self.visited = visited.ptr;
     return visited;
@@ -481,7 +481,7 @@ pub const CFGBuilder = struct {
             var frm_cnd = self.linkAtomic(bb_nodes, _prev, edge, .CfgOther);
 
             //* cond -> then.body
-            var frm_then = self.linkBlock(nd.then, frm_cnd, .ETrue, null);
+            const frm_then = self.linkBlock(nd.then, frm_cnd, .ETrue, null);
             // TODO:
             //* last.then.body -> cond
 
@@ -592,7 +592,7 @@ pub const CFGBuilder = struct {
 
   fn linkSimpleIf(self: *Self, ast_node: *Node, bb_nodes: *NodeListU, prev: FlowList, edge: FlowEdge) FlowList {
     // link the current bb to this if's condition
-    var node = &ast_node.NdSimpleIf;
+    const node = &ast_node.NdSimpleIf;
     bb_nodes.append(self.createConditionNode(node.cond), self.alloc);
     const _prev = self.linkAtomic(bb_nodes.*, prev, edge, .CfgOther);
     // link this if's then & else branches
@@ -635,8 +635,8 @@ pub const CFGBuilder = struct {
 
   pub fn buildProgram(self: *Self, ast_node: *Node) *FlowGraph {
     self.newGraph();
-    var node = &ast_node.NdProgram;
-    var _prev = self.linkNodeList(node.decls, self.toList(self.graph.entry()), .ESequential, null);
+    const node = &ast_node.NdProgram;
+    const _prev = self.linkNodeList(node.decls, self.toList(self.graph.entry()), .ESequential, null);
     self.connectVertices(_prev, self.graph.exit());
     return self.graph;
   }

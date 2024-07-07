@@ -128,7 +128,7 @@ const VRegister = struct {
     if (n == 0) return;
     var j = n;
     var slice = self.regs.slice();
-    var vals = slice.items(.val);
+    const vals = slice.items(.val);
     var frees = slice.items(.free);
     var r = reg;
     for (vals, frees, 0..) |val, free, i| {
@@ -145,7 +145,7 @@ const VRegister = struct {
   pub fn releaseReg(self: *Self, reg: u32) void {
     if (reg == DummyReg) return;
     var slice = self.regs.slice();
-    var vals = slice.items(.val);
+    const vals = slice.items(.val);
     for (vals, 0..) |val, i| {
       if (val == reg) {
         var frees = slice.items(.free);
@@ -269,7 +269,7 @@ pub const Compiler = struct {
     allocator: *VebAllocator, prel: Prelude,
     prev: ?*@This(), mtd_token: ?Token,
   ) Self {
-    var al = allocator.getArenaAllocator();
+    const al = allocator.getArenaAllocator();
     var self = Self {
       .gsyms = ds.ArrayListUnmanaged(GSymVar).initCapacity(MAX_GSYMS, al),
       .locals = ds.ArrayListUnmanaged(LocalVar).initCapacity(MAX_LOCALS, al),
@@ -412,7 +412,7 @@ pub const Compiler = struct {
     if (self.locals.len() >= MAX_LOCALS) {
       return self.compileError(token, "Too many locals", .{});
     }
-    var reg = try self.getReg(token);
+    const reg = try self.getReg(token);
     self.locals.append(
       LocalVar.init(self.scope, token.lexeme(), reg, @intCast(self.locals.len())),
       self.alloc(),
@@ -421,7 +421,7 @@ pub const Compiler = struct {
   }
 
   fn initLocal(self: *Self, token: Token) !u32 {
-    var dst = try self.addLocal(token);
+    const dst = try self.addLocal(token);
     self.locals.items()[self.locals.len() - 1].initialized = true;
     return dst;
   }
@@ -435,7 +435,7 @@ pub const Compiler = struct {
         return @intCast(i);
       }
     }
-    var ret: u32 = @intCast(self.upvalues.len());
+    const ret: u32 = @intCast(self.upvalues.len());
     self.upvalues.append(Upvalue.init(index, is_local), self.alloc());
     return ret;
   }
@@ -451,13 +451,13 @@ pub const Compiler = struct {
       logger.debug("Gsyms {s}..using globals list", .{if (self.skip_gsyms) "elided" else "exceeded"});
       return .{.pos = self.addGlobalVar(token), .isGSym = false};
     }
-    var idx: u32 = @intCast(self.gsyms.len());
+    const idx: u32 = @intCast(self.gsyms.len());
     self.gsyms.append(GSymVar{._name = token.val, ._name_len = token.len}, self.alloc());
     return .{.pos = idx, .isGSym = true};
   }
 
   fn addGlobalVar(self: *Self, token: Token) u32 {
-    var gvar = GlobalVar {
+    const gvar = GlobalVar {
       ._name = token.val,
       ._name_len = token.len,
       .mempos = self.storeVar(token),
@@ -901,9 +901,9 @@ pub const Compiler = struct {
     if (node.optype().isLgcOp()) return try self.cLgc(node, dst);
     if (node.optype() == .OpIs) return try self.cIs(node, dst);
     self.optimizeConstRK();
-    var rk1 = try self.c(node.left, dst);
+    const rk1 = try self.c(node.left, dst);
     const dst2 = try self.getReg(node.left.getToken());
-    var rk2 = try self.c(node.right, dst2);
+    const rk2 = try self.c(node.right, dst2);
     // we own this register, so we can free
     self.vreg.releaseReg(dst2);
     const inst_op = node.optype().toInstOp();
@@ -1481,13 +1481,13 @@ pub const Compiler = struct {
     var new_fn = value.createFn(self.vm, @intCast(node.params.len));
     new_fn.module = self.fun.module;
     const is_global = self.inGlobalScope();
-    var is_lambda = node.data.name == null;
+    const is_lambda = node.data.name == null;
     if (is_lambda) new_fn.name = value.createString(self.vm, &self.vm.strings, ks.LambdaVar, false);
     if (is_global) {
       // global
       if (!is_lambda) {
-        var ident = node.data.name.?;
-        var info = try self.patchGlobal(ident);
+        const ident = node.data.name.?;
+        const info = try self.patchGlobal(ident);
         self.initializeGlobal(info);
         reg = try self.getReg(token);
         if (!info.isGSym) {
@@ -1625,7 +1625,7 @@ pub const Compiler = struct {
       // after this instruction is executed, `_dst` holds the instance
       self.fun.code.write3ArgsInst(.Callc, _dst, n, flen, token.line, self.vm);
       // compile default fields
-      var clsnode = &ty.klass().data.node.?.NdClass;
+      const clsnode = &ty.klass().data.node.?.NdClass;
       const tmp = try self.getReg(token);
       self.optimizeConstRK();
       for (clsnode.data.fields, 0..) |fd, idx| {
@@ -1866,10 +1866,10 @@ pub const Compiler = struct {
     const token = ast_node.getToken();
     var cls = value.createClass(self.vm, node.data.methods.len());
     const is_global = self.inGlobalScope();
-    var ident = node.name.toToken();
+    const ident = node.name.toToken();
     if (is_global) {
       // global
-      var info = try self.patchGlobal(ident);
+      const info = try self.patchGlobal(ident);
       self.initializeGlobal(info);
       reg = try self.getReg(token);
       if (!info.isGSym) {

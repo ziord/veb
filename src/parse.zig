@@ -1072,7 +1072,7 @@ pub const Parser = struct {
     if (can_have_bounds and self.match(.TkColon)) {
       var ty = try self.annotation();
       if (self.check(.TkPlus)) {
-        var tmp = Union.init();
+        var tmp = Union.init(self.allocator);
         tmp.set(ty, self.allocator);
         while (self.match(.TkPlus)) {
           tmp.set(try self.annotation(), self.allocator);
@@ -1661,7 +1661,7 @@ pub const Parser = struct {
               where_bounds.union_().set(bounds, self.allocator);
               typ.bounds = where_bounds.union_().toTypeBoxed(self.allocator);
             } else {
-              var uni = Type.newUnion();
+              var uni = Type.newUnion(self.allocator);
               uni.union_().addSlice(&[_]*Type{bounds, where_bounds}, self.allocator);
               typ.bounds = uni.union_().toTypeBoxed(self.allocator);
             }
@@ -1930,8 +1930,8 @@ pub const Parser = struct {
       }
       if (self._restPattern(&list)) break;
       // key_value_pattern: | (literal_pattern | constant_pattern) ':' pattern
-      var tok = self.current_tok;
-      var key: *Pattern = switch (tok.ty) {
+      const tok = self.current_tok;
+      const key: *Pattern = switch (tok.ty) {
         // literal_pattern
         .TkNumber, .TkTrue, .TkFalse, .TkString, .TkMinus, => try self._pattern(),
         // constant_pattern := attr := name_or_attr
@@ -2049,7 +2049,7 @@ pub const Parser = struct {
     //                    | value_pattern | group_pattern | sequence_pattern 
     //                    | mapping_pattern | class_pattern
     // literal_pattern
-    var token = self.current_tok;
+    const token = self.current_tok;
     switch (self.current_tok.ty) {
       .TkTrue, .TkFalse => return self.literalCons(try self.boolean(false), token),
       .TkString => return self.literalCons(try self.string(false), token),
@@ -2112,7 +2112,7 @@ pub const Parser = struct {
     // patterns: pattern
     self.meta.m_literals.clearRetainingCapacity();
     const token = self.current_tok;
-    var pat = try self._pattern();
+    const pat = try self._pattern();
     var guard: ?*Node = null;
     if (self.match(.TkIf)) {
       guard = try self.parseExpr();
@@ -2209,7 +2209,7 @@ pub const Parser = struct {
     if (self.match(.TkColon)) {
       var ty = try self.annotation();
       if (self.check(.TkPipe)) {
-        var tmp = Union.init();
+        var tmp = Union.init(self.allocator);
         tmp.set(ty, self.allocator);
         while (self.match(.TkPipe)) {
           tmp.set(try self.annotation(), self.allocator);
@@ -2285,7 +2285,7 @@ pub const Parser = struct {
         break :blk ty;
       } else null;
       if (self.match(.TkEqual)) {
-        var tok = self.current_tok;
+        const tok = self.current_tok;
         val = try self.parseExpr();
         if (val.?.hasSugar()) {
           self.softErrMsg(tok, "field default initializer must be a compile-time known value");
@@ -2502,8 +2502,8 @@ pub const Parser = struct {
       return .{.filename = _fp, .file = f};
     }
     // try cwd/foo/src/lib.veb
-    var fp = _fp[0.._fp.len - 4];
-    var subdir: ?std.fs.Dir = _dir.openDir(fp, .{}) catch null;
+    const fp = _fp[0.._fp.len - 4];
+    const subdir: ?std.fs.Dir = _dir.openDir(fp, .{}) catch null;
     if (subdir) |s| {
       file = s.openFile(ks.SrcDir ++ std.fs.path.sep_str ++ ks.LibDotVeb, .{}) catch null;
       if (file) |f| {
@@ -2541,7 +2541,7 @@ pub const Parser = struct {
     if (node.data.import.name.len >= 2) {
       // if foo.bar -> try foo/src/bar
       const first = node.data.import.name[0].lexeme();
-      var end = fp[first.len + std.fs.path.sep_str.len..];
+      const end = fp[first.len + std.fs.path.sep_str.len..];
       var tmp = std.fs.path.join(self.allocator, &[_][]const u8{first, ks.SrcDir, end}) catch "";
       file_handle = self.resolveImportPathFromDir(tmp, dir_obj) catch null;
       if (file_handle) |handle| {
@@ -2554,7 +2554,7 @@ pub const Parser = struct {
       }
     }
     // try lib_path
-    var _lib_path = std.fs.path.join(self.allocator, &[_][]const u8{lib_path, fp}) catch lib_path;
+    const _lib_path = std.fs.path.join(self.allocator, &[_][]const u8{lib_path, fp}) catch lib_path;
     file_handle = self.resolveImportPathFromDir(_lib_path, dir_obj) catch null;
     if (file_handle) |handle| {
       return handle;
@@ -2564,7 +2564,7 @@ pub const Parser = struct {
   }
 
   fn parseImport(self: *Self, dir: ?[]const u8, node: *tir.ImportNode) ParseError!void {
-    var handle = try self.resolveImportPath(self.cwd, dir, node);
+    const handle = try self.resolveImportPath(self.cwd, dir, node);
     const filename = handle.filename;
     node.data.import.filepath = filename;
     if (self.meta.imports.getPtr(filename)) |n| {
@@ -2605,7 +2605,7 @@ pub const Parser = struct {
     var imports = self.getNodeList();
     while (self.match(.TkImport)) {
       // import pub? IDENT (.IDENT)* (as IDENT)?
-      var is_pub = self.match(.TkPub);
+      const is_pub = self.match(.TkPub);
       var name = ds.ArrayListUnmanaged(Token).init();
       if (self.check(.TkIdent)) {
         name.append(try self.consumeIdentAndAssertNoDiscard(), self.allocator);
@@ -2724,7 +2724,7 @@ pub const Parser = struct {
       }
     }
     try self.advance();
-    var entry = self.createNode();
+    const entry = self.createNode();
     // cache the entry module
     if (self.imports.isEmpty()) {
       self.diag.addSrcFile(ks.PreludeFilename, prelude.CoreSrc);

@@ -1,5 +1,5 @@
 #!/bin/sh
-zig test tests/test.zig --main-pkg-path .
+zig build test
 for file in "tests/modules"/*."veb"; do
     if [ -f "$file" ]; then
         echo $file

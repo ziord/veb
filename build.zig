@@ -19,10 +19,9 @@ pub fn build(b: *std.Build) void {
         .name = "veb",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
-        .main_pkg_path = .{.path = "."},
     });
 
     // This declares intent for the executable to be installed into the
@@ -55,11 +54,13 @@ pub fn build(b: *std.Build) void {
 
     // Creates a step for unit testing.
     const unit_tests = b.addTest(.{
-        .root_source_file = .{ .path = "tests/test.zig" },
+        .root_source_file = b.path("tests/test.zig"),
         .target = target,
         .optimize = optimize,
-        .main_pkg_path = .{.path = "."},
     });
+
+    const @"test" = b.createModule(.{.root_source_file = b.path("src/test.zig")});
+    unit_tests.root_module.addImport("test", @"test");
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 

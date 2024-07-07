@@ -40,8 +40,8 @@ pub const NodeType = enum (u8) {
   NdField,
   NdPubField,
   NdVarDecl,
-  NdPubVarDecl,
   NdConstVarDecl,
+  NdPubVarDecl,
   NdBlock,
   NdType,
   NdAlias,
@@ -90,7 +90,7 @@ fn cloneNodeItems(items: NodeItems, al: Allocator) NodeItems {
 fn allocate(comptime T: type, alloc: Allocator) *T {
   return alloc.create(T) catch |e| {
     std.debug.print("{}", .{e});
-    std.os.exit(1);
+    std.posix.exit(1);
   };
 }
 
@@ -438,7 +438,7 @@ pub const ParamNode = struct {
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
     var writer = u8w.writer();
     try util.addDepth(&writer, depth);
-    var decl = std.fmt.allocPrint(u8w.allocator(), "{s}: typ", .{self.name.lexeme()}) catch unreachable;
+    const decl = std.fmt.allocPrint(u8w.allocator(), "{s}: typ", .{self.name.lexeme()}) catch unreachable;
     _ = try writer.write(decl);
   }
 };
@@ -465,7 +465,7 @@ pub const FieldNode = struct {
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
     var writer = u8w.writer();
     try util.addDepth(&writer, depth);
-    var decl = std.fmt.allocPrint(u8w.allocator(), "{s}: typ", .{self.name.lexeme()}) catch unreachable;
+    const decl = std.fmt.allocPrint(u8w.allocator(), "{s}: typ", .{self.name.lexeme()}) catch unreachable;
     _ = try writer.write(decl);
   }
 };
@@ -492,7 +492,7 @@ pub const PubFieldNode = struct {
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
     var writer = u8w.writer();
     try util.addDepth(&writer, depth);
-    var decl = std.fmt.allocPrint(u8w.allocator(), "{s}: typ", .{self.name.lexeme()}) catch unreachable;
+    const decl = std.fmt.allocPrint(u8w.allocator(), "{s}: typ", .{self.name.lexeme()}) catch unreachable;
     _ = try writer.write(decl);
   }
 };
@@ -529,7 +529,7 @@ pub const VarDeclNode = struct {
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) anyerror!void {
     var writer = u8w.writer();
     try util.addDepth(&writer, depth);
-    var decl = std.fmt.allocPrint(u8w.allocator(), "let {s} = ", .{self.name.lexeme()}) catch unreachable;
+    const decl = std.fmt.allocPrint(u8w.allocator(), "let {s} = ", .{self.name.lexeme()}) catch unreachable;
     _ = try writer.write(decl);
     try Node.render(self.value, depth, u8w);
     _ = try writer.write("\n");
@@ -1115,7 +1115,7 @@ pub const CallNode = struct {
   pub fn transformVariadicArgs(self: *@This(), al: Allocator) void {
     var args = NodeListU.init();
     args.appendSlice(self.args[self.va_start..], al);
-    var node = Node.new(.{.NdList = .{.elems = args.items()}}, al);
+    const node = Node.new(.{.NdList = .{.elems = args.items()}}, al);
     if (self.args.len > 0) {
       self.args[self.va_start] = node;
       self.args = self.args[0..self.va_start + 1];
@@ -2739,7 +2739,7 @@ pub const Type = struct {
         final.append(fal, allocator);
       }
       if (final.len() > 1) {
-        typ = Type.newUnion().box(allocator);
+        typ = Type.newUnionBoxed(allocator);
         typ.union_().addAll(&final, allocator);
       } else {
         typ = final.itemAt(0);
@@ -2748,7 +2748,7 @@ pub const Type = struct {
         if (typ.isUnion()) {
           typ.union_().set(nil, allocator);
         } else {
-          var tmp = Type.newUnion().box(allocator);
+          var tmp = Type.newUnionBoxed(allocator);
           tmp.union_().addSlice(&[_]*Type{typ, nil}, allocator);
           typ = tmp;
         }
@@ -2919,7 +2919,7 @@ pub const Type = struct {
         return ret;
       },
       .Union => |*uni| {
-        var new = Union.init();
+        var new = Union.init(al);
         new.variants.ensureTotalCapacity(uni.variants.capacity(), al);
         for (uni.variants.values()) |ty| {
           new.set(ty._clone(map, al), al);
@@ -2990,11 +2990,11 @@ pub const Type = struct {
   }
 
   pub fn newBoolUnion(al: Allocator) *Self {
-    var uni = Union.init();
     const t1 = Type.newConstant(.TyBool, ks.TrueVar).box(al);
     const t2 = Type.newConstant(.TyBool, ks.FalseVar).box(al);
-    uni.addSlice(&[_]*Type{t1, t2}, al);
-    return Self.init(.{.Union = uni}).box(al);
+    var uni = Self.newUnionBoxed(al);
+    uni.union_().addSlice(&[_]*Type{t1, t2}, al);
+    return uni;
   }
 
   pub inline fn newConstant(kind: TypeKind, val: []const u8) Self {
@@ -3008,7 +3008,7 @@ pub const Type = struct {
     var nil = if (nil_ty) |nil| nil else Type.newConcrete(.TyNil).box(al);
     if (ty.isUnion()) {
       ty.union_().set(nil, al);
-      return compressTypes(&ty.union_().variants, ty, al);
+      return compressTypes(ty.union_().variants, ty, al);
     } else {
       var hs = TypeHashSet.init();
       hs.set(ty.typeid(), ty, al);
@@ -3037,8 +3037,12 @@ pub const Type = struct {
     return Self.init(.{.Variable = Variable.initValue(token)}).box(al);
   }
 
-  pub inline fn newUnion() Self {
-    return Self.init(.{.Union = Union.init()});
+  pub inline fn newUnion(al: Allocator) Self {
+    return Self.init(.{.Union = Union.init(al)});
+  }
+
+  pub inline fn newUnionBoxed(al: Allocator) *Self {
+    return Self.init(.{.Union = Union.init(al)}).box(al);
   }
 
   pub inline fn newTaggedUnion() Self {
@@ -4775,18 +4779,18 @@ pub const Constant = struct {
 
 pub const Union = struct {
   /// each discriminant of this union
-  variants: TypeHashSet,
+  variants: *TypeHashSet,
 
-  pub inline fn init() @This() {
-    return .{.variants = TypeHashSet.init()};
+  pub inline fn init(al: Allocator) @This() {
+    return .{.variants = util.box(TypeHashSet, TypeHashSet.init(), al)};
   }
 
   pub inline fn toType(self: Union, al: Allocator) Type {
-    return Type.compressTypes(@constCast(&self.variants), null, al).*;
+    return Type.compressTypes(self.variants, null, al).*;
   }
 
   pub inline fn toTypeBoxed(self: Union, al: Allocator) *Type {
-    return Type.compressTypes(@constCast(&self.variants), null, al);
+    return Type.compressTypes(self.variants, null, al);
   }
 
   pub inline fn isBoolUnionTy(self: *Union) bool {
@@ -4804,6 +4808,17 @@ pub const Union = struct {
       var uni = typ.union_();
       for (uni.variants.values()) |vr| {
         self.variants.set(vr.typeid(), vr, al);
+      }
+    }
+  }
+
+  pub fn setDirect(variants: *TypeHashSet, typ: *Type, al: Allocator) void {
+    if (!typ.isUnion()) {
+      variants.set(typ.typeid(), typ, al);
+    } else {
+      var uni = typ.union_();
+      for (uni.variants.values()) |vr| {
+        variants.set(vr.typeid(), vr, al);
       }
     }
   }

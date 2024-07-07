@@ -42,7 +42,7 @@ pub fn ArrayList(comptime T: type) type {
     pub inline fn append(self: *@This(), item: T) void {
       self.list.append(item) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
@@ -53,28 +53,28 @@ pub fn ArrayList(comptime T: type) type {
     pub inline fn prepend(self: *@This(), item: T) void {
       self.list.insert(0, item) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
     pub inline fn insert(self: *@This(), n: usize, item: T) void {
       self.list.insert(n, item) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
     pub inline fn replaceRange(self: *@This(), start: usize, length: usize, new: []const T) void {
       self.list.replaceRange(start, length, new) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
     pub inline fn appendSlice(self: *@This(), item: []const T) void {
       self.list.appendSlice(item) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
@@ -104,7 +104,7 @@ pub fn ArrayList(comptime T: type) type {
     pub fn extend(self: *@This(), src: *const @This()) void {
       self.list.appendSlice(src.list.items[0..src.list.items.len]) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
@@ -238,7 +238,7 @@ pub fn ArrayListUnmanaged(comptime T: type) type {
     pub inline fn append(self: *@This(), item: T, al: Allocator) void {
       self.list.append(al, item) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
@@ -249,28 +249,28 @@ pub fn ArrayListUnmanaged(comptime T: type) type {
     pub inline fn prepend(self: *@This(), item: T, al: Allocator) void {
       self.list.insert(al, 0, item) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
     pub inline fn insert(self: *@This(), n: usize, item: T, al: Allocator) void {
       self.list.insert(al, n, item) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
     pub inline fn replaceRange(self: *@This(), start: usize, length: usize, new: []const T, al: Allocator) void {
       self.list.replaceRange(al, start, length, new) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
     pub inline fn appendSlice(self: *@This(), item: []const T, al: Allocator) void {
       self.list.appendSlice(al, item) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
@@ -300,7 +300,7 @@ pub fn ArrayListUnmanaged(comptime T: type) type {
     pub fn extend(self: *@This(), src: *const @This(), al: Allocator) void {
       self.list.appendSlice(al, src.list.items[0..src.list.items.len]) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
@@ -419,7 +419,7 @@ pub fn ArrayHashMap(comptime K: type, comptime V: type) type {
     pub fn set(self: *@This(), key: K, val: V) void {
       self.map.put(key, val) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
@@ -502,7 +502,7 @@ pub fn HashMap(comptime K: type, comptime V: type, comptime Context: type, compt
     pub fn set(self: *@This(), key: K, val: V) void {
       self.map.put(key, val) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
@@ -581,7 +581,7 @@ pub fn HashMapUnmanaged(comptime K: type, comptime V: type, comptime Context: ty
     pub fn set(self: *@This(), key: K, val: V, al: Allocator) void {
       self.map.put(al, key, val) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 
@@ -652,7 +652,7 @@ pub fn ArrayHashMapUnmanaged(comptime K: type, comptime V: type) type {
     pub fn set(self: *@This(), key: K, val: V, al: Allocator) void {
       self.map.put(al, key, val) catch |e| {
         util.logger.debug("error: {}", .{e});
-        std.os.exit(1);
+        std.posix.exit(1);
       };
     }
 

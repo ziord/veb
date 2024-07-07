@@ -1,4 +1,4 @@
-const lib = @import("lib.zig");
+const lib = @import("test");
 const doErrorTest = lib.doErrorTest;
 
 test "binary operators" {

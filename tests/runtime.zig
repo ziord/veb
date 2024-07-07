@@ -1,7 +1,6 @@
 const std = @import("std");
-const lib = @import("lib.zig");
+const lib = @import("test");
 
-const value = lib.value;
 const doRuntimeTest = lib.doRuntimeTest;
 
 test "arithmetic ops" {

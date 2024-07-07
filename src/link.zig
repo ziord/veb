@@ -538,7 +538,7 @@ pub const TypeLinker = struct {
           }
         }
       }
-      var ret = try self.resolveTypeAbs(eqn, debug);
+      const ret = try self.resolveTypeAbs(eqn, debug);
       self.delTVar(gen.base);
       return ret;
     }
@@ -618,7 +618,7 @@ pub const TypeLinker = struct {
       // if this variable occurs in the pair stack before we push it, then it's cyclic/recursive
       // when we begin resolving a variable - we push it on the pair stack
       var eqn = try self.lookupType(typ, false, debug);
-      var alias_info = if (eqn.isRecursive()) eqn.recursive().base.alias else eqn.alias;
+      const alias_info = if (eqn.isRecursive()) eqn.recursive().base.alias else eqn.alias;
       if (alias_info) |alias| {
         if (alias.isGeneric()) {
           // check if this is a regular generic type called without instantiation, 
@@ -646,7 +646,7 @@ pub const TypeLinker = struct {
       var eqn = try self.lookupType(gen.base, true, debug);
       // specially handle recursive generic types
       if (eqn.isRecursive()) {
-        var rec = eqn.recursive();
+        const rec = eqn.recursive();
         var lhs = rec.base.alias.?;
         if (!lhs.isGeneric()) {
           return self.error_(debug, "non-generic type instantiated as generic", .{});
@@ -746,14 +746,11 @@ pub const TypeLinker = struct {
       };
     }
     if (typ.isUnion()) {
-      // TODO: need to figure out how to do this in-place
-      var uni = typ.union_();
-      const old_variants = uni.variants.values();
-      uni.variants = tir.TypeHashSet.init();
-      for (old_variants) |variant| {
-        uni.set(try self.resolveType(variant, debug, al), al);
+      var variants = tir.TypeHashSet.init();
+      for (typ.union_().variants.values()) |variant| {
+        tir.Union.setDirect(&variants, try self.resolveType(variant, debug, al), al);
       }
-      return Type.compressTypes(&uni.variants, typ, al);
+      return Type.compressTypes(&variants, typ, al);
     }
     if (typ.isTaggedUnion()) {
       var variants = &typ.taggedUnion().variants;
@@ -1026,7 +1023,7 @@ pub const TypeLinker = struct {
         try self.link(nd.right);
       },
       .NdTVar => |*nd| {
-        var typ = self.ctx.var_scope.lookup(nd.value());
+        const typ = self.ctx.var_scope.lookup(nd.value());
         if (nd.typ == null) {
           nd.typ = typ;
         }

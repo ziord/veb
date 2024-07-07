@@ -7,14 +7,12 @@ const VebAllocator = @import("../src/allocator.zig");
 const Allocator = std.mem.Allocator;
 const print = util.print;
 
-pub const std_options = struct {
-  pub const log_level = if (util.getMode() == .Debug) .debug else .info;
-};
+pub const std_options = .{.log_level = if (util.getMode() == .Debug) .debug else .info};
 
 const menu =
 " veb v" ++ util.getVersion() ++ "\n" ++
 \\ 
-\\ Usage: veb <command>
+\\ Usage: veb [command] [options]
 \\
 \\ Commands:
 \\   new       Create a new project

@@ -69,7 +69,7 @@ inline fn getArg(vm: *VM, pos: u32) Value {
 /// ******************************
 
 /// assert(cond: bool, msg: str): void | noreturn
-pub fn fnAssert(vm: *VM, argc: u32, args: u32) Value {
+pub fn fnAssert(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   if (vl.valueFalsy(getArg(vm, args))) {
     var msg = vl.asString(vl.valueToString(getArg(vm, args + 1), vm));
@@ -80,24 +80,24 @@ pub fn fnAssert(vm: *VM, argc: u32, args: u32) Value {
 }
 
 /// exit(code: num): noreturn
-pub fn fnExit(vm: *VM, argc: u32, args: u32) Value {
+pub fn fnExit(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const code = vl.asIntNumber(u8, getArg(vm, args));
   vm.deinit();
-  std.os.exit(code);
+  std.posix.exit(code);
 }
 
 /// panic{T}(msg: T): noreturn
-pub fn fnPanic(vm: *VM, argc: u32, args: u32) Value {
+pub fn fnPanic(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var msg = vl.asString(vl.valueToString(getArg(vm, args), vm));
   vm.panicUnwindError("panicked at: '{s}'", .{msg.str[0..msg.len]});
   vm.deinit();
-  std.os.exit(1);
+  std.posix.exit(1);
 }
 
 /// print(args*: any): void
-pub fn fnPrint(vm: *VM, argc: u32, args: u32) Value {
+pub fn fnPrint(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var tup = vl.asList(getArg(vm, args));
   for (tup.items[0..tup.len], 1..) |val, i| {
@@ -110,13 +110,13 @@ pub fn fnPrint(vm: *VM, argc: u32, args: u32) Value {
 }
 
 /// @string(val: any): str
-pub fn fnString(vm: *VM, argc: u32, args: u32) Value {
+pub fn fnString(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.valueToString(getArg(vm, args), vm);
 }
 
 /// println(args*: any): void
-pub fn fnPrintln(vm: *VM, argc: u32, args: u32) Value {
+pub fn fnPrintln(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var tup = vl.asList(getArg(vm, args));
   for (tup.items[0..tup.len], 1..) |val, i| {
@@ -136,14 +136,14 @@ pub fn fnPrintln(vm: *VM, argc: u32, args: u32) Value {
 //******** str ********//
 
 // len(): num
-fn stringLen(vm: *VM, argc: u32, args: u32) Value {
+fn stringLen(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args));
   return vl.numberVal(@floatFromInt(str.len));
 }
 
 // concat(other: str): str
-fn stringConcat(vm: *VM, argc: u32, args: u32) Value {
+fn stringConcat(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args));
   const conc = str.concat(vl.asString(getArg(vm, args + 1)), vm.gc.allocator.getAllocator());
@@ -170,21 +170,21 @@ fn createStringClass(vm: *VM) *vl.ObjClass {
 //******** list ********//
 
 // append(item: T): void
-fn listAppend(vm: *VM, argc: u32, args: u32) Value {
+fn listAppend(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   vl.asList(getArg(vm, args)).append(vm, getArg(vm, args + 1));
   return NOTHING_VAL;
 }
 
 // len(): num
-fn listLen(vm: *VM, argc: u32, args: u32) Value {
+fn listLen(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const list = vl.asList(getArg(vm, args));
   return vl.numberVal(@floatFromInt(list.len));
 }
 
 // pop(): Maybe{T}
-fn listPop(vm: *VM, argc: u32, args: u32) Value {
+fn listPop(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var list = vl.asList(getArg(vm, args));
   if (list.len == 0) {
@@ -196,7 +196,7 @@ fn listPop(vm: *VM, argc: u32, args: u32) Value {
 }
 
 // get(index: num): Maybe{T}
-fn listGet(vm: *VM, argc: u32, args: u32) Value {
+fn listGet(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const list = vl.asList(getArg(vm, args));
   if (list.len == 0) return vl.noneVal();
@@ -207,7 +207,7 @@ fn listGet(vm: *VM, argc: u32, args: u32) Value {
 }
 
 // slice(start: num, end: num): List{T}
-fn listSlice(vm: *VM, argc: u32, args: u32) Value {
+fn listSlice(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const list = vl.asList(getArg(vm, args));
   if (list.len == 0) return vl.noneVal();
@@ -244,7 +244,7 @@ fn createListClass(vm: *VM) *vl.ObjClass {
 //******** tuple ********//
 
 // len(): num
-fn tupleLen(vm: *VM, argc: u32, args: u32) Value {
+fn tupleLen(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const tuple = vl.asTuple(getArg(vm, args));
   return vl.numberVal(@floatFromInt(tuple.len));
@@ -269,14 +269,14 @@ fn createTupleClass(vm: *VM) *vl.ObjClass {
 //******** map ********//
 
 // len(): num
-fn mapLen(vm: *VM, argc: u32, args: u32) Value {
+fn mapLen(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const map = vl.asMap(getArg(vm, args));
   return vl.numberVal(@floatFromInt(map.meta.len));
 }
 
 // set(key: K, value: V): bool
-fn mapSet(vm: *VM, argc: u32, args: u32) Value {
+fn mapSet(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var map = vl.asMap(getArg(vm, args));
   const res = map.meta.set(getArg(vm, args + 1), getArg(vm, args + 2), vm);
@@ -284,7 +284,7 @@ fn mapSet(vm: *VM, argc: u32, args: u32) Value {
 }
 
 // get(key: K): Maybe{V}
-fn mapGet(vm: *VM, argc: u32, args: u32) Value {
+fn mapGet(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   if (vl.asMap(getArg(vm, args)).meta.get(getArg(vm, args + 1), vm)) |res| {
     return vl.justVal(vm, res);
@@ -293,33 +293,33 @@ fn mapGet(vm: *VM, argc: u32, args: u32) Value {
 }
 
 // delete(key: K): bool
-fn mapDelete(vm: *VM, argc: u32, args: u32) Value {
+fn mapDelete(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const val = vl.asMap(getArg(vm, args)).meta.delete(getArg(vm, args + 1), vm);
   return vl.boolVal(val);
 }
 
 // remove(key: K): bool
-fn mapRemove(vm: *VM, argc: u32, args: u32) Value {
+fn mapRemove(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const val = vl.asMap(getArg(vm, args)).meta.remove(getArg(vm, args + 1), vm);
   return vl.boolVal(val);
 }
 
 // keys(): List{K}
-fn mapKeys(vm: *VM, argc: u32, args: u32) Value {
+fn mapKeys(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.asMap(getArg(vm, args)).meta.keys(vm);
 }
 
 // values(): List{V}
-fn mapValues(vm: *VM, argc: u32, args: u32) Value {
+fn mapValues(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.asMap(getArg(vm, args)).meta.values(vm);
 }
 
 // items(): List{Tuple{K, V}}
-fn mapItems(vm: *VM, argc: u32, args: u32) Value {
+fn mapItems(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var map = vl.asMap(getArg(vm, args));
   var list = vl.createList(vm, map.meta.len);
@@ -335,7 +335,7 @@ fn mapItems(vm: *VM, argc: u32, args: u32) Value {
 }
 
 // entries(): List{MapEntry{K, V}} -> List{Key(K) | Value(V)}
-fn mapEntries(vm: *VM, argc: u32, args: u32) Value {
+fn mapEntries(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var map = vl.asMap(getArg(vm, args));
   var list = vl.createList(vm, map.meta.len << 1);

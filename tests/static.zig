@@ -1,4 +1,4 @@
-const lib = @import("lib.zig");
+const lib = @import("test");
 const doStaticTest = lib.doStaticTest;
 const doParsingTest = lib.doParsingTest;
 
@@ -19,7 +19,7 @@ test "recursive types" {
 }
 
 test "functions.<recursive>" {
-  var src =
+  const src =
   \\ # mutually recursive
   \\ def mutA{U}(x: U)
   \\  return mutB(x)
@@ -66,7 +66,7 @@ test "functions.<recursive>" {
 }
 
 test "functions.<never>" {
-  var src =
+  const src =
   \\ def foo(): never
   \\  foo()
   \\ end
@@ -76,7 +76,7 @@ test "functions.<never>" {
 }
 
 test "functions.<noreturn>" {
-  var src =
+  const src =
   \\ def foo()
   \\  @exit(1)
   \\ end
@@ -86,7 +86,7 @@ test "functions.<noreturn>" {
 }
 
 test "functions.<void>" {
-  var src =
+  const src =
   \\ def foo()
   \\  print('yay')
   \\ end
@@ -96,7 +96,7 @@ test "functions.<void>" {
 }
 
 test "functions-12-user-defined-never" {
-  var src =
+  const src =
   \\ alias never = never
   \\ def rec(): never
   \\  return rec()
@@ -127,7 +127,7 @@ test "functions-12-user-defined-never" {
 }
 
 test "simple-classes-1" {
-  var src =
+  const src =
   \\ class Fox
   \\    pub x: num
   \\    pub u = 12
@@ -151,7 +151,7 @@ test "simple-classes-1" {
 }
 
 test "generic-classes-1" {
-  var src =
+  const src =
   \\ let j = [1, 2, 3]
   \\ let p = (j.pop().?) + 4
   \\ j.append(4)
@@ -169,7 +169,7 @@ test "generic-classes-1" {
 }
 
 test "generic-classes-2" {
-  var src =
+  const src =
   \\ class Fox{T}
   \\    pub x: List{T}
   \\    def init(x*: T): void

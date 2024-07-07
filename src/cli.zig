@@ -1,14 +1,15 @@
-const VebAllocator = @import("../src/allocator.zig");
-const std = @import("std");
-const parse = @import("parse.zig");
-const check = @import("check.zig");
-const util = @import("util.zig");
-const ks = @import("constants.zig");
-const prelude = @import("prelude.zig");
-const value = @import("value.zig");
-const compile = @import("compile.zig");
-const debug = @import("debug.zig");
-const vm = @import("vm.zig");
+pub const std = @import("std");
+pub const parse = @import("parse.zig");
+pub const check = @import("check.zig");
+pub const util = @import("util.zig");
+pub const ks = @import("constants.zig");
+pub const prelude = @import("prelude.zig");
+pub const value = @import("value.zig");
+pub const compile = @import("compile.zig");
+pub const debug = @import("debug.zig");
+pub const vm = @import("vm.zig");
+pub const diagnostics = @import("diagnostics.zig");
+pub const VebAllocator = @import("allocator.zig");
 
 const Allocator = std.mem.Allocator;
 const print = util.print;
@@ -16,7 +17,7 @@ const sep_str = std.fs.path.sep_str;
 
 pub fn fatalError(comptime fmt: []const u8, args: anytype) noreturn {
   print(fmt ++ "\n", args);
-  std.os.exit(1);
+  std.posix.exit(1);
 }
 
 pub fn getCWD(al: Allocator) []const u8 {
@@ -83,18 +84,18 @@ pub fn createNewProject(name: []const u8, al: Allocator) !void {
 pub fn loadCore(path: []const u8, al: Allocator) !void {
   var dir = try std.fs.openDirAbsolute(path, .{});
   defer dir.close();
-  var core_dir = try dir.openIterableDir("core" ++ sep_str ++ ks.SrcDir, .{});
+  var core_dir = try dir.openDir("core" ++ sep_str ++ ks.SrcDir, .{.iterate = true});
   var itr = core_dir.iterate();
   var size = @as(usize, 0);
   while (try itr.next()) |file| {
-    const f = try core_dir.dir.openFile(file.name, .{});
+    const f = try core_dir.openFile(file.name, .{});
     size += try f.getEndPos();
   }
   var buf = util.allocSlice(u8, size + 1, al);
   var st = @as(usize, 0);
   itr = core_dir.iterate();
   while (try itr.next()) |file| {
-    const content = try core_dir.dir.readFile(file.name, buf[st..]);
+    const content = try core_dir.readFile(file.name, buf[st..]);
     st += content.len;
   }
   buf[st] = 0;
@@ -110,7 +111,7 @@ pub fn typecheck(filename: []const u8, lib_path: []const u8, cwd: ?[]const u8, c
   try loadCore(lib_path, al);
   var src = try util.readFile(filename, al);
   var ps = parse.Parser.init(&src, &filename, cwd orelse getCWD(al), .User, al);
-  var ir = try ps.parse(true);
+  const ir = try ps.parse(true);
   var tych = check.TypeChecker.init(al, &ps.diag, ps.namegen);
   try tych.typecheck(ir, true);
 }
@@ -120,7 +121,7 @@ pub fn run(filename: []const u8, lib_path: []const u8, cwd: ?[]const u8, cna: *V
   try loadCore(lib_path, al);
   var src = try util.readFile(filename, al);
   var ps = parse.Parser.init(&src, &filename, cwd orelse getCWD(al), .User, al);
-  var ir = try ps.parse(true);
+  const ir = try ps.parse(true);
   var tych = check.TypeChecker.init(al, &ps.diag, ps.namegen);
   try tych.typecheck(ir, true);
   var cpu = vm.VM.init(cna);

@@ -81,7 +81,7 @@ pub const Constructor = struct {
   }
 
   pub fn newLiteralCons(node: *Node, al: Allocator) @This() {
-    var name = switch (node.*) {
+    const name = switch (node.*) {
       .NdBool => |*lit| lit.token.lexeme(),
       .NdString => |*lit| lit.token.lexeme(),
       .NdNumber => |*lit| lit.lexeme(al),
@@ -380,7 +380,7 @@ pub const Body = struct {
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
-    var block = self.node.block();
+    const block = self.node.block();
     const len = block.nodes.len;
     var writer = u8w.writer();
     try addDepth(&writer, depth + 1);
@@ -721,7 +721,7 @@ pub const MatchCompiler = struct {
       pub fn hash(this: @This(), s: Column) u64 {
         _ = this;
         var buf: [256]u8 = undefined;
-        var str = std.fmt.bufPrint(&buf, "{s}{}", .{s.name, s.column}) catch unreachable;
+        const str = std.fmt.bufPrint(&buf, "{s}{}", .{s.name, s.column}) catch unreachable;
         return std.hash_map.hashString(str);
       }
       pub fn eql(this: @This(), a: Column, b: Column) bool {
@@ -938,8 +938,8 @@ pub const MatchCompiler = struct {
 
   fn genFreshVarToken(self: *Self, tok: ?Token, start: []const u8) Token {
     std.debug.assert(start.len != 0);
-    var slice = if (start[0] == ks.GeneratedVarMarker) start[1..] else start;
-    var id = self.namegen.generate("${s}", .{slice});
+    const slice = if (start[0] == ks.GeneratedVarMarker) start[1..] else start;
+    const id = self.namegen.generate("${s}", .{slice});
     return if (tok) |token| token.tkFrom(id, .TkIdent) else Token.getDefaultToken();
   }
 
@@ -966,7 +966,7 @@ pub const MatchCompiler = struct {
 
   inline fn hasRedunMarker(case: *Case) bool {
     if (case.body.node.isBlock()) {
-      var block = case.body.node.block();
+      const block = case.body.node.block();
       for (block.nodes) |node| {
         if (node.isRedunMarker()) {
           return true;
@@ -1024,7 +1024,7 @@ pub const MatchCompiler = struct {
     // remove this case, since it's being expanded and will not be referenced after here
     self.removeFailure(case);
     var rel = _rel.?;
-    var cons = &rel.pattern.variant.cons;
+    const cons = &rel.pattern.variant.cons;
     var cases = CaseList.initCapacity(cons.args.len, self.allocator);
     for (cons.args, self.case_id..) |ptn, id| {
       var new_mrel = MultiRelation.initCapacity(cons.args.len, self.allocator);
@@ -1107,7 +1107,7 @@ pub const MatchCompiler = struct {
     var args = Patterns.init(self.allocator);
     if (cons.tag != .Literal) {
       for (cons.args) |arg| {
-        var id = self.genFreshVarNode(ident.token, ident.token.lexeme());
+        const id = self.genFreshVarNode(ident.token, ident.token.lexeme());
         args.append(self.boxPattern(Pattern.init(Variable.init(id).toVariant(self.allocator), arg.token, arg.alat)));
       }
     }
@@ -1340,7 +1340,7 @@ pub const MatchCompiler = struct {
       return util.box(Result, .{.fail = .{}}, self.allocator);
     }
     // 2. Select one of the tests a is C(P1, . . . , Pn) in the first clause using some heuristic
-    var bst = self.selectBestTest(&cases);
+    const bst = self.selectBestTest(&cases);
     if (bst == null) {
       var case = cases.itemAt(0);
       self.removeFailure(case);
@@ -1393,7 +1393,7 @@ pub const MatchCompiler = struct {
       node.render(0, &self.u8w) catch {};
       logger.debug("match ast dump:\n{s}\n", .{self.u8w.items()});
     }
-    var m_expr = node.expr;
+    const m_expr = node.expr;
     self.convertPtnToRelationPtn(m_expr, node.cases);
     const tree = try self.compileCase(m_expr, node.cases);
     if (util.inDebugMode()) {
@@ -1565,7 +1565,7 @@ pub const DecisionTreeTransformer = struct {
     var if_branch = swch.branches[0];
     var els_branch = swch.branches[1];
     const id = swch.occ.clone(self.allocator);
-    var cons = &if_branch.lhs.cons;
+    const cons = &if_branch.lhs.cons;
     const from_map = cons.from_map;
     var nodes = tir.NodeListU.init();
     if (!from_map) {
@@ -1648,7 +1648,7 @@ pub const DecisionTreeTransformer = struct {
     var if_branch = swch.branches[0];
     var els_branch = swch.branches[1];
     const id = swch.occ.clone(self.allocator);
-    var cons = &if_branch.lhs.cons;
+    const cons = &if_branch.lhs.cons;
     var nodes = tir.NodeListU.init();
     const then = self.newBlock();
     nodes.ensureTotalCapacity(cons.args.len, self.allocator);

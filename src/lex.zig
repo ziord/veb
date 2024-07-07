@@ -5,7 +5,7 @@ const VebAllocator = @import("allocator.zig");
 const util = @import("util.zig");
 pub const ks = @import("constants.zig");
 
-pub const Keywords = std.ComptimeStringMap(TokenType, .{
+pub const Keywords = std.StaticStringMap(TokenType).initComptime(.{
   .{"if", .TkIf},
   .{"in", .TkIn},
   .{"else", .TkElse},

@@ -92,7 +92,7 @@ pub const Desugar = struct {
   }
 
   pub inline fn newCallNode(self: *Desugar, expr: *Node, cargs: []const *Node) *Node {
-    var args = util.allocSlice(*Node, cargs.len, self.al);
+    const args = util.allocSlice(*Node, cargs.len, self.al);
     @memcpy(args, cargs);
     return self.newNode(.{.NdBasicCall = tir.BasicCallNode.init(expr, args)});
   }
@@ -159,7 +159,7 @@ pub const Desugar = struct {
 
   fn desMatchStmt(self: *Desugar, node: *tir.MatchNode) void {
     var nd = node.cloneNode(self.al);
-    var tree = self.mc.compile(&nd.NdMatch) catch return;
+    const tree = self.mc.compile(&nd.NdMatch) catch return;
     const lnode = self.mc.lowerDecisionTree(tree, node.expr.getToken()) catch return;
     if (util.inDebugMode()) {
       Node.render(lnode, 0, &self.u8w) catch {};

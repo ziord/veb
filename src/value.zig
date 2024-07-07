@@ -42,7 +42,7 @@ pub const Code = extern struct {
   fn checkOffset(offset: usize, max: u32, err_msg: []const u8) void {
     if (offset > max) {
       std.debug.print("{s}", .{err_msg});
-      std.os.exit(1);
+      std.posix.exit(1);
     }
   }
 
@@ -221,7 +221,7 @@ pub const FALSE_VAL = @as(Value, (QNAN | TAG_FALSE));
 pub const TRUE_VAL = @as(Value, (QNAN | TAG_TRUE));
 pub const NOTHING_VAL = @as(Value, (QNAN | TAG_NOTHING));
 
-pub const NativeFn = *const fn (*VM, argc: u32, args: u32) Value;
+pub const NativeFn = *const fn (*VM, argc: u32, args: u32) callconv(.C) Value;
 pub const StringHashMap = Map(*const ObjString, Value);
 pub const ValueHashMap = Map(Value, Value);
 
@@ -261,7 +261,7 @@ pub const ObjString = extern struct {
   }
 
   pub inline fn concat(this: *const @This(), other: *const @This(), al: std.mem.Allocator) []const u8 {
-    var new = util.allocSlice(u8, this.len + other.len, al);
+    const new = util.allocSlice(u8, this.len + other.len, al);
     @memcpy(new.ptr, this.string());
     @memcpy(new.ptr + this.len, other.string());
     return new;
@@ -349,7 +349,7 @@ pub const ObjMethod = extern struct {
 pub const ObjNativeFn = extern struct {
   obj: Obj,
   arity: u32,
-  fun: NativeFn,
+  fun:  NativeFn,
   name: *const ObjString,
 
   pub inline fn getName(self: *const ObjNativeFn) []const u8 {

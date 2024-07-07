@@ -84,7 +84,7 @@ pub fn createNewProject(name: []const u8, al: Allocator) !void {
 pub fn loadCore(path: []const u8, al: Allocator) !void {
   var dir = try std.fs.openDirAbsolute(path, .{});
   defer dir.close();
-  var core_dir = try dir.openDir("core" ++ sep_str ++ ks.SrcDir, .{.iterate = true});
+  var core_dir = try dir.openDir("core", .{.iterate = true});
   var itr = core_dir.iterate();
   var size = @as(usize, 0);
   while (try itr.next()) |file| {

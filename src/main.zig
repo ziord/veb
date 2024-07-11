@@ -59,11 +59,11 @@ fn cmdBuild() void {
 fn cmdCheck(file: ?[]const u8, al: Allocator, cna: *VebAllocator) !void {
   const lib_path = try cli.findLibPath(al);
   if (file) |filename| {
-    try cli.typecheck(filename, lib_path, null, cna);
+    cli.typecheck(filename, lib_path, null, cna) catch return;
   } else {
     const cwd = cli.getCWD(al);
     const filename = try cli.findMainPath(al, cwd);
-    try cli.typecheck(filename, lib_path, cwd, cna);
+    cli.typecheck(filename, lib_path, cwd, cna) catch return;
   }
   print("All Ok.\n", .{});
 }
@@ -71,11 +71,11 @@ fn cmdCheck(file: ?[]const u8, al: Allocator, cna: *VebAllocator) !void {
 fn cmdRun(file: ?[]const u8, al: Allocator, cna: *VebAllocator) !void {
   const lib_path = try cli.findLibPath(al);
   if (file) |filename| {
-    try cli.run(filename, lib_path, null, cna);
+    cli.run(filename, lib_path, null, cna) catch {};
   } else {
     const cwd = cli.getCWD(al);
     const filename = try cli.findMainPath(al, cwd);
-    try cli.run(filename, lib_path, cwd, cna);
+    cli.run(filename, lib_path, cwd, cna) catch {};
   }
 }
 

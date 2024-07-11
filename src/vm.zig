@@ -32,6 +32,7 @@ pub const VM = struct {
   mem: Mem,
   gc: GC,
   vsw: ValueStringWriter,
+  temp_roots: vl.Vec(*vl.Obj),
   has_error: bool = false,
 
   const Self = @This();
@@ -70,7 +71,7 @@ pub const VM = struct {
   };
 
   const CachedNames = struct {
-    init: *const vl.ObjString,
+    init: *vl.ObjString,
 
     pub fn new() @This() {
       return .{.init = undefined};
@@ -82,22 +83,29 @@ pub const VM = struct {
     var vm = Self {
       .fiber = undefined,
       .mem = Mem.init(al),
-      .gc = GC.init(allocator),
+      .gc = GC.init(allocator, undefined),
       .strings = StringHashMap.init(),
       .tags = StringHashMap.init(),
       .globals = StringHashMap.init(),
       .objects = null,
       .classes = BuiltinCls.init(),
       .names = CachedNames.new(),
+      .temp_roots = vl.Vec(*vl.Obj).init(),
       .vsw = ValueStringWriter.init(),
     };
+    vm.gc.skip_collection = true;
     native.addBuiltins(&vm);
     native.addNames(&vm);
     return vm;
   }
 
+  pub inline fn initGC(self: *Self) void {
+    self.gc.vm = self;
+  }
+
   pub fn boot(self: *Self, fun: *ObjFn) void {
     self.fiber = vl.createFiber(self, vl.createClosure(self, fun), .Root, null);
+    self.gc.skip_collection = false;
   }
 
   pub fn shutdown(self: *Self) void {
@@ -114,9 +122,10 @@ pub const VM = struct {
     self.strings.free(self);
     self.tags.free(self);
     self.globals.free(self);
+    self.temp_roots.deinit(self);
+    self.vsw.deinit(self);
     self.gc.deinit();
     self.mem.deinit();
-    self.vsw.deinit(self);
   }
 
   inline fn readWord(self: *Self, fp: *CallFrame) Inst {
@@ -182,6 +191,7 @@ pub const VM = struct {
       self.fiber.stack_cap,
       cap
     ).ptr;
+    @memset(self.fiber.stack[self.fiber.stack_cap..cap], vl.NOTHING_VAL);
     self.fiber.stack_cap = cap;
     // reset the stack pointer for each call frame.
     if (self.fiber.stack != old_stack) {
@@ -463,6 +473,7 @@ pub const VM = struct {
           var bx: u32 = undefined;
           self.read2Args(code, &rx, &bx);
           var clo = vl.createClosure(self, vl.asFn(self.RK(bx, fp)));
+          @setRuntimeSafety(false);
           fp.stack[rx] = vl.objVal(clo);
           var i: usize = 0;
           while (i < clo.fun.envlen) : (i += 1) {
@@ -1031,6 +1042,7 @@ pub const VM = struct {
           var rk1: u32 = undefined;
           var rk2: u32 = undefined;
           self.read3Args(code, &rx, &rk1, &rk2);
+          @setRuntimeSafety(false);
           var map = vl.asMap(fp.stack[rx]);
           _ = map.meta.set(self.RK(rk1, fp), self.RK(rk2, fp), self);
           if (self.has_error) return error.RuntimeError;

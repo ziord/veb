@@ -1389,14 +1389,14 @@ pub const MatchCompiler = struct {
     }
     self.case_id = @intCast(node.cases.len);
     // we match on m_expr
-    if (util.inDebugMode()) {
+    if (comptime util.inDebugMode()) {
       node.render(0, &self.u8w) catch {};
       logger.debug("match ast dump:\n{s}\n", .{self.u8w.items()});
     }
     const m_expr = node.expr;
     self.convertPtnToRelationPtn(m_expr, node.cases);
     const tree = try self.compileCase(m_expr, node.cases);
-    if (util.inDebugMode()) {
+    if (comptime util.inDebugMode()) {
       tree.render(0, &self.u8w) catch {};
       logger.debug("decision tree dump:\n{s}\n", .{self.u8w.items()});
     }

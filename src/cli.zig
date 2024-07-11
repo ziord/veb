@@ -126,10 +126,11 @@ pub fn run(filename: []const u8, lib_path: []const u8, cwd: ?[]const u8, cna: *V
   try tych.typecheck(ir, true);
   var cpu = vm.VM.init(cna);
   defer cpu.shutdown();
+  cpu.initGC();
   var fun = value.createScriptFn(&cpu, 0);
   var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, cna, tych.prelude, null, null);
   try compiler.compile(ir);
-  if (util.inDebugMode()) debug.Disassembler.disCode(&fun.code, filename);
+  if (comptime util.inDebugMode()) debug.Disassembler.disCode(&fun.code, filename);
   cna.deinitArena();
   cpu.boot(fun);
   try cpu.run();

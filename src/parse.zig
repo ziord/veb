@@ -2594,7 +2594,7 @@ pub const Parser = struct {
     // we need to update this as parse() assigns the main filepath to the imported program
     node.program.NdProgram.filepath = filename;
     self.imports.set(filename, .{.node = node.program, .src = src});
-    if (util.inDebugMode()) {
+    if (comptime util.inDebugMode()) {
       var u8w = util.U8Writer.init(ps.allocator);
       node.program.render(0, &u8w) catch unreachable;
       logger.debug("Import ({s}):\n{s}\n", .{filename, u8w.view()});

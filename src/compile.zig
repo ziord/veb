@@ -1546,7 +1546,7 @@ pub const Compiler = struct {
         self.fun.code.write2ArgsInst(inst, reg, info.pos, self.lastLine(), self.vm);
       }
     }
-    if (util.inDebugMode()) {
+    if (comptime util.inDebugMode()) {
       std.debug.print("\n", .{});
       Disassembler.disCode(&new_fn.code, new_fn.getName());
     }
@@ -1750,7 +1750,7 @@ pub const Compiler = struct {
 
   fn cVoidRet(self: *Self, line: usize) u32 {
     const dst = 0;
-    const memidx = self.fun.code.writeValue(value.NOTHING_VAL, self.vm);
+    const memidx = self.fun.code.writeValue(value.VOID_VAL, self.vm);
     self.fun.code.write2ArgsInst(.Load, dst, memidx, @intCast(line), self.vm);
     self.fun.code.write2ArgsInst(.Ret, dst, 0, line, self.vm);
     return dst;
@@ -1830,7 +1830,7 @@ pub const Compiler = struct {
     const call = value.objVal(value.createClosure(self.vm, new_fn));
     self.finishModule(path, call);
     try self.cModuleExec(compiler, node, new_fn, call);
-    if (util.inDebugMode()) {
+    if (comptime util.inDebugMode()) {
       std.debug.print("\n", .{});
       Disassembler.disCode(&new_fn.code, new_fn.getName());
     }
@@ -1986,6 +1986,7 @@ pub const Compiler = struct {
     self.scrampleGenericMethods();
     self.setupEntryModule(node);
     try self.compileModule(node);
+    self.fun.name = self.fun.module.name;
     modules.clearAndFree(self.alloc());
   }
 };

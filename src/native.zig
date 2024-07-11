@@ -6,7 +6,7 @@ const VM = @import("vm.zig").VM;
 
 const Value = vl.Value;
 const NativeFn = vl.NativeFn;
-const NOTHING_VAL = vl.NOTHING_VAL;
+const VOID_VAL = vl.VOID_VAL;
 const VarArgC = 256;
 
 pub const NativeFns = [_][]const u8 {
@@ -56,7 +56,7 @@ inline fn addNativeClass(vm: *VM, cls: *vl.ObjClass) void {
   _ = vm.globals.set(cls.name, vl.objVal(cls), vm);
 }
 
-inline fn newString(vm: *VM, chars: []const u8) *const vl.ObjString {
+inline fn newString(vm: *VM, chars: []const u8) *vl.ObjString {
   return vl.createString(vm, &vm.strings, chars, false);
 }
 
@@ -76,7 +76,7 @@ pub fn fnAssert(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
     vm.panicUnwindError("AssertionError: '{s}'", .{msg.str[0..msg.len]});
     return vl.FALSE_VAL;
   }
-  return NOTHING_VAL;
+  return VOID_VAL;
 }
 
 /// exit(code: num): noreturn
@@ -106,7 +106,7 @@ pub fn fnPrint(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
       util.print(" ", .{});
     }
   }
-  return NOTHING_VAL;
+  return VOID_VAL;
 }
 
 /// @string(val: any): str
@@ -126,7 +126,7 @@ pub fn fnPrintln(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
     }
   }
   util.print("\n", .{});
-  return NOTHING_VAL;
+  return VOID_VAL;
 }
 
 /// ****************************
@@ -146,7 +146,7 @@ fn stringLen(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
 fn stringConcat(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args));
-  const conc = str.concat(vl.asString(getArg(vm, args + 1)), vm.gc.allocator.getAllocator());
+  const conc = str.concat(vl.asString(getArg(vm, args + 1)), vm.gc.allocator);
   return vl.objVal(vl.createString(vm, &vm.strings, conc, true));
 }
 
@@ -173,7 +173,7 @@ fn createStringClass(vm: *VM) *vl.ObjClass {
 fn listAppend(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   vl.asList(getArg(vm, args)).append(vm, getArg(vm, args + 1));
-  return NOTHING_VAL;
+  return VOID_VAL;
 }
 
 // len(): num
@@ -323,6 +323,8 @@ fn mapItems(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var map = vl.asMap(getArg(vm, args));
   var list = vl.createList(vm, map.meta.len);
+  const root_len = vl.saveTempRoot(vm, &[_]*vl.Obj{&list.obj});
+  defer vl.delTempRoot(vm, root_len);
   var valc: usize = 0;
   for (map.meta.items[0..map.meta.len]) |item| {
     var tuple = vl.createTuple(vm, 2);
@@ -339,6 +341,8 @@ fn mapEntries(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var map = vl.asMap(getArg(vm, args));
   var list = vl.createList(vm, map.meta.len << 1);
+  const root_len = vl.saveTempRoot(vm, &[_]*vl.Obj{&list.obj});
+  defer vl.delTempRoot(vm, root_len);
   var kvc: usize = 0;
   for (map.meta.items[0..map.meta.len]) |item| {
     list.items[kvc] = vl.structVal(vm, item.key, ks.KeyVar);

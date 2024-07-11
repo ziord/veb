@@ -188,6 +188,10 @@ pub fn ArrayList(comptime T: type) type {
       return self.list.writer();
     }
 
+    pub fn deinit(self: *@This()) void {
+      self.list.deinit();
+    }
+
     pub inline fn clearRetainingCapacity(self: *@This()) void {
       self.list.clearRetainingCapacity();
     }
@@ -394,6 +398,10 @@ pub fn ArrayListUnmanaged(comptime T: type) type {
 
     pub inline fn writer(self: *@This()) std.ArrayList(T).Writer {
       return self.list.writer();
+    }
+
+    pub fn deinit(self: *@This(), al: Allocator) void {
+      self.list.deinit(al);
     }
 
     pub inline fn clearRetainingCapacity(self: *@This()) void {

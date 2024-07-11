@@ -121,7 +121,7 @@ pub inline fn getMode() std.builtin.Mode {
 }
 
 pub inline fn inDebugMode() bool {
-  return builtin.mode == .Debug;
+  return comptime (builtin.mode == .Debug);
 }
 
 pub inline fn getVersion() []const u8 {

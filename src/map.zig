@@ -4,7 +4,7 @@ const util = @import("util.zig");
 const VM = @import("vm.zig").VM;
 const vl = @import("value.zig");
 
-const StringType = *const vl.ObjString;
+const StringType = *vl.ObjString;
 const LOAD_FACTOR: f64 = @as(f64, vl.LOAD_FACTOR) / @as(f64, 100);
 
 pub fn Map(comptime K: type, comptime V: type) type {
@@ -50,7 +50,7 @@ pub fn Map(comptime K: type, comptime V: type) type {
     }
 
     pub const StringContext = struct {
-      const CtxK = *const vl.ObjString;
+      const CtxK = *vl.ObjString;
       pub fn hash(self: @This(), k: CtxK, vm: *VM) u64 {
         _ = vm;
         _ = self;
@@ -164,8 +164,9 @@ pub fn Map(comptime K: type, comptime V: type) type {
       }
       const hash = ctx.hash(key, vm);
       const slot = self.findEntry(self.entries, self.entries_cap, key, hash);
-      const is_new_key = self.isFreeEntry(self.entries[slot]);
-      if (is_new_key) {
+      const entry = self.entries[slot];
+      const is_new_key = self.isFreeEntry(entry);
+      if (is_new_key or self.isTombEntry(entry)) {
         self.items[self.len] = .{.hash = hash, .key = key, .value = value};
         self.entries[slot] = i32_(self.len);
         self.len += 1;
@@ -222,8 +223,8 @@ pub fn Map(comptime K: type, comptime V: type) type {
       if (self.isUsedEntry(self.entries[slot])) {
         // swap item at slot with item at last
         const last_item = self.items[self.len - 1];
-        self.items[usize_(self.entries[slot])] = last_item;
         const last_item_slot = self.findEntry(self.entries, self.entries_cap, last_item.key, last_item.hash);
+        self.items[usize_(self.entries[slot])] = last_item;
         self.entries[last_item_slot] = self.entries[slot];
         // set tomb entry
         self.entries[slot] = TombEntry;

@@ -68,6 +68,8 @@ pub fn Vec(comptime T: type) type {
       self.len = 0;
       self.capacity = 0;
     }
+
+    pub const deinit = clearAndFree;
   };
 }
 

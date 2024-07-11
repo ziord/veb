@@ -28,6 +28,7 @@ pub fn doRuntimeTest(src: []const u8) !void {
   try tych.typecheck(node, true);
   var cpu = cli.vm.VM.init(&cna);
   defer cpu.shutdown();
+  cpu.initGC();
   var fun = cli.value.createScriptFn(&cpu, 0);
   var compiler = cli.compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych.prelude, null, null);
   try compiler.compile(node);
@@ -63,6 +64,7 @@ pub fn doStaticTest(src: []const u8) !void {
   try tych.typecheck(node, true);
   var cpu = cli.vm.VM.init(&cna);
   defer cpu.deinit();
+  cpu.initGC();
   var fun = cli.value.createScriptFn(&cpu, 0);
   var compiler = cli.compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, &cna, tych.prelude, null, null);
   try compiler.compile(node);

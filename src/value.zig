@@ -1,10 +1,10 @@
 const std = @import("std");
 const util = @import("util.zig");
 const Mem = @import("mem.zig");
-const Vec = @import("vec.zig").Vec;
 const Map = @import("map.zig").Map;
 const NativeFns = @import("native.zig").NativeFns;
 const OpCode = @import("opcode.zig").OpCode;
+pub const Vec = @import("vec.zig").Vec;
 pub const ks = @import("constants.zig");
 pub const OpType = @import("lex.zig").OpType;
 
@@ -212,17 +212,19 @@ const SIGN_BIT = @as(u64, 0x8000000000000000);
 const TAG_NIL = 0x1;      // 01
 const TAG_FALSE = 0x2;    // 10
 const TAG_TRUE = 0x3;     // 11
-const TAG_NOTHING = 0x4;  // 100
+const TAG_VOID = 0x4;     // 100
+const TAG_NOTHING = 0x5;  // 101
 const TAG_OBJECT = (SIGN_BIT | QNAN);
 // Values
 pub const Value = u64;
 pub const NIL_VAL = @as(Value, (QNAN | TAG_NIL));
 pub const FALSE_VAL = @as(Value, (QNAN | TAG_FALSE));
 pub const TRUE_VAL = @as(Value, (QNAN | TAG_TRUE));
+pub const VOID_VAL = @as(Value, (QNAN | TAG_VOID));
 pub const NOTHING_VAL = @as(Value, (QNAN | TAG_NOTHING));
 
 pub const NativeFn = *const fn (*VM, argc: u32, args: u32) callconv(.C) Value;
-pub const StringHashMap = Map(*const ObjString, Value);
+pub const StringHashMap = Map(*ObjString, Value);
 pub const ValueHashMap = Map(Value, Value);
 
 pub const ObjId = enum(u8) {
@@ -246,7 +248,8 @@ pub const ObjId = enum(u8) {
 
 pub const Obj = extern struct {
   id: ObjId,
-  cls: ?*ObjClass = null,
+  marked: bool,
+  cls: ?*ObjClass,
   next: ?*Obj,
 };
 
@@ -307,7 +310,7 @@ pub const ObjFn = extern struct {
   envlen: usize,
   code: Code,
   module: *ObjModule,
-  name: *const ObjString,
+  name: *ObjString,
 
   pub inline fn getName(self: *const ObjFn) []const u8 {
     return self.name.string();
@@ -350,7 +353,7 @@ pub const ObjNativeFn = extern struct {
   obj: Obj,
   arity: u32,
   fun:  NativeFn,
-  name: *const ObjString,
+  name: *ObjString,
 
   pub inline fn getName(self: *const ObjNativeFn) []const u8 {
     return self.name.string();
@@ -365,7 +368,7 @@ pub const ObjClosure = extern struct {
 
 pub const ObjUpvalue = extern struct {
   obj: Obj,
-  value: Value = NOTHING_VAL,
+  value: Value = VOID_VAL,
   loc: *Value,
   next: ?*ObjUpvalue,
 };
@@ -378,7 +381,7 @@ pub const ObjError = extern struct {
 pub const ObjClass = extern struct {
   obj: Obj,
   len: usize,
-  name: *const ObjString,
+  name: *ObjString,
   items: [*]Value,
 
   pub inline fn getMethodWithName(self: *@This(), name: *const ObjString) ?Value {
@@ -410,7 +413,7 @@ pub const ObjClass = extern struct {
 
 pub const ObjTag = extern struct {
   obj: Obj,
-  name: *const ObjString,
+  name: *ObjString,
 
   pub inline fn nameStr(self: *@This()) []const u8 {
     return self.name.string();
@@ -433,7 +436,7 @@ pub const ObjInstance = extern struct {
 
 pub const ObjFiber = extern struct {
   obj: Obj,
-  errval: Value = NOTHING_VAL,
+  errval: Value = VOID_VAL,
   origin: FiberOrigin,
   stack_cap: usize,
   frame_cap: usize,
@@ -569,7 +572,7 @@ pub fn isNilNoInline(val: Value) bool {
 }
 
 pub fn isVoidNoInline(val: Value) bool {
-  return isNothing(val);
+  return isVoid(val);
 }
 
 pub fn isNoreturnNoInline(val: Value) bool {
@@ -580,6 +583,10 @@ pub fn isNoreturnNoInline(val: Value) bool {
 pub fn isAnyNoInline(val: Value) bool {
   _ = val;
   return true;
+}
+
+pub inline fn isVoid(val: Value) bool {
+  return val == VOID_VAL;
 }
 
 pub inline fn isNothing(val: Value) bool {
@@ -1134,22 +1141,53 @@ pub fn hashValue(val: Value, vm: *VM) u64 {
 
 pub const VM = @import("vm.zig").VM;
 
+var upvalue = ObjUpvalue{
+  .obj = .{.id = .objupvalue, .marked = true, .cls = null, .next = null},
+  .loc = undefined,
+  .next = null,
+};
+
+var ident = ObjString{
+  .obj = .{.id = .objstring, .marked = true, .cls = null, .next = null},
+  .hash = 0,
+  .len = 0,
+  .str = ks.UnderscoreVar.ptr,
+};
+
+pub inline fn saveTempRoot(vm: *VM, objs: []const *Obj) usize {
+  const len_now = vm.temp_roots.size();
+  for (objs) |obj| {
+    vm.temp_roots.push(obj, vm);
+  }
+  return len_now;
+}
+
+pub inline fn delTempRoot(vm: *VM, len: usize) void {
+  while (vm.temp_roots.size() != len) {
+    vm.temp_roots.len -= 1;
+  }
+}
+
 pub fn createObject(vm: *VM, id: ObjId, cls: ?*ObjClass, comptime T: type) *T {
+  if (vm.gc.canCollect()) { vm.gc.collect(); }
   var mem = vm.mem.alloc(T, vm);
   mem.obj.id = id;
   mem.obj.cls = cls;
+  mem.obj.marked = false;
   mem.obj.next = vm.objects;
   vm.objects = &mem.obj;
   return mem;
 }
 
-pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: bool) *const ObjString {
+pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: bool) *ObjString {
   const hash = hashString(str);
   const string = map.findInterned(str, hash);
   if (string == null) {
     var tmp = @call(.always_inline, createObject, .{vm, .objstring, vm.classes.string, ObjString});
     tmp.len = str.len;
     tmp.hash = hash;
+    const root_len = saveTempRoot(vm, &[_]*Obj{&tmp.obj});
+    defer delTempRoot(vm, root_len);
     if (!is_alloc) {
       tmp.str = vm.mem.dupeStr(vm, str).ptr;
     } else {
@@ -1159,15 +1197,16 @@ pub fn createString(vm: *VM, map: *StringHashMap, str: []const u8, is_alloc: boo
     _ = map.set(tmp, FALSE_VAL, vm);
     return tmp;
   } else if (is_alloc) {
-    vm.gc.allocator.getAllocator().free(str);
+    vm.gc.allocator.free(str);
   }
   return string.?.key;
 }
 
 pub fn createList(vm: *VM, len: usize) *ObjList {
   const cap = Mem.alignTo(Mem.growCapacity(len), Mem.BUFFER_INIT_SIZE);
+  const items = vm.mem.allocBuf(Value, cap, vm);
   var list = @call(.always_inline, createObject, .{vm, .objlist, vm.classes.list, ObjList});
-  list.items = @ptrCast(vm.mem.allocBuf(Value, cap, vm));
+  list.items = @ptrCast(items);
   list.capacity = cap;
   list.len = len;
   return list;
@@ -1176,13 +1215,16 @@ pub fn createList(vm: *VM, len: usize) *ObjList {
 pub fn createMap(vm: *VM, len: usize) *ObjMap {
   var map = @call(.always_inline, createObject, .{vm, .objvalmap, vm.classes.map, ObjMap});
   map.meta = ValueHashMap.init();
+  const root_len = saveTempRoot(vm, &[_]*Obj{&map.obj});
+  defer delTempRoot(vm, root_len);
   map.meta.ensureCapacity(vm, len);
   return map;
 }
 
 pub fn createTuple(vm: *VM, len: usize) *ObjTuple {
+  const items = vm.mem.allocBuf(Value, len, vm);
   var tuple = @call(.always_inline, createObject, .{vm, .objtuple, vm.classes.tuple, ObjTuple});
-  tuple.items = @ptrCast(vm.mem.allocBuf(Value, len, vm));
+  tuple.items = @ptrCast(items);
   tuple.len = len;
   return tuple;
 }
@@ -1194,28 +1236,30 @@ pub inline fn createStringV(vm: *VM, map: *StringHashMap, str: []const u8, is_al
 pub fn createFn(vm: *VM, arity: u8) *ObjFn {
   var fun = @call(.always_inline, createObject, .{vm, .objfn, null, ObjFn});
   fun.code = Code.init();
-  fun.name = undefined;
+  fun.name = &ident;
   fun.arity = arity;
   fun.envlen = 0;
   return fun;
 }
 
 pub fn createScriptFn(vm: *VM, arity: u8) *ObjFn {
-  const fun = createFn(vm, arity);
-  fun.name = createString(vm, &vm.strings, ks.ScriptVar, false);
-  return fun;
+  return createFn(vm, arity);
 }
 
 pub fn createNativeFn(vm: *VM, zfun: NativeFn, arity: u32, name: usize) *ObjNativeFn {
+  const name_str = createString(vm, &vm.strings, NativeFns[name], false);
+  const root_len = saveTempRoot(vm, &[_]*Obj{&name_str.obj});
+  defer delTempRoot(vm, root_len);
   var fun = @call(.always_inline, createObject, .{vm, .objnativefn, null, ObjNativeFn});
   fun.fun = zfun;
   fun.arity = arity;
-  fun.name = createString(vm, &vm.strings, NativeFns[name], false);
+  fun.name = name_str;
   return fun;
 }
 
 pub fn createClosure(vm: *VM, fun: *ObjFn) *ObjClosure {
   const env = vm.mem.allocBuf(*ObjUpvalue, fun.envlen, vm);
+  @memset(env, &upvalue);
   var clos = @call(.always_inline, createObject, .{vm, .objclosure, null, ObjClosure});
   clos.env = env.ptr;
   clos.fun = fun;
@@ -1240,7 +1284,7 @@ pub fn createClass(vm: *VM, len: usize) *ObjClass {
   var cls = @call(.always_inline, createObject, .{vm, .objclass, null, ObjClass});
   cls.len = len;
   cls.items = methods.ptr;
-  cls.name = undefined;
+  cls.name = &ident;
   return cls;
 }
 
@@ -1251,9 +1295,12 @@ pub fn createStruct(vm: *VM, flen: usize) *ObjStruct {
 }
 
 pub fn createModule(vm: *VM, len: usize, name: []const u8) *ObjModule {
+  const name_str = createString(vm, &vm.strings, name, false);
+  const root_len = saveTempRoot(vm, &[_]*Obj{&name_str.obj});
+  defer delTempRoot(vm, root_len);
   var module = createClass(vm, len);
   module.obj.id = .objmodule;
-  module.name = createString(vm, &vm.strings, name, false);
+  module.name = name_str;
   return module;
 }
 
@@ -1262,8 +1309,11 @@ pub fn createTag(vm: *VM, name: []const u8) Value {
   if (vm.tags.findInterned(str.string(), str.hash)) |itm| {
     return itm.value;
   }
+  const root_len = saveTempRoot(vm, &[_]*Obj{&str.obj});
+  defer delTempRoot(vm, root_len);
   const tag = @call(.always_inline, createObject, .{vm, .objtag, null, ObjTag});
   tag.name = str;
+  _ = saveTempRoot(vm, &[_]*Obj{&tag.obj});
   _ = vm.tags.set(str, objVal(tag), vm);
   return objVal(tag);
 }
@@ -1295,8 +1345,9 @@ pub fn createFiber(vm: *VM, clo: ?*ObjClosure, origin: FiberOrigin, caller: ?*Ob
   const cap = Mem.alignTo(arity + 0xff, Mem.BUFFER_INIT_SIZE);
   const frames = vm.mem.allocBuf(CallFrame, Mem.BUFFER_INIT_SIZE, vm);
   var stack = vm.mem.allocBuf(Value, cap, vm);
+  @memset(stack, NOTHING_VAL);
   var fiber = @call(.always_inline, createObject, .{vm, .objfiber, null, ObjFiber});
-  fiber.errval = NOTHING_VAL;
+  fiber.errval = VOID_VAL;
   fiber.origin = origin;
   fiber.caller = caller;
   fiber.frame_cap = Mem.BUFFER_INIT_SIZE;
@@ -1314,8 +1365,11 @@ pub fn createFiber(vm: *VM, clo: ?*ObjClosure, origin: FiberOrigin, caller: ?*Ob
 }
 
 pub fn structVal(vm: *VM, val: Value, name: []const u8) Value {
+  const name_str = createString(vm, &vm.strings, name, false);
+  const root_len = saveTempRoot(vm, &[_]*Obj{&name_str.obj});
+  defer delTempRoot(vm, root_len);
   var just = createStruct(vm, 1);
-  just.name = createString(vm, &vm.strings, name, false);
+  just.name = name_str;
   just.items[0] = val;
   return objVal(just);
 }

@@ -2,7 +2,7 @@ pub builtin def @exit(code: num): noreturn
    #[[internal]]
 end
 
-pub builtin def @panic{T}(msg: T): noreturn
+pub builtin def @panic(msg: any): noreturn
   #[[internal]]
 end
 

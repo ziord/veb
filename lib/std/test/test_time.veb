@@ -1,0 +1,7 @@
+import std.time
+
+assert(time.s_per_day == 86_400, 'should be same')
+println(time.ns_per_us, time.ms_per_week, time.s_per_day)
+println(time.millis())
+println(time.nanos())
+println(time.now())

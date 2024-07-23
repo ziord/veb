@@ -1,0 +1,22 @@
+import std
+const math = std.math
+
+println("math.pi:", math.pi)
+println("math.tau:", math.tau)
+println("math.ceil(12.5):", math.ceil(12.5))
+println("math.floor(12.5):", math.floor(12.5))
+println(180 / math.pi)
+println(math.deg_per_rad)
+println()
+println(math.min(12, 13))
+println(math.max(12, 13))
+println(math.pow(10, 12))
+println()
+assert(math.round(2.675, 2) == 2.68, 'should be same')
+assert(math.round(3.14159, 3) == 3.142, 'should be same')
+assert(math.round(2.71828, 3) == 2.718, 'should be same')
+assert(math.round(4.56789, 1) == 4.6, 'should be same')
+assert(math.round(4.5, 0) == 5, 'should be same')
+assert(math.round(4.4, 0) == 4, 'should be same')
+assert(math.round(-2.675, 4-2) == -2.68, 'should be same')
+assert(math.round(-2.674, 2) == -2.67, 'should be same')

@@ -89,8 +89,7 @@ const TypeEnv = struct {
   }
 
   pub fn copy(self: *@This(), source: *@This()) void {
-    // globals don't need to be copied.
-    self.global = source.global;
+    self.global = source.global.copy();
     var itr = source.narrowed.iterator();
     while (itr.next()) |entry| {
       self.putNarrowed(entry.key_ptr.*, entry.value_ptr.*);
@@ -212,10 +211,14 @@ pub const TypeChecker = struct {
   cunit: *CompUnit = undefined,
   /// track narrowing
   narrowing: u32 = 0,
-  /// type context
-  ctx: TContext,
+  /// type context from current module
+  ctx: *TContext,
+  /// current module object
+  cmo: *tir.Module = undefined,
+  /// current module type
+  cmt: *Type = undefined,
   /// generic function/class info
-  generics: ds.ArrayHashMap(*Node, *ds.ArrayList(GenInfo)),
+  generics: GenInfoMap,
   /// inferred class methods
   methods: ds.StringArrayHashMap(*std.AutoHashMap(u32, InferredFunction)),
   /// inferred modules
@@ -322,10 +325,12 @@ pub const TypeChecker = struct {
   };
 
   /// prelude nodes
-  pub const Prelude = struct {core: *Node};
+  pub const Prelude = struct {core: *Node, module: *Type,};
 
   /// name, typename, token
   pub const TraitInfo = struct{[]const u8, []const u8, Token};
+
+  pub const GenInfoMap = ds.ArrayHashMap(*Node, *ds.ArrayList(GenInfo));
 
   pub fn init(allocator: Allocator, diag: *Diagnostic, namegen: util.NameGen) Self {
     return .{
@@ -335,7 +340,7 @@ pub const TypeChecker = struct {
       .linker = TypeLinker.init(undefined, diag, undefined, allocator),
       .modules = ds.StringHashMapUnmanaged(InferredModule).init(),
       .namegen = util.NameGen.init(allocator),
-      .generics = ds.ArrayHashMap(*Node, *ds.ArrayList(GenInfo)).init(allocator),
+      .generics = GenInfoMap.init(allocator),
       .methods = ds.StringArrayHashMap(*std.AutoHashMap(u32, InferredFunction)).init(allocator),
       .builder = CFGBuilder.init(allocator),
       .cycles = tir.NodeListU.init(),
@@ -358,19 +363,24 @@ pub const TypeChecker = struct {
   fn loadPrelude(self: *Self) void {
     const root = prelude.CoreNode;
     self.buildProgramFlow(root, true) catch unreachable;
-    self.ctx.enterPreludeModule(Type.newModule(root, "core", self.al));
+    var typ = Type.newModule(root, ks.CoreModuleVar, self.al);
+    self.cmo = typ.module();
+    self.cmt = typ;
+    self.ctx = &self.cmo.env.ctx;
+    self.linker.ctx = self.ctx;
+    self.ctx.enterScope();
     self.flowInferEntry(self.cunit.program.entry()) catch unreachable;
     for (root.NdProgram.decls) |node| {
       if (node.isFun()) {
         const fun = node.getBasicFun();
-        if (fun.data.builtin) {
+        if (fun.data.modifier.isBuiltin()) {
           fun.data.body.block().checked = true;
         }
       } else if (node.isClass()) {
-        if (!node.NdClass.data.builtin) continue;
+        if (!node.NdClass.data.modifier.isBuiltin()) continue;
         node.NdClass.data.checked = true;
         for (node.NdClass.data.methods.items()) |method| {
-          method.getBasicFun().data.builtin = true;
+          method.getBasicFun().data.modifier = .Builtin;
         }
         if (node.NdClass.data.tktype != .TkStr) {
           self.builtins.append(self.inferClassPartial(node) catch unreachable, self.al);
@@ -381,13 +391,12 @@ pub const TypeChecker = struct {
         }
       }
     }
-    self.prelude = .{.core = root};
+    self.prelude = .{.core = root, .module = typ};
   }
 
   inline fn inCoreModule(self: *Self) bool {
     return (
-      self.ctx.modules.len() == 1 and
-      self.ctx.cm().node.NdProgram.filepath.ptr == ks.PreludeFilename.ptr
+      self.cmo.node.NdProgram.filepath.ptr == ks.PreludeFilename.ptr
     );
   }
 
@@ -449,8 +458,7 @@ pub const TypeChecker = struct {
     return std.fmt.allocPrint(al, "${}.{}", .{l1, l2}) catch @panic("could not gen name");
   }
 
-  fn makeSynthName(self: *Self, name: ?[]const u8, is_builtin: bool, args: tir.TypeItems, targs: ?TypeItems, cls_ty: ?*Type) []const u8 {
-    _ = is_builtin;
+  fn makeSynthName(self: *Self, name: ?[]const u8, args: tir.TypeItems, targs: ?TypeItems, cls_ty: ?*Type) []const u8 {
     // FIXME: this is unhygienically inefficient.
     var start = name orelse genName(
       self.al,
@@ -459,7 +467,7 @@ pub const TypeChecker = struct {
     );
     if (cls_ty) |ty| {
       start = std.fmt.allocPrint(
-        self.al, "${s}.{s}.{}", .{start, ty.klassOrTrait().data.name, ty.typeid()}
+        self.al, "{s}.{s}.{}", .{start, ty.klassOrTrait().data.name, ty.typeid()}
       ) catch @panic("could not gen cls name");
     }
     var list = std.ArrayList(u8).init(self.al);
@@ -484,8 +492,8 @@ pub const TypeChecker = struct {
   }
 
   fn createFunSynthName(self: *Self, fun: *tir.BasicFunNode, args: *TypeList, targs: ?TypeItems, cls_ty: ?*Type) []const u8 {
-    if (fun.data.builtin) return fun.data.name.?.lexeme();
-    return self.makeSynthName(if (fun.data.name) |nm| nm.lexeme() else null, fun.data.builtin, args.items(), targs, cls_ty);
+    if (fun.data.modifier.isBuiltin()) return fun.data.name.?.lexeme();
+    return self.makeSynthName(if (fun.data.name) |nm| nm.lexeme() else null, args.items(), targs, cls_ty);
   }
 
   inline fn boxSynthName(token: Token, val: []const u8) Token {
@@ -526,7 +534,7 @@ pub const TypeChecker = struct {
   }
 
   inline fn findCoreType(self: *Self, name: []const u8) ?*Type {
-    return self.ctx.core_typ_scope.lookup(name);
+    return self.ctx.lookupInCoreTypScope(name);
   }
 
   inline fn findType(self: *Self, name: []const u8) ?*Type {
@@ -534,7 +542,7 @@ pub const TypeChecker = struct {
   }
 
   inline fn findName(self: *Self, name: []const u8) ?*Type {
-    return self.ctx.var_scope.lookup(name);
+    return self.ctx.lookupInVarScope(name);
   }
 
   fn lookupName(self: *Self, ident: anytype, emit: bool) !*Type {
@@ -584,26 +592,26 @@ pub const TypeChecker = struct {
   }
 
   fn insertType(self: *Self, var_typ: *Type, typ: *Type) void {
-    self.ctx.typ_scope.insert(var_typ.variable().lexeme(), typ);
+    self.ctx.typ_scope.insert(var_typ.variable().lexeme(), .{.typ = typ, .aspec = typ.aspec});
   }
 
   inline fn insertCoreType(self: *Self, name: []const u8, typ: *Type) void {
     if (self.findCoreType(name) == null) {
       self.ctx.core_typ_scope.insert(name, typ);
     }
-    self.ctx.typ_scope.insert(name, typ);
+    self.ctx.typ_scope.insert(name, .{.typ = typ, .aspec = typ.aspec});
   }
 
   pub inline fn insertVar(self: *Self, name: []const u8, ty: *Type) void {
-    self.ctx.var_scope.insert(name, ty);
+    self.ctx.var_scope.insert(name, .{.typ = ty, .aspec = ty.aspec});
   }
 
   pub inline fn insertTy(self: *Self, name: []const u8, ty: *Type) void {
-    self.ctx.typ_scope.insert(name, ty);
+    self.ctx.typ_scope.insert(name, .{.typ = ty, .aspec = ty.aspec});
   }
 
   pub inline fn updateVar(self: *Self, name: []const u8, ty: *Type) void {
-    _ = self.ctx.var_scope.update(name, ty);
+    _ = self.ctx.var_scope.update(name, .{.typ = ty, .aspec = ty.aspec});
   }
 
   pub inline fn deleteVar(self: *Self, name: []const u8) void {
@@ -1053,7 +1061,7 @@ pub const TypeChecker = struct {
     _ = self;
     return if (typ) |ty| (
       if (ty.isClass()) (
-        if (ty.klass().builtin) ty.klass().tparamsLen()
+        if (ty.klass().modifier.isBuiltin()) ty.klass().tparamsLen()
         else ty.klass().fieldsLen()
       ) else ty.tag().fieldsLen()
     ) else 0;
@@ -1192,8 +1200,6 @@ pub const TypeChecker = struct {
     // const curr_cunit = self.cunit;
     // defer self.cunit = curr_cunit;
     // self.cunit = cunit;
-    self.ctx.enterModule(typ);
-    defer self.ctx.leaveModule();
     self.flowInferEntry(cunit.program.entry()) catch {};
     self.analyzer.analyzeDeadCodeWithTypes(cunit.program.entry()) catch {};
     typ.module().setAsResolved();
@@ -1315,7 +1321,7 @@ pub const TypeChecker = struct {
         const scope = self.ctx.var_scope.decls.pop();
         var itr = scope.map.iterator();
         while (itr.next()) |entry| {
-          self.insertVar(entry.key_ptr.*, entry.value_ptr.*);
+          self.insertVar(entry.key_ptr.*, entry.value_ptr.*.typ);
         }
         return;
       }
@@ -1839,7 +1845,7 @@ pub const TypeChecker = struct {
           if (!fun.isAnonymous()) {
             _ = try self.inferFunPartial(node);
           } else {
-            _ = try self.inferFun(node, null);
+            _ = try self.inferFun(node, null, null);
           }
         }
       },
@@ -1863,31 +1869,21 @@ pub const TypeChecker = struct {
       .NdImport => |*nd| {
         // create a module type, save the type with its alias or last file name.
         var mod_ty = try self.buildImpProgramFlow(nd, true);
-        self.ctx.cm().addModule(mod_ty, self.al);
+        if (mod_ty.module().node != nd.program) {
+          // deduplicate program nodes
+          nd.program = mod_ty.module().node;
+        }
+        self.ctx.addModule(mod_ty, self.al);
         nd.typ = mod_ty;
         // handle entities
-        if (nd.data.entities) |entities| {
-          try self.resolveModuleType(mod_ty);
-          for (entities) |entity| {
-            const id = entity.getName().lexeme();
-            const info = try self.checkModuleAccess(mod_ty, entity.name, id);
-            const new_ty = info.@"0";
-            const aspec = AccessSpecifier.getASpec(entity.public);
-            // this is an id property
-            if (info.@"1") {
-              self.insertVar(id, new_ty);
-              self.ctx.cm().setIdTy(id, new_ty, aspec, self.al);
-            } else {
-              self.insertTy(id, new_ty);
-              self.ctx.cm().setTy(id, new_ty, aspec, self.al);
-            }
-          }
-        } else {
+        if (nd.data.entities == null) {
           const id = nd.getImportName();
           mod_ty.module().env.alias = id;
-          self.insertVar(id, mod_ty);
-          self.insertTy(id, mod_ty);
-          self.ctx.cm().setIdTy(id, mod_ty, AccessSpecifier.getASpec(nd.data.public), self.al);
+          self.cmo.setIdTy(id, mod_ty, AccessSpecifier.getASpec(nd.data.public));
+          self.cmo.setTy(id, mod_ty, AccessSpecifier.getASpec(nd.data.public));
+        } else {
+          // TODO:
+          unreachable;
         }
       },
       else => try self.flowInferNode(flo, node),
@@ -1990,7 +1986,7 @@ pub const TypeChecker = struct {
     if (typ.isClass()) {
       if (typ.klass().resolved or self.isCurrentlyResolving(typ)) {
         return;
-      } else if (typ.klass().builtin) {
+      } else if (typ.klass().modifier.isBuiltin()) {
         return try self.resolveBuiltinClassType(typ, debug);
       } else {
         return try self.resolveUserClassType(typ, debug);
@@ -2051,10 +2047,22 @@ pub const TypeChecker = struct {
   pub fn resolveModuleType(self: *Self, mod_ty: *Type) !void {
     if (!mod_ty.module().resolved) {
       if (!self.resolving.contains(mod_ty, Type.ptrEql)) {
-        self.ctx.enterTVScope();
-        defer self.ctx.leaveTVScope();
-        const info = self.modules.get(mod_ty.module().name()).?;
+        const cmo = self.cmo;
+        const cmt = self.cmt;
+        const ctx = self.ctx;
+        defer {
+          self.cmo = cmo;
+          self.cmt = cmt;
+          self.ctx = ctx;
+          self.linker.ctx = ctx;
+        }
+        self.cmo = mod_ty.module();
+        self.cmt = mod_ty;
+        self.ctx = &self.cmo.env.ctx;
+        self.linker.ctx = self.ctx;
         self.resolving.append(mod_ty, self.al);
+        self.ctx.enterScope();
+        const info = self.modules.get(mod_ty.module().name()).?;
         defer _ = self.resolving.pop();
         self.flowInferProgram(info.cunit, mod_ty);
       }
@@ -2103,7 +2111,7 @@ pub const TypeChecker = struct {
       }
       const ctparams = core_cls.tparams.?;
       const tparams = user_cls.tparams.?;
-      const synth_name = self.makeSynthName(core_cls.data.name, core_cls.builtin, tparams, null, null);
+      const synth_name = self.makeSynthName(core_cls.data.name, tparams, null, null);
       const old_cls = core_cls.data.node.?;
       if (self.findGenInfo(old_cls, synth_name)) |info| {
         return info.typ;
@@ -2120,7 +2128,6 @@ pub const TypeChecker = struct {
         self.insertType(ctparams[0], uni);
       }
       var new_node = old_cls.clone(self.al);
-      self.ctx.cm().setIdTy(new_node.NdClass.name.lexeme(), user_ty, user_ty.aspec, self.al);
       // we only link when we're sure core_cls is an unsubstituted generic type
       try self.linker.linkClass(&new_node.NdClass, debug, true);
       // make class non-generic to allow inference
@@ -2168,7 +2175,7 @@ pub const TypeChecker = struct {
       // resolve the provided type params (user_ty's)
       var call: Node = .{.NdGenericCall = tir.GenericCallNode.init(undefined, tparams)};
       try self.linkAndCheckCallTypeParams(&call, debug);
-      const synth_name = self.makeSynthName(core_trt.data.name, core_trt.builtin, tparams, null, null);
+      const synth_name = self.makeSynthName(core_trt.data.name, tparams, null, null);
       const old_trt = core_trt.data.node.?;
       if (self.findGenInfo(old_trt, synth_name)) |info| {
         return info.typ;
@@ -2389,7 +2396,7 @@ pub const TypeChecker = struct {
     if (typ.isFunction() and !typ.function().isParameterized()) {
       if (typ.function().data.node) |nd| {
         if (!self.isCheckedFun(nd) and !self.cycles.contains(nd, Node.eql)) {
-          _ = try self.inferFun(nd, typ);
+          _ = try self.inferFun(nd, typ, null);
         }
       }
     } else if (typ.isClass() and !typ.klass().isParameterized()) {
@@ -2404,6 +2411,8 @@ pub const TypeChecker = struct {
           _ = try self.inferTrait(nd, typ, &[_]*Type{}, &[_]*Type{});
         }
       }
+    } else if (typ.isModule() and !typ.module().resolved) {
+      try self.resolveModuleType(typ);
     }
     node.typ = typ;
     return typ;
@@ -2729,21 +2738,9 @@ pub const TypeChecker = struct {
     }
     return node.typ;
   }
-
-  fn inferAliasForCore(self: *Self, node: *tir.AliasNode) !*Type {
-    try self.linker.linkAlias(node);
-    return node.typ;
-  }
   
   fn inferAlias(self: *Self, node: *tir.AliasNode) !*Type {
-    if (self.inCoreModule()) {
-      return self.inferAliasForCore(node);
-    }
-    self.ctx.enterScope();
-    defer self.ctx.leaveScope();
     try self.linker.linkAlias(node);
-    const typs = self.ctx.typ_scope.decls.getLast();
-    self.ctx.cm().env.addTypes(typs, self.al);
     return node.typ;
   }
 
@@ -2923,6 +2920,7 @@ pub const TypeChecker = struct {
     } else if (lhs_ty.isUnion()) {
       // handle Union Traits
       for (lhs_ty.union_().variants.values()) |_ty| {
+        if (!_ty.isClassOrTrait()) continue;
         var is_ok = true;
         const ret = self.checkDotAccess(node, _ty, rhs_tok, rhs_tok.lexeme(), false) catch b: {
           is_ok = false;
@@ -2936,6 +2934,9 @@ pub const TypeChecker = struct {
       node.typ = ty;
       if (ty.isTaggedUnion() and (parent == null or !parent.?.isDotAccess())) {
         self.typeReferenceError(rhs_tok, ty);
+      }
+      if (ty.isModule()) {
+        try self.resolveModuleType(ty);
       }
       return ty;
     }
@@ -3185,7 +3186,7 @@ pub const TypeChecker = struct {
       if (fun_ty.data.node) |fun_idx| {
         is_cyclic = self.cycles.contains(fun_idx, Node.eql);
         if (!is_cyclic and !self.isCheckedFun(fun_idx)) {
-          _ = try self.inferFun(fun_idx, ty);
+          _ = try self.inferFun(fun_idx, ty, null);
         }
       }
       try self.validateCallArguments(fun_ty, node);
@@ -3281,7 +3282,7 @@ pub const TypeChecker = struct {
             }
             resolved = true;
             break;
-          } else if (param.typ.hasThisVariable(tvar)) {
+          } else if (ppos < args_inf.len() and param.typ.hasThisVariable(tvar)) {
             const inf_ty = blk: {
               const t = args_inf.itemAt(ppos).classOrInstanceClass();
               if (!bfun.data.variadic) {
@@ -3336,7 +3337,7 @@ pub const TypeChecker = struct {
     }
     // validate monomorphized function params
     try self.validateCallArguments(new_fun_ty.function(), node);
-    var typ = try self.inferFun(new_fun_id, new_fun_ty);
+    var typ = try self.inferFun(new_fun_id, new_fun_ty, null);
     const ret = typ.function().data.ret;
     node.expr.setType(typ);
     self.addGenInfo(
@@ -3508,6 +3509,7 @@ pub const TypeChecker = struct {
     const tk = ast_n.getToken();
     // store the actual generic type arguments received by this class
     var _targs = TypeList.init();
+    const token = node.expr.getToken();
     // inferred type arguments must match the generic type params if specified
     // ex: Fmt{str, num}('a', 5)
     if (node.targs) |targs| {
@@ -3524,6 +3526,20 @@ pub const TypeChecker = struct {
                   .{self.getTypename(targs[tpos]), self.getTypename(args_inf.itemAt(ppos))}
                 );
               }
+
+            } 
+            else if (ppos < args_inf.len() and param.typ.hasThisVariable(tvar)) {
+              const inf_ty = blk: {
+                const t = args_inf.itemAt(ppos).classOrInstanceClass();
+                if (!init_mtd_id.?.NdBasicFun.data.variadic) {
+                  break :blk t;
+                }
+                var typ = Type.newBuiltinGenericClass(ks.ListVar, .TkList, al);
+                typ.klass().appendTParam(t, al);
+                break :blk typ;
+              };
+              _ = try self.inferTypex(token, tvar, param.typ, inf_ty);
+              _ = try self.lookupName(tvar.variable().value, true);
             }
           }
         }
@@ -3541,7 +3557,6 @@ pub const TypeChecker = struct {
       }
     } else {
       const cls_params: ?tir.ParamItems = if (init_mtd_id) |_nd| _nd.NdBasicFun.params else null;
-      const token = node.expr.getToken();
       for (cls.data.params.?) |tvar| {
         var resolved = false;
         if (cls_params) |params| {
@@ -3596,6 +3611,12 @@ pub const TypeChecker = struct {
     new_cls_ty.klass().tparams = _targs.items();
     cls_ty.data.node = cls_node;
     try self.resolveType(new_cls_ty, tk, al);
+    if (init_mtd_id != null) {
+      try self.validateCallArguments(
+        new_cls_ty.klass().getMethodTy(ks.InitVar).?.function(),
+        node,
+      );
+    }
     const typ = new_cls_ty.toInstance(al);
     node.expr.setType(new_cls_ty);
     node.typ = typ;
@@ -3779,8 +3800,7 @@ pub const TypeChecker = struct {
         break :blk Type.newVariableAToken(Token.getDefaultToken(), self.al);
       }
     };
-    const mod_ty = if (!ast_node.getBasicFun().data.builtin) self.ctx.cmt() else null;
-    var ty = Type.newFunction(ret_ty, mod_ty, self.al);
+    var ty = Type.newFunction(ret_ty, self.cmt, self.al);
     var fun = ty.function();
     fun.data.node = ast_node;
     const _node = ast_node.getBasicFun();
@@ -3808,7 +3828,6 @@ pub const TypeChecker = struct {
     // set the function's name (if available) to it's full type
     if (node.getBasicFun().data.name) |ident| {
       self.insertVar(ident.lexeme(), ty);
-      self.ctx.cm().setIdTy(ident.lexeme(), ty, ty.aspec, self.al);
     }
     return ty;
   }
@@ -3984,7 +4003,7 @@ pub const TypeChecker = struct {
               if (typ.isRecursive()) {
                 continue;
               }
-              if (!node.NdBasicFun.data.builtin and !ret_ty.isRelatedTo(typ, .RCAny, al)) {
+              if (!node.NdBasicFun.data.modifier.isBuiltin() and !ret_ty.isRelatedTo(typ, .RCAny, al)) {
                 return self.errorFrom(
                   true, last,
                   "Expected return type '{s}' but found '{s}'",
@@ -3992,7 +4011,7 @@ pub const TypeChecker = struct {
                 );
               }
             }
-          } else if (!node.NdBasicFun.data.builtin and !ret_ty.isLikeVoid() and !ret_ty.isLikeNoreturn()) {
+          } else if (!node.NdBasicFun.data.modifier.isBuiltin() and !ret_ty.isLikeVoid() and !ret_ty.isLikeNoreturn()) {
             if (!(ret_ty.isRecursive() and ret_ty.recursive().base.isNeverTy())) {
               // control reaches exit from this node (`nd`), although this node
               // doesn't return anything hence (void), but return type isn't void
@@ -4006,7 +4025,7 @@ pub const TypeChecker = struct {
         }
       }
       const ty = self.returnType(&inf_ret_ty, node);
-      if (!node.NdBasicFun.data.builtin and !ret_ty.isRelatedTo(ty, .RCAny, al)) {
+      if (!node.NdBasicFun.data.modifier.isBuiltin() and !ret_ty.isRelatedTo(ty, .RCAny, al)) {
         if (!ret_ty.isNoreturnTy()) {
           return self.errorFrom(
             true, node,
@@ -4032,7 +4051,7 @@ pub const TypeChecker = struct {
     return ty;
   }
 
-  fn inferFun(self: *Self, node: *Node, typ: ?*Type) !*Type {
+  fn inferFun(self: *Self, node: *Node, typ: ?*Type, self_ty: ?*Type) !*Type {
     var _fun = node.getBasicFun();
     var ty = (
       typ orelse if (_fun.data.name) |ident| try self.lookupName(ident, true)
@@ -4042,18 +4061,29 @@ pub const TypeChecker = struct {
     if (node.isBasicFun()) {
       // > 1 implies not in core module
       var alias: ?[]const u8 = null;
-      if (self.ctx.modules.len() > 1) {
+      if (self.modules.count() > 1) {
         // insert the current module alias (import name) into scope so that future
         // references within this function resolves to its type 
-        self.insertTy(self.ctx.cm().env.alias, self.ctx.cmt());
-        alias = self.ctx.cm().env.alias;
+        self.insertTy(self.cmo.env.alias, self.cmt);
+        alias = self.cmo.env.alias;
       }
       defer if (alias) |name| {
         self.ctx.typ_scope.remove(name);
       };
       // save this module for stuff
-      self.ctx.modules.append(ty.function().data.module orelse self.ctx.cmt(), self.al);
-      defer _ = self.ctx.modules.pop();
+      const cmo = self.cmo;
+      const cmt = self.cmt;
+      const ctx = self.ctx;
+      defer {
+        self.cmo = cmo;
+        self.cmt = cmt;
+        self.ctx = ctx;
+        self.linker.ctx = ctx;
+      }
+      self.cmt = ty.function().data.module orelse self.cmt;
+      self.cmo = self.cmt.module();
+      self.ctx = &self.cmo.env.ctx;
+      self.linker.ctx = self.ctx;
       var graph = blk: {
         if (self.cunit.lookupFunc(node)) |fg| break :blk fg;
         try self.linker.linkBasicFun(_fun, null);
@@ -4062,6 +4092,9 @@ pub const TypeChecker = struct {
       self.cycles.append(node, self.al);
       self.ctx.enterScope();
       defer self.ctx.leaveScope();
+      if (self_ty) |_ty| {
+        self.insertVar(ks.SelfVar, _ty);
+      }
       const prev_fn = self.current_fn;
       defer self.current_fn = prev_fn;
       if (!_fun.data.allow_all_aspec) self.current_fn = node;
@@ -4088,7 +4121,7 @@ pub const TypeChecker = struct {
     const methods = TypeList.initCapacity(cls.data.methods.len(), self.al);
     return Class.init(
       cls.name.lexeme(), cls.data.tktype, self.copyClassFields(cls.data.fields), methods,
-      cls.data.params, node, false, cls.data.builtin, cls.data.public, cls.trait, self.al
+      cls.data.params, node, false, cls.data.modifier, cls.data.public, cls.trait, self.al
     ).toType().box(self.al);
   }
 
@@ -4096,7 +4129,7 @@ pub const TypeChecker = struct {
     const methods = TypeList.initCapacity(trt.data.methods.len(), self.al);
     return Class.init(
       trt.name.lexeme(), trt.data.tktype, self.copyClassFields(trt.data.fields), methods,
-      trt.data.params, node, false, trt.data.builtin, trt.data.public, trt.trait, self.al
+      trt.data.params, node, false, trt.data.modifier, trt.data.public, trt.trait, self.al
     ).toTraitType().box(self.al);
   }
 
@@ -4121,7 +4154,7 @@ pub const TypeChecker = struct {
     // we need to infer this first to handle recursive classes
     var cls = &node.NdClass;
     var ty = self.createClsType(cls, node);
-    if (!cls.isParameterized() and !cls.data.builtin) {
+    if (!cls.isParameterized() and !cls.data.modifier.isBuiltin()) {
       self.ctx.enterScope();
       defer self.ctx.leaveScope();
       if (cls.data.methods.len() > 0) {
@@ -4135,8 +4168,8 @@ pub const TypeChecker = struct {
     }
     // set the class's name to it's full type
     self.insertCoreType(cls.name.lexeme(), ty);
-    self.ctx.cm().setIdTy(cls.name.lexeme(), ty, ty.aspec, self.al);
-    if (cls.data.builtin) {
+    self.cmo.setIdTy(cls.name.lexeme(), ty, ty.aspec);
+    if (cls.data.modifier.isBuiltin()) {
       if (self.methods.get(cls.name.lexeme())) |map| {
         // see if we can reuse an existing map
         map.clearRetainingCapacity();
@@ -4152,7 +4185,7 @@ pub const TypeChecker = struct {
     return ty;
   }
 
-  fn inferMethod(self: *Self, cls_ty: *Type, node: *Node, typ: *Type) !*Type {
+  fn inferMethod(self: *Self, cls_ty: *Type, node: *Node, typ: *Type, self_ty: *Type) !*Type {
     var map = self.methods.get(cls_ty.klass().data.name).?;
     const tid = typ.typeid();
     // if this method is in cache, skip inference
@@ -4164,7 +4197,7 @@ pub const TypeChecker = struct {
       }
     }
     typ.tid = 0;
-    const full_ty = try self.inferFun(node, typ);
+    const full_ty = try self.inferFun(node, typ, self_ty);
     map.put(tid, .{.node = node, .partial_ty = typ, .full_ty = full_ty}) catch {};
     return full_ty;
   }
@@ -4182,7 +4215,7 @@ pub const TypeChecker = struct {
       self.ctx.enterScope();
       defer self.ctx.leaveScope();
       const token = node.getToken();
-      if (!cls.data.builtin) {
+      if (!cls.data.modifier.isBuiltin()) {
         for (cls.data.fields) |itm| {
           _ = try self.inferClsField(itm);
         }
@@ -4204,7 +4237,7 @@ pub const TypeChecker = struct {
               for (fun_ty.function().data.params) |pty| {
                 try self.resolveType(pty, token, al);
               }
-              ty.klass().data.methods.items()[i] = try self.inferFun(itm, fun_ty);
+              ty.klass().data.methods.items()[i] = try self.inferFun(itm, fun_ty, ty);
             } else {
               for (ctparams, tparams) |_tvar, _typ| {
                 itm.NdGenericMtd.params.append(.{.tvar = _tvar, .typ = _typ, .from = ty}, al);
@@ -4233,7 +4266,7 @@ pub const TypeChecker = struct {
             try self.resolveType(pty, token, al);
           }
           ty.klass().appendMethodTy(fun_ty, al);
-          ty.klass().data.methods.items()[i] = try self.inferMethod(ty, itm, fun_ty);
+          ty.klass().data.methods.items()[i] = try self.inferMethod(ty, itm, fun_ty, ty);
         }
         if (cls.trait) |trait| {
           const trt = try self.resolveTraitType(trait, token, al);
@@ -4251,7 +4284,7 @@ pub const TypeChecker = struct {
     // we need to infer this first to handle recursive classes
     var trt = &node.NdTrait;
     var ty = self.createTraitType(trt, node);
-    if (!trt.isParameterized() and !trt.data.builtin) {
+    if (!trt.isParameterized() and !trt.data.modifier.isBuiltin()) {
       self.ctx.enterScope();
       defer self.ctx.leaveScope();
       if (trt.data.methods.len() > 0) {
@@ -4265,7 +4298,7 @@ pub const TypeChecker = struct {
     }
     // set the class's name to it's full type
     self.insertCoreType(trt.name.lexeme(), ty);
-    self.ctx.cm().setIdTy(trt.name.lexeme(), ty, ty.aspec, self.al);
+    self.cmo.setIdTy(trt.name.lexeme(), ty, ty.aspec);
     return ty;
   }
 
@@ -4296,7 +4329,7 @@ pub const TypeChecker = struct {
           }
           if (!itm.isGenericMtd()) {
             // TODO: resolve param types?
-            ty.trait().data.methods.items()[i] = try self.inferFun(itm, fun_ty);
+            ty.trait().data.methods.items()[i] = try self.inferFun(itm, fun_ty, ty);
           } else {
             for (ctparams, tparams) |_tvar, _typ| {
               itm.NdGenericMtd.params.append(.{.tvar = _tvar, .typ = _typ, .from = ty}, self.al);
@@ -4798,16 +4831,18 @@ pub const TypeChecker = struct {
   fn infer(self: *Self, node: *Node) TypeCheckError!*Type {
     return switch (node.*) {
       .NdPubVarDecl => |*nd| {
-        var ty = try self.infer(nd.decl);
-        ty.aspec = .SpecPublic;
-        self.ctx.cm().setIdTy(nd.getVarDecl().name.lexeme(), ty, .SpecPublic, self.al);
+        const ty = try self.infer(nd.decl);
+        self.cmo.setIdTy(nd.getVarDecl().name.lexeme(), ty, .SpecPublic);
         return ty;
       },
       .NdConstVarDecl => |*nd| {
         var ty = try self.inferVarDecl(nd);
-        ty.mutable = false;
-        return ty;
+        var res = ty.forceClone(self.al);
+        res.mutable = false;
+        self.insertVar(nd.name.lexeme(), res);
+        return res;
       },
+      .NdVarDecl => |*nd| self.inferVarDecl(nd),
       .NdBasicCall, .NdGenericCall, => {
         var call = node.toCallNode();
         const ty = try self.inferCall(&call, node);
@@ -4815,7 +4850,6 @@ pub const TypeChecker = struct {
         return ty;
       },
       .NdExprStmt => |*nd| self.inferExprStmt(nd),
-      .NdVarDecl => |*nd| self.inferVarDecl(nd),
       .NdNumber => |*nd| self.inferLiteral(UnitTypes.num, nd.lexeme(self.al), nd),
       .NdBool => |*nd| self.inferLiteral(UnitTypes.bol, nd.token.lexeme(), nd),
       .NdString => |*nd| self.inferLiteral(UnitTypes.str, nd.token.lexeme(), nd),
@@ -4839,7 +4873,7 @@ pub const TypeChecker = struct {
       .NdSubscript => |*nd| self.inferSubscript(nd, false),
       .NdDotAccess => |*nd| self.inferDotAccess(nd, node, false),
       .NdDeref => |*nd| self.inferDeref(nd, false),
-      .NdBasicFun => self.inferFun(node, null),
+      .NdBasicFun => self.inferFun(node, null, null),
       .NdCondition, .NdMCondition, .NdEmpty, .NdControl => undefined,
       .NdSimpleIf, .NdLblArg, .NdBlock, .NdMatch,
       .NdWhile, .NdProgram, .NdClass, .NdGenericFun => unreachable,
@@ -4870,6 +4904,7 @@ pub const TypeChecker = struct {
     var cunit = CompUnit.init(self.al);
     cunit.program = program;
     const typ = Type.newModule(root, node.getImportName(), self.al);
+    typ.module().env.ctx.addModule(self.prelude.module, self.al);
     self.modules.set(path, .{.cunit = cunit, .typ = typ}, self.al);
     return typ;
   }
@@ -4884,11 +4919,17 @@ pub const TypeChecker = struct {
     };
   }
 
-  fn setupEntryModule(self: *Self, root: *Node, display_diag: bool) !*Type {
+  fn setupEntryModule(self: *Self, root: *Node, display_diag: bool) !void {
     try self.buildProgramFlow(root, display_diag);
     const typ = Type.newModule(root, root.NdProgram.getModuleName(), self.al);
     self.modules.set(root.NdProgram.filepath, .{.cunit = self.cunit, .typ = typ}, self.al);
-    return typ;
+    self.cmt = typ;
+    self.cmo = typ.module();
+    self.ctx = &self.cmo.env.ctx;
+    self.ctx.addModule(self.prelude.module, self.al);
+    self.resolving.append(typ, self.al);
+    self.linker.ctx = self.ctx;
+    self.ctx.enterScope();
   }
 
   pub fn typecheck(self: *Self, root: *Node, display_diag: bool) TypeCheckError!void {
@@ -4897,14 +4938,11 @@ pub const TypeChecker = struct {
         if (display_diag) self.diag.display();
       }
     }
-    self.ctx = TContext.init(self.al);
-    self.ctx.enterScope();
-    self.linker.ctx = &self.ctx;
     self.linker.u8w = &self.u8w;
     self.linker.tc = self;
     self.loadPrelude();
-    const typ = try self.setupEntryModule(root, display_diag);
-    self.flowInferProgram(self.cunit, typ);
+    try self.setupEntryModule(root, display_diag);
+    self.flowInferProgram(self.cunit, self.cmt);
     if (self.diag.hasErrors()) {
       return error.CheckError;
     }

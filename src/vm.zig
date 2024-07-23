@@ -26,13 +26,14 @@ pub const VM = struct {
   strings: StringHashMap,
   tags: StringHashMap,
   globals: StringHashMap,
+  externs: vl.Vec(Value),
   objects: ?*vl.Obj,
   classes: BuiltinCls,
   names: CachedNames,
   mem: Mem,
   gc: GC,
   vsw: ValueStringWriter,
-  temp_roots: vl.Vec(*vl.Obj),
+  temp_roots: vl.Vec(Value),
   has_error: bool = false,
 
   const Self = @This();
@@ -71,10 +72,13 @@ pub const VM = struct {
   };
 
   const CachedNames = struct {
-    init: *vl.ObjString,
+    init: *vl.ObjString = undefined,
+    ok: *vl.ObjString = undefined,
+    err: *vl.ObjString = undefined,
+    just: *vl.ObjString = undefined,
 
     pub fn new() @This() {
-      return .{.init = undefined};
+      return .{};
     }
   };
 
@@ -87,15 +91,15 @@ pub const VM = struct {
       .strings = StringHashMap.init(),
       .tags = StringHashMap.init(),
       .globals = StringHashMap.init(),
+      .externs = vl.Vec(Value).init(),
       .objects = null,
       .classes = BuiltinCls.init(),
       .names = CachedNames.new(),
-      .temp_roots = vl.Vec(*vl.Obj).init(),
+      .temp_roots = vl.Vec(Value).init(),
       .vsw = ValueStringWriter.init(),
     };
     vm.gc.skip_collection = true;
-    native.addBuiltins(&vm);
-    native.addNames(&vm);
+    native.addAll(&vm);
     return vm;
   }
 
@@ -122,10 +126,23 @@ pub const VM = struct {
     self.strings.free(self);
     self.tags.free(self);
     self.globals.free(self);
+    self.externs.deinit(self);
     self.temp_roots.deinit(self);
     self.vsw.deinit(self);
     self.gc.deinit();
     self.mem.deinit();
+  }
+
+  pub fn getExtern(self: *Self, module: []const u8, name: *vl.ObjString) ?Value {
+    if (native.ExternMapping.get(module)) |pos| {
+      const externs = self.externs.getItems()[pos.start..pos.end];
+      for (externs) |ext| {
+        if (name == vl.asNativeFn(ext).name) {  
+          return ext;
+        }
+      }
+    }
+    return null;
   }
 
   inline fn readWord(self: *Self, fp: *CallFrame) Inst {
@@ -274,9 +291,13 @@ pub const VM = struct {
     std.debug.assert(cond);
   }
 
-  fn runtimeError(self: *Self, comptime fmt: []const u8, args: anytype) RuntimeError {
+  pub fn reportRuntimeError(self: *Self, comptime fmt: []const u8, args: anytype) void {
     self.has_error = true;
-    std.debug.print(fmt ++ "\n", args);
+    std.debug.print("RuntimeError: " ++ fmt ++ "\n", args);
+  }
+
+  fn runtimeError(self: *Self, comptime fmt: []const u8, args: anytype) RuntimeError {
+    self.reportRuntimeError(fmt, args);
     return error.RuntimeError;
   }
 
@@ -944,7 +965,7 @@ pub const VM = struct {
           var rk: u32 = undefined;
           self.read2Args(code, &rx, &rk);
           @setRuntimeSafety(false);
-          fp.stack[rx] = vl.objVal(vl.createError(self, self.RK(rk, fp)));
+          fp.stack[rx] = vl.createError(self, self.RK(rk, fp));
           continue;
         },
         .Nlst => {

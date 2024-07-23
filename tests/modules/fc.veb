@@ -1,5 +1,5 @@
-import pub std.collections as sc
-import std.collections as pc
+import pub std.iter as sc
+import std.iter as pc
 
 
 for i, j in sc.range(1, Just(5), None)

@@ -1,0 +1,16 @@
+import std.iter
+
+const r = iter.range(1, Just(5), None)
+assert(r.iter().count() == 4, 'should be 4')
+
+const r = iter.range(1, Just(5), None)
+const j = ['a', 'b', 'c', 'd']
+const rj = j.iter().zip(r.iter())
+
+assert(rj.iter().count() == 4, 'should be 4')
+assert(rj.iter().next().?[0] == 'a', 'should be a')
+
+iter.zip(j.iter(), j.iter())
+   .iter()
+   .count() == 4
+ |> assert(*, 'should be 4')

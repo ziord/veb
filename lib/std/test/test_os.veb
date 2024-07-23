@@ -1,0 +1,7 @@
+import std.os
+
+_ = try os.getcwd()
+
+_ = try os.chdir('src')
+
+assert(os.getenv('<bruh>') == None, 'should be None')

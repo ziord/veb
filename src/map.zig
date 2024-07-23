@@ -214,6 +214,36 @@ pub fn Map(comptime K: type, comptime V: type) type {
       return false;
     }
 
+    pub fn pop(self: *Self, key: K, vm: *VM) vl.Value {
+      if (self.entries_cap == 0) {
+        return vl.noneVal();
+      }
+      const slot = self.findEntry(self.entries, self.entries_cap, key, ctx.hash(key, vm));
+      if (self.isUsedEntry(self.entries[slot])) {
+        const ret = self.items[usize_(self.entries[slot])].value;
+        // move all items after `slot` forward
+        const len = self.len - 1;
+        const deleted = self.entries[slot];
+        const start = usize_(deleted);
+        for (start..len) |i| {
+          self.items[i] = self.items[i + 1];
+          if (i == len) break;
+        }
+        self.len = len;
+        // set tomb entry
+        self.entries[slot] = TombEntry;
+        for (self.entries[0..self.entries_cap], 0..) |entry, i| {
+          if (self.isUsedEntry(entry)) {
+            if (entry >= deleted) {
+              self.entries[i] -= 1;
+            }
+          }
+        }
+        return vl.justVal(vm, ret);
+      }
+      return vl.noneVal();
+    }
+
     /// swap delete
     pub fn remove(self: *Self, key: K, vm: *VM) bool {
       if (self.entries_cap == 0) {
@@ -268,6 +298,14 @@ pub fn Map(comptime K: type, comptime V: type) type {
       return vl.objVal(list);
     }
 
+    pub fn copy(self: *Self, vm: *VM) vl.Value {
+      const new = vl.createMap(vm, self.len);
+      for (self.items[0..self.len]) |itm| {
+        std.debug.assert(new.meta.set(itm.key, itm.value, vm));
+      }
+      return vl.objVal(new);
+    }
+
     /// Map has to be a StringMap to use this method!
     pub fn findInterned(self: *Self, str: []const u8, hash: u64) ?MapItem {
       comptime {
@@ -299,6 +337,12 @@ pub fn Map(comptime K: type, comptime V: type) type {
     pub fn free(self: *Self, vm: *VM) void {
       vm.mem.freeBuf(i32, vm, self.entries[0..self.entries_cap]);
       vm.mem.freeBuf(MapItem, vm, self.items[0..self.items_cap]);
+    }
+
+    pub fn clear(self: *Self, vm: *VM) void {
+      vm.mem.freeBuf(i32, vm, self.entries[0..self.entries_cap]);
+      vm.mem.freeBuf(MapItem, vm, self.items[0..self.items_cap]);
+      self.* = Self.init();
     }
 
     pub fn clearAndFree(self: *Self, vm: *VM) void {

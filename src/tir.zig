@@ -1173,8 +1173,8 @@ pub const FunData = struct {
   name: ?Token,
   body: *Node,
   ret: ?*Type,
-  /// whether this function is builtin
-  builtin: bool,
+  /// this function's modifier
+  modifier: DeclModifier,
   /// whether this function is variadic
   variadic: bool,
   /// whether this function is public i.e. aspec = SpecPublic
@@ -1187,10 +1187,10 @@ pub const FunData = struct {
   /// whether this is a trait function with no default implementation
   empty_trait_fun: bool = false,
 
-  pub inline fn init(name: ?Token, body: *Node, ret: ?*Type, is_builtin: bool, variadic: bool, publ: bool) @This() {
+  pub inline fn init(name: ?Token, body: *Node, ret: ?*Type, modifier: DeclModifier, variadic: bool, publ: bool) @This() {
     return .{
       .name = name, .body = body, .ret = ret,
-      .builtin = is_builtin, .variadic = variadic,
+      .modifier = modifier, .variadic = variadic,
       .public = publ
     };
   }
@@ -1200,7 +1200,7 @@ pub const FunData = struct {
       .name = self.name,
       .body = self.body.clone(al),
       .ret = if (self.ret) |ret| ret.clone(al) else null,
-      .builtin = self.builtin,
+      .modifier = self.modifier,
       .variadic = self.variadic,
       .public = self.public,
       .allow_all_aspec = self.allow_all_aspec,
@@ -1217,21 +1217,21 @@ pub const BasicFunNode = struct {
 
   pub inline fn init(
     params: ParamItems, name: ?Token, body: *Node, ret: ?*Type,
-    is_builtin: bool, variadic: bool, publ: bool, al: Allocator
+    modifier: DeclModifier, variadic: bool, publ: bool, al: Allocator
   ) @This() {
     return .{
       .params = params,
-      .data = util.box(FunData, FunData.init(name, body, ret, is_builtin, variadic, publ), al)
+      .data = util.box(FunData, FunData.init(name, body, ret, modifier, variadic, publ), al)
     };
   }
 
   pub fn update(
     self: *@This(), params: ParamItems, name: ?Token, body: *Node,
-    ret: ?*Type, is_builtin: bool, variadic: bool, publ: bool
+    ret: ?*Type, modifier: DeclModifier, variadic: bool, publ: bool
   ) void {
     self.params = params;
     self.data.* = .{
-      .name = name, .body = body, .ret = ret, .builtin = is_builtin,
+      .name = name, .body = body, .ret = ret, .modifier = modifier,
       .variadic = variadic, .public = publ
     }; 
   }
@@ -1311,6 +1311,20 @@ pub const GenericMtdNode = struct {
   }
 };
 
+pub const DeclModifier = enum(u2) {
+  Builtin,
+  Extern,
+  None,
+
+  pub inline fn isBuiltin(self: DeclModifier) bool {
+    return self == .Builtin;
+  }
+
+  pub inline fn isExtern(self: DeclModifier) bool {
+    return self == .Extern;
+  }
+};
+
 /// NdClass, NdTrait
 pub const StructNode = struct {
   name: IdentToken,
@@ -1321,19 +1335,19 @@ pub const StructNode = struct {
     fields: NodeItems,
     methods: NodeListU,
     params: ?TypeItems,
-    builtin: bool,
+    modifier: DeclModifier,
     public: bool,
     checked: bool,
     tktype: TokenType,
 
     pub inline fn init(
       fields: NodeItems, methods: NodeListU, params: ?TypeItems,
-      checked: bool, builtin: bool, public: bool, tktype: TokenType,
+      checked: bool, modifier: DeclModifier, public: bool, tktype: TokenType,
     ) @This() {
       return .{
         .fields = fields, .methods = methods,
         .params = params, .checked = checked,
-        .builtin = builtin, .tktype = tktype,
+        .modifier = modifier, .tktype = tktype,
         .public = public,
       };
     }
@@ -1350,7 +1364,7 @@ pub const StructNode = struct {
         .fields = cloneNodeItems(self.fields, al),
         .methods = self.methods.clone(al),
         .params = params,
-        .builtin = self.builtin,
+        .modifier = self.modifier,
         .public = self.public,
         .checked = self.checked,
         .tktype = self.tktype,
@@ -1364,14 +1378,14 @@ pub const StructNode = struct {
 
   pub inline fn init(
     name: Token, trait: ?*Type, fields: NodeItems, methods: NodeListU,
-    params: ?TypeItems, checked: bool, builtin: bool, al: Allocator
+    params: ?TypeItems, checked: bool, modifier: DeclModifier, al: Allocator
   ) @This() {
     return .{
       .name = IdentToken.init(name),
       .trait = trait, 
       .data = util.box(
         StructData, StructData.init(
-          fields, methods, params, checked, builtin, false, name.ty
+          fields, methods, params, checked, modifier, false, name.ty
         ), al
       )
     };
@@ -1601,6 +1615,9 @@ pub const ImportNode = struct {
     var writer = list.writer();
     const last = self.data.import.name.len - 1;
     for (self.data.import.name, 0..) |name, i| {
+      if (i > 0) {
+        _ = writer.write(ks.SrcDir ++ std.fs.path.sep_str) catch 0;
+      }
       _ = writer.write(name.lexeme()) catch 0;
       if (i < last) {
         _ = writer.write(std.fs.path.sep_str) catch 0;
@@ -2817,26 +2834,58 @@ pub const Type = struct {
     ty1.mutable = ty2.mutable;
   }
 
-  fn _clone(self: *Self, map: *TypeHashMap, al: Allocator) *Self {
+  /// `force` applies only to the exterior type
+  fn _clone(self: *Self, map: *TypeHashMap, force: bool, al: Allocator) *Self {
     switch (self.info) {
-      .Constant, .Concrete, .Variable,
-      .Recursive, .TagOrClass, .Module, => return self,
+      .Constant => |*cn| {
+        if (!force) return self;
+        var new = Type.newConstant(cn.kind, cn.val).box(al);
+        new.setRestFields(self);
+        return new;
+      },
+      .Concrete => |*cn| {
+        if (!force) return self;
+        var new = Type.newConcrete(cn.kind).box(al);
+        new.concrete().val = cn.val;
+        new.setRestFields(self);
+        return new;
+      },
+      .Variable => |*vr| {
+        if (!force) return self;
+        var new = Type.newVariableWToken(vr.value).box(al);
+        new.variable().bounds = vr.bounds;
+        new.setRestFields(self);
+        return new;
+      },
+      .TagOrClass => |*tc| {
+        if (!force) return self;
+        var new = Type.newTagOrClass(tc.name, tc.tktype, al);
+        new.setRestFields(self);
+        return new;
+      },
+      .Module => |*md| {
+        if (!force) return self;
+        var new = Self.init(.{.Module = .{.node = md.node, .env = md.env}}).box(al);
+        new.setRestFields(self);
+        return new;
+      },
+      .Recursive => return self,
       .Function => |*fun| {
         if (map.get(self)) |ty| return ty;
         const node = if (fun.data.node) |nd| if (!nd.isGenericMtd()) nd else nd.clone(al) else fun.data.node;
-        var new = Type.init(.{.Function = Function.init(fun.data.ret._clone(map, al), null, node, fun.data.module, al)}).box(al);
+        var new = Type.init(.{.Function = Function.init(fun.data.ret._clone(map, false, al), null, node, fun.data.module, al)}).box(al);
         map.set(self, new, al);
         var _fun = new.function();
         if (fun.tparams) |tparams| {
           var new_tparams = util.allocSlice(*Type, tparams.len, al);
           for (tparams, 0..) |ty, i| {
-            new_tparams[i] = ty._clone(map, al);
+            new_tparams[i] = ty._clone(map, false, al);
           }
           _fun.tparams = new_tparams;
         }
         var params = util.allocSlice(*Type, fun.data.params.len, al);
         for (fun.data.params, 0..) |ty, i| {
-          params[i] = ty._clone(map, al);
+          params[i] = ty._clone(map, false, al);
         }
         _fun.data.params = params;
         new.setRestFields(self);
@@ -2848,24 +2897,24 @@ pub const Type = struct {
         var methods = TypeList.initCapacity(cls.data.methods.len(), al);
         var ret = Type.init(.{.Class = Class.init(
           cls.data.name, cls.tktype, fields, methods, null,
-          cls.data.node, cls.empty, cls.builtin, cls.data.public, null, al
+          cls.data.node, cls.empty, cls.modifier, cls.data.public, null, al
         )}).box(al);
         map.set(self, ret, al);
         for (cls.data.fields.items()) |itm| {
           fields.appendAssumeCapacity(itm.clone(al));
         }
         for (cls.data.methods.items()) |itm| {
-          methods.appendAssumeCapacity(itm._clone(map, al));
+          methods.appendAssumeCapacity(itm._clone(map, false, al));
         }
         if (cls.tparams) |tp| {
           var new_tparams = TypeList.initCapacity(tp.len, al);
           for (tp) |ty| {
-            new_tparams.appendAssumeCapacity(ty._clone(map, al));
+            new_tparams.appendAssumeCapacity(ty._clone(map, false, al));
           }
           ret.klass().tparams = new_tparams.items();
         }
         if (cls.data.trait) |trt| {
-          ret.klass().data.trait = trt._clone(map, al);
+          ret.klass().data.trait = trt._clone(map, false, al);
         }
         ret.klass().immutable = cls.immutable;
         ret.klass().data.methods = methods;
@@ -2878,24 +2927,24 @@ pub const Type = struct {
         var methods = TypeList.initCapacity(trt.data.methods.len(), al);
         var ret = Type.init(.{.Trait = Trait.init(
           trt.data.name, trt.tktype, fields, methods, null,
-          trt.data.node, trt.empty, trt.builtin, trt.data.public, null, al
+          trt.data.node, trt.empty, trt.modifier, trt.data.public, null, al
         )}).box(al);
         map.set(self, ret, al);
         for (trt.data.fields.items()) |itm| {
           fields.appendAssumeCapacity(itm.clone(al));
         }
         for (trt.data.methods.items()) |itm| {
-          methods.appendAssumeCapacity(itm._clone(map, al));
+          methods.appendAssumeCapacity(itm._clone(map, false, al));
         }
         if (trt.tparams) |tp| {
           var new_tparams = TypeList.initCapacity(tp.len, al);
           for (tp) |ty| {
-            new_tparams.appendAssumeCapacity(ty._clone(map, al));
+            new_tparams.appendAssumeCapacity(ty._clone(map, false, al));
           }
           ret.trait().tparams = new_tparams.items();
         }
         if (trt.data.trait) |t| {
-          ret.trait().data.trait = t._clone(map, al);
+          ret.trait().data.trait = t._clone(map, false, al);
         }
         ret.trait().immutable = trt.immutable;
         ret.trait().data.methods = methods;
@@ -2903,17 +2952,17 @@ pub const Type = struct {
         return ret;
       },
       .Generic => |*gen| {
-        var new = Generic.init(gen.base._clone(map, al));
+        var new = Generic.init(gen.base._clone(map, false, al));
         new.tparams.ensureTotalCapacity(gen.tparams.len(), al);
         for (gen.tparams.items()) |ty| {
-          new.tparams.appendAssumeCapacity(ty._clone(map, al));
+          new.tparams.appendAssumeCapacity(ty._clone(map, false, al));
         }
         var ret = Type.init(.{.Generic = new}).box(al);
         ret.setRestFields(self);
         return ret;
       },
       .Dot => |*dt| {
-        const new = Dot.init(dt.lhs._clone(map, al), dt.rhs._clone(map, al));
+        const new = Dot.init(dt.lhs._clone(map, false, al), dt.rhs._clone(map, false, al));
         var ret = Type.init(.{.Dot = new}).box(al);
         ret.setRestFields(self);
         return ret;
@@ -2922,7 +2971,7 @@ pub const Type = struct {
         var new = Union.init(al);
         new.variants.ensureTotalCapacity(uni.variants.capacity(), al);
         for (uni.variants.values()) |ty| {
-          new.set(ty._clone(map, al), al);
+          new.set(ty._clone(map, false, al), al);
         }
         var ret = Type.init(.{.Union = new}).box(al);
         ret.setRestFields(self);
@@ -2952,7 +3001,7 @@ pub const Type = struct {
         new.active = uni.active;
         new.variants.ensureTotalCapacity(uni.variants.capacity(), al);
         for (uni.variants.items()) |ty| {
-          new.variants.appendAssumeCapacity(ty._clone(map, al));
+          new.variants.appendAssumeCapacity(ty._clone(map, false, al));
         }
         var ret = Type.init(.{.TaggedUnion = new}).box(al);
         ret.setRestFields(self);
@@ -2974,7 +3023,12 @@ pub const Type = struct {
 
   pub fn clone(self: *Self, al: Allocator) *Self {
     var map = TypeHashMap.init();
-    return self._clone(&map, al);
+    return self._clone(&map, false, al);
+  }
+
+  pub fn forceClone(self: *Self, al: Allocator) *Self {
+    var map = TypeHashMap.init();
+    return self._clone(&map, true, al);
   }
 
   pub fn box(self: Self, allocator: Allocator) *Self {
@@ -3482,8 +3536,8 @@ pub const Type = struct {
     return &self.info.Union;
   }
 
-  pub inline fn concrete(self: *Self) Concrete {
-    return self.info.Concrete;
+  pub inline fn concrete(self: *Self) *Concrete {
+    return &self.info.Concrete;
   }
 
   pub inline fn constant(self: *Self) *Constant {
@@ -4378,7 +4432,7 @@ pub const Type = struct {
       },
       .Module => |*mod| {
         _ = try u8w.writer().write("{module ");
-        _ = try u8w.writer().write(mod.name());
+        _ = try u8w.writer().write(std.fs.path.basename(mod.name()));
         _ = try u8w.writer().write("}");
       },
       .Variable => |*vr| {
@@ -5181,8 +5235,8 @@ pub const Function = struct {
 };
 
 pub const Class = struct {
+  modifier: DeclModifier,
   empty: bool,
-  builtin: bool,
   immutable: bool = false,
   resolved: bool = false,
   tktype: TokenType,
@@ -5200,11 +5254,11 @@ pub const Class = struct {
 
   pub inline fn init(
     name: []const u8, tktype: TokenType, fields: ds.ArrayListUnmanaged(*Node), methods: TypeList,
-    tparams: ?[]*Type, node: ?*Node, empty: bool, builtin: bool, public: bool, trait: ?*Type, al: Allocator
+    tparams: ?[]*Type, node: ?*Node, empty: bool, modifier: DeclModifier, public: bool, trait: ?*Type, al: Allocator
   ) @This() {
     return .{
       .empty = empty,
-      .builtin = builtin,
+      .modifier = modifier,
       .tparams = tparams,
       .tktype = tktype,
       .data = util.box(ClassData, .{
@@ -5218,10 +5272,10 @@ pub const Class = struct {
     };
   }
 
-  inline fn isBuiltin(tkty: TokenType) bool {
+  inline fn toDeclModifier(tkty: TokenType) DeclModifier {
     return switch (tkty) {
-      .TkList, .TkTuple, .TkMap, .TkStr => true,
-      else => false, 
+      .TkList, .TkTuple, .TkMap, .TkStr => .Builtin,
+      else => .None, 
     };
   }
 
@@ -5230,10 +5284,9 @@ pub const Class = struct {
       name, tktype,
       ds.ArrayListUnmanaged(*Node).init(),
       TypeList.init(),
-      null, null, false, false, false, null, al
+      null, null, false, toDeclModifier(tktype), false, null, al
     );
     cls.immutable = tktype.is(.TkTuple);
-    cls.builtin = isBuiltin(tktype);
     return cls;
   }
 
@@ -5309,7 +5362,7 @@ pub const Class = struct {
   }
 
   pub fn isStringClass(self: *@This()) bool {
-    return self.builtin and self.tktype == .TkStr;
+    return self.modifier.isBuiltin() and self.tktype == .TkStr;
   }
 
   pub fn setAsResolved(self: *@This()) void {
@@ -5399,10 +5452,7 @@ pub const Class = struct {
             return false;
           }
         }
-        if (this.builtin) {
-          return oth.builtin;
-        }
-        return true;
+        return this.modifier == oth.modifier;
       },
       .TagOrClass => |*tg| {
         if (ctx == .RCIs) return tg.nameEql(this.data.name);
@@ -5482,22 +5532,19 @@ pub const Module = struct {
   env: *Env,
   node: *Node,
 
-  pub const TypeData = struct {
-    typ: *Type,
-    aspec: AccessSpecifier,
-  };
+
+  const link = @import("link.zig");
+  const TypeData = link.TypeData;
+  const TContext = link.TContext;
 
   pub const Env = struct {
     alias: []const u8,
-    var_scope: ds.StringHashMapUnmanaged(TypeData),
-    typ_scope: ds.StringHashMapUnmanaged(TypeData),
-    modules: ds.ArrayListUnmanaged(*Module) = ds.ArrayListUnmanaged(*Module).init(),
+    ctx: TContext,
 
     fn init(alias: []const u8, al: Allocator) *Env {
       return util.box(Env, .{
         .alias = alias,
-        .var_scope = ds.StringHashMapUnmanaged(TypeData).init(),
-        .typ_scope = ds.StringHashMapUnmanaged(TypeData).init(),
+        .ctx = TContext.init(al),
       }, al);
     }
 
@@ -5524,31 +5571,29 @@ pub const Module = struct {
     return self.maps.decls.len();
   }
 
-  pub inline fn addModule(self: *@This(), ty: *Type, al: Allocator) void {
-    self.env.modules.append(ty.module(), al);
+
+  pub inline fn setIdTy(self: *@This(), id: []const u8, typ: *Type, aspec: AccessSpecifier) void {
+    self.env.ctx.var_scope.insert(id, .{.typ = typ, .aspec = aspec});
   }
 
-  pub inline fn setIdTy(self: *@This(), id: []const u8, typ: *Type, aspec: AccessSpecifier, al: Allocator) void {
-    self.env.var_scope.set(id, .{.typ = typ, .aspec = aspec}, al);
+  pub inline fn getIdTy(self: *const @This(), id: []const u8) ?TypeData {
+    return self.env.ctx.lookupVar(id);
   }
 
-  pub fn getIdTy(self: *const @This(), id: []const u8) ?TypeData {
-    return self.env.var_scope.get(id);
+  pub inline fn setTy(self: *@This(), id: []const u8, typ: *Type, aspec: AccessSpecifier) void {
+    self.env.ctx.typ_scope.insert(id, .{.typ = typ, .aspec = aspec});
   }
 
-  pub inline fn setTy(self: *@This(), id: []const u8, typ: *Type, aspec: AccessSpecifier, al: Allocator) void {
-    self.env.typ_scope.set(id, .{.typ = typ, .aspec = aspec}, al);
+  pub inline fn getTy(self: *const @This(), id: []const u8) ?TypeData {
+    return self.env.ctx.lookupTyp(id);
   }
 
-  pub fn getTy(self: *const @This(), id: []const u8) ?TypeData {
-    return self.env.typ_scope.get(id);
+  pub inline fn getIdTyOnly(self: *const @This(), id: []const u8) ?*Type {
+    return self.env.ctx.lookupInVarScope(id);
   }
 
-  pub fn getTyOnly(self: *const @This(), id: []const u8) ?*Type {
-    if (self.env.typ_scope.get(id)) |td| {
-      return td.typ;
-    }
-    return null;
+  pub inline fn getTyOnly(self: *const @This(), id: []const u8) ?*Type {
+    return self.env.ctx.lookupInTypScope(id);
   }
 
   pub inline fn toType(self: @This()) Type {
@@ -5597,7 +5642,7 @@ pub const Tag = struct {
     pub fn clone(self: @This(), al: Allocator, map: *TypeHashMap) @This() {
       return .{
         .name = self.name,
-        .typ = self.typ._clone(map, al),
+        .typ = self.typ._clone(map, false, al),
         .tdecl = self.tdecl,
       };
     }

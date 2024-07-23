@@ -1,0 +1,42 @@
+import fs.file
+
+pub trait Debug
+  pub def fmt(): str ;
+end
+
+pub def debug{T: Debug}(args*: T)
+  let last = args.len() - 1
+  for i, arg in args
+    file.stderr.write(arg.fmt())
+    if i < last
+      file.stderr.write(' ')
+    end
+  end
+  file.stderr.write('\n')
+end
+
+pub def eprint(args*: any)
+  let last = args.len() - 1
+  for i, arg in args
+    file.stderr.write(@string(arg))
+    if i < last
+      file.stderr.write(' ')
+    end
+  end
+end
+
+pub def eprintln(args*: any)
+  let last = args.len() - 1
+  for i, arg in args
+    file.stderr.write(@string(arg))
+    if i < last
+      file.stderr.write(' ')
+    end
+  end
+  file.stderr.write('\n')
+end
+
+pub def input(message: str)
+  file.stdout.write(message)
+  return file.stdin.read()
+end

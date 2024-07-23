@@ -1,0 +1,21 @@
+import std.fs.file as f
+
+const file = try f.open('lib/std/test/test_file.veb', f.Mode.Read)
+const content = try file.read()
+file.close()
+
+assert(!!content, 'should not be empty')
+assert(content.slice(0, 23) == 'import std.fs.file as f', 'should be import')
+#content |> println
+
+match file.write_lines(['ok'])
+  case Ok(s) => println(s)
+  case Error(a) => assert(a is f.WriteError.NotOpenForWriting, 'should be same')
+end
+
+_ = try f.mkdir('lib/std/test/foobar')
+_ = try f.rmdir('lib/std/test/foobar')
+
+assert(!!f.stderr, 'stderr should exist')
+assert(!!f.stdin, 'stdin should exist')
+assert(!!f.stdout, 'stdout should exist')

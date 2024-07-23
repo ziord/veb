@@ -59,11 +59,14 @@ pub fn createNewProject(name: []const u8, al: Allocator) !void {
   //  |--main.veb
   //  |-test
   //  |--test.veb
+  //  | .gitignore
   var src_dir = try std.fs.cwd().makeOpenPath(
     try std.fs.path.join(al, &[_][]const u8{name, "src"}),
     .{}
   );
   defer src_dir.close();
+  var giti = try src_dir.createFile("../.gitignore", .{});
+  giti.close();
   var main_file = try src_dir.createFile("main.veb", .{});
   defer main_file.close();
   try main_file.writeAll("println('hello world!')");
@@ -130,7 +133,7 @@ pub fn run(filename: []const u8, lib_path: []const u8, cwd: ?[]const u8, cna: *V
   var fun = value.createScriptFn(&cpu, 0);
   var compiler = compile.Compiler.init(tych.diag, &cpu, fun, &tych.generics, cna, tych.prelude, null, null);
   try compiler.compile(ir);
-  if (comptime util.inDebugMode()) debug.Disassembler.disCode(&fun.code, filename);
+  if (util.inDebugMode) debug.Disassembler.disCode(&fun.code, filename);
   cna.deinitArena();
   cpu.boot(fun);
   try cpu.run();

@@ -15,7 +15,27 @@ pub builtin class List{T}: Iter{T}
     #[[internal]]
   end
 
-  pub def slice(start_index: num, end_index: num): List{T}
+  pub def slice(start: num, stop: num): List{T}
+    #[[internal]]
+  end
+
+  pub def clear(): void
+    #[[internal]]
+  end
+
+  pub def copy(): List{T}
+    #[[internal]]
+  end
+
+  pub def extend(list: List{T}): void
+    #[[internal]]
+  end
+
+  pub def remove(index: num): bool
+    #[[internal]]
+  end
+
+  pub def reverse(): void
     #[[internal]]
   end
 

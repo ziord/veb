@@ -1,0 +1,27 @@
+import std.fs.path
+
+# join
+const p = path.join('foo', 'bar', 'moi.txt')
+assert(p == 'foo' <> path.sep <> 'bar' <> path.sep <> 'moi.txt', 'should be same')
+
+# basename
+assert(path.basename(p) == 'moi.txt', 'should be same')
+assert(path.basename('foo/bar.txt') == 'bar.txt', 'should be same')
+
+# extension
+assert(path.extension(path.basename(p)) == '.txt', 'should be same')
+
+# split
+assert(path.split(p).len() == 3, 'should be 3')
+
+# is_file
+assert(path.is_file('lib/std/test/test_path.veb'), 'should be true')
+
+# is_dir
+assert(path.is_dir('lib/std/test'), 'should be true')
+
+# realpath
+assert(path.realpath('lib/std/test/test_path.veb').contains('test/test_path.veb'), 'should be true')
+
+# sep
+assert(!!path.sep, 'sep should exist')

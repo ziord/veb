@@ -52,6 +52,11 @@ fn CreateMap(comptime K: type, comptime V: type) type {
   };
 }
 
+pub const TypeData = struct {
+  typ: *Type,
+  aspec: tir.AccessSpecifier,
+};
+
 pub fn GenScope(comptime K: type, comptime V: type) type {
   return struct {
     decls: ds.ArrayList(ScopeMap),
@@ -167,16 +172,16 @@ pub fn GenScope(comptime K: type, comptime V: type) type {
   };
 }
 
-fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
+fn CreateTContext(comptime CoreTypScope: type, comptime TypScope: type, comptime VarScope: type) type {
   return struct {
     /// core type scope
-    core_typ_scope: TypScope,
+    core_typ_scope: CoreTypScope,
     /// type scope
     typ_scope: TypScope,
     /// scope for other declarations, e.g. variables, functions, etc.
     var_scope: VarScope,
-    /// modules in this context
-    modules: TypeList,
+    /// modules directly/indirectly linked to this context
+    modules: ds.ArrayListUnmanaged(*tir.Module),
     /// data
     data: ContextData,
 
@@ -184,10 +189,10 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
 
     pub fn init(al: Allocator) Self {
       return Self {
-        .core_typ_scope = TypScope.init(al),
+        .core_typ_scope = CoreTypScope.init(al),
         .typ_scope = TypScope.init(al),
         .var_scope = VarScope.init(al),
-        .modules = TypeList.init(),
+        .modules = ds.ArrayListUnmanaged(*tir.Module).init(),
         .data = .{},
       };
     }
@@ -218,25 +223,8 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
       self.var_scope.popScope();
     }
 
-    pub inline fn enterPreludeModule(self: *Self, typ: *Type) void {
-      assert(self.modules.isEmpty());
-      self.modules.append(typ, self.allocator());
-    }
-
-    pub inline fn enterModule(self: *Self, typ: *Type) void {
-      self.modules.append(typ, self.allocator());
-    }
-
-    pub inline fn leaveModule(self: *Self) void {
-      _ = self.modules.pop();
-    }
-
-    pub inline fn cmt(self: *Self) *Type {
-      return self.modules.getLast();
-    }
-
-    pub inline fn cm(self: *Self) *tir.Module {
-      return self.modules.getLast().module();
+    pub inline fn addModule(self: *Self, ty: *Type, al: Allocator) void {
+      self.modules.append(ty.module(), al);
     }
 
     pub inline fn copyType(self: *Self, typ: *Type) *Type {
@@ -244,16 +232,63 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
       return typ.clone(self.typ_scope.allocator());
     }
 
-    pub inline fn lookupInTypScope(self: *Self, name: []const u8) ?*Type {
-      if (self.typ_scope.lookup(name) orelse self.cm().getTyOnly(name)) |t| return t;
-      var i = self.cm().env.modules.len();
-      for (0..self.cm().env.modules.len()) |_| {
-        if (self.cm().env.modules.itemAt(i - 1).getTy(name)) |info| {
-          if (info.aspec.isPublic()) {
-            return info.typ;
+    pub fn lookupVar(self: *Self, name: []const u8) ?TypeData {
+      if (self.var_scope.lookup(name)) |info| {
+        return info;
+      }
+      var i = self.modules.len() -| 1;
+      for (0..self.modules.len()) |_| {
+        if (self.modules.itemAt(i).env.ctx.var_scope.lookup(name)) |info| {
+          // extra core module check ensures only core module item selection 
+          if (info.aspec.isPublic() and self.modules.itemAt(i).env.alias.ptr == tir.ks.CoreModuleVar.ptr) {
+            return info;
+          } else {
+            break;
           }
         }
-        i -= 1;
+        i -|= 1;
+      }
+      return null;
+    }
+
+    pub fn lookupTyp(self: *Self, name: []const u8) ?TypeData {
+      if (self.typ_scope.lookup(name)) |info| {
+        return info;
+      }
+      var i = self.modules.len() -| 1;
+      for (0..self.modules.len()) |_| {
+        if (self.modules.itemAt(i).env.ctx.typ_scope.lookup(name)) |info| {
+          return info;
+        }
+        i -|= 1;
+      }
+      return null;
+    }
+
+    pub inline fn lookupInVarScope(self: *Self, name: []const u8) ?*Type {
+      if (self.lookupVar(name)) |info| {
+        return info.typ;
+      }
+      return null;
+    }
+
+    pub inline fn lookupInTypScope(self: *Self, name: []const u8) ?*Type {
+      if (self.lookupTyp(name)) |info| {
+        return info.typ;
+      }
+      return null;
+    }
+
+    pub fn lookupInCoreTypScope(self: *Self, name: []const u8) ?*Type {
+      if (self.core_typ_scope.lookup(name)) |typ| {
+        return typ;
+      }
+      var i = self.modules.len() -| 1;
+      for (0..self.modules.len()) |_| {
+        if (self.modules.itemAt(i).env.ctx.core_typ_scope.lookup(name)) |typ| {
+          return typ;
+        }
+        i -|= 1;
       }
       return null;
     }
@@ -261,7 +296,8 @@ fn CreateTContext(comptime TypScope: type, comptime VarScope: type) type {
 }
 
 pub const Scope = GenScope([]const u8, *Type);
-pub const TContext = CreateTContext(Scope, Scope);
+pub const ScopeT = GenScope([]const u8, TypeData);
+pub const TContext = CreateTContext(Scope, ScopeT, ScopeT);
 pub const ContextData = struct {
   parent: ?*Node = null,
   flo_node: ?FlowNode =  null,
@@ -349,7 +385,7 @@ pub const TypeLinker = struct {
   }
 
   inline fn insert(self: *Self, name: []const u8, typ: *Type) void {
-    self.ctx.typ_scope.insert(name, typ);
+    self.ctx.typ_scope.insert(name, .{.typ = typ, .aspec = typ.aspec});
   }
 
   inline fn lookup(self: *Self, name: []const u8) ?*Type {
@@ -997,7 +1033,7 @@ pub const TypeLinker = struct {
   }
 
   pub fn linkTrait(self: *Self, node: *tir.StructNode, allow_generic: bool) !void {
-    assert(!node.data.builtin and node.data.fields.len == 0);
+    assert(!node.data.modifier.isBuiltin() and node.data.fields.len == 0);
     if (node.isParameterized()) {
       if (!allow_generic) return;
       self.ban_alias = node.data.params;
@@ -1025,7 +1061,9 @@ pub const TypeLinker = struct {
       .NdTVar => |*nd| {
         const typ = self.ctx.var_scope.lookup(nd.value());
         if (nd.typ == null) {
-          nd.typ = typ;
+          if (typ) |t| {
+            nd.typ = t.typ;
+          }
         }
       },
       .NdSubscript => |*nd| {

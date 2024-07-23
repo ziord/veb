@@ -19,8 +19,7 @@ const Inst = value.Inst;
 const ObjFn = value.ObjFn;
 const TypeKind = parse.TypeKind;
 const Diagnostic = diagnostics.Diagnostic;
-const GenInfo = check.TypeChecker.GenInfo;
-const GenInfoMap = ds.ArrayHashMap(*Node, *ds.ArrayList(GenInfo));
+const GenInfoMap = check.TypeChecker.GenInfoMap;
 const TypeList = check.TypeList;
 const Type = check.Type;
 const U8Writer = util.U8Writer;
@@ -582,11 +581,13 @@ pub const Compiler = struct {
   }
 
   fn scrampleGenericMethods(self: *Self) void {
-    for (self.generics.values()) |list| {
+    var itr = self.generics.iterator();
+    while (itr.next()) |entry| {
+      const list = entry.value_ptr.*;
       for (list.items()) |itm| {
         if (itm.instance.isClass()) {
           var cls = &itm.instance.NdClass;
-          if (cls.data.builtin) continue;
+          if (cls.data.modifier.isBuiltin()) continue;
           if (cls.data.methods.isNotEmpty()) {
             for (cls.data.methods.items()) |mth| {
               if (mth.isGenericMtd()) {
@@ -707,15 +708,15 @@ pub const Compiler = struct {
           _ = try self.cVarDecl(vd.getVarDecl(), reg);
         },
         .NdBasicFun => |*fun| {
-          if (fun.data.builtin) continue;
+          if (fun.data.modifier.isBuiltin()) continue;
           _ = try self.cFun(decl, false, reg);
         },
         .NdGenericFun => |*fun| {
-          if (fun.fun.getBasicFun().data.builtin) continue;
+          if (fun.fun.getBasicFun().data.modifier.isBuiltin()) continue;
           _ = try self.cFunGeneric(decl, false, reg);
         },
         .NdClass => |*cls| {
-          if (cls.data.builtin) continue;
+          if (cls.data.modifier.isBuiltin()) continue;
           _ = try self.cClass(decl, cls, reg);
         },
         else => {},
@@ -823,10 +824,27 @@ pub const Compiler = struct {
     return self.cConst(dst, value.boolVal(node.token.is(.TkTrue)), node.token.line);
   }
 
+  fn countEscapes(str: []const u8) usize {
+    var esc = @as(usize, 0);
+    var idx = @as(usize, 0);
+    while (idx < str.len): (idx += 1) {
+      const ch = str[idx];
+      if (ch == '\\') {
+        esc += 1;
+        if (str[idx + 1] == 'x' and idx + 3 < str.len and str[idx + 2] == '1' and str[idx + 3] == 'b') {
+          esc += 2;
+          idx += 2;
+        }
+        idx += 1;
+      }
+    }
+    return esc;
+  }
+
   fn cEscString(self: *Self, node: *tir.SymNode, dst: u32) u32 {
     const token = node.token;
     const val = token.lexeme();
-    const escapes = std.mem.count(u8, val, "\\");
+    const escapes = countEscapes(val);
     var buf = util.allocSlice(u8, token.len - escapes, self.allocator.getAllocator());
     var i: u32 = 0;
     var idx: u32 = 0;
@@ -842,6 +860,14 @@ pub const Compiler = struct {
           'r' => buf[i] = '\r', // '\r'
           't' => buf[i] = '\t', // '\a'
           'v' => buf[i] = 11,   // '\v'
+          'x' => { // '\x1b'
+            if (idx + 3 < val.len and val[idx + 2] == '1' and val[idx + 3] == 'b') {
+              buf[i] = 27;
+              idx += 2;
+            } else {
+              buf[i] = 'x';
+            }
+          },
           else => |ch| buf[i] = ch,
         }
         idx += 1;
@@ -1057,7 +1083,7 @@ pub const Compiler = struct {
       self.fun.code.write2ArgsInst(inst, dst, info.pos, node.token.line, self.vm);
       return dst;
     } else if (node.typ) |typ| {
-      if (typ.isClass() and !self.isSelfVar(node) and !typ.klass().builtin and typ.inferred) {
+      if (typ.isClass() and !self.isSelfVar(node) and !typ.klass().modifier.isBuiltin() and typ.inferred) {
         var cls = typ.klass();
         if (cls.isParameterized()) {
           if (!cls.isInstantiatedGeneric()) {
@@ -1469,11 +1495,15 @@ pub const Compiler = struct {
     // is_method tells us if we're currently trying to compile a class's method
     if (ast_node.isGenericFun()) return self.cFunGeneric(ast_node, is_method, _reg);
     var node = &ast_node.NdBasicFun;
+    if (node.data.modifier.isExtern()) {
+      return self.cExternFun(node, _reg);
+    }
     if (!node.data.body.block().checked) {
       if (self.inGlobalScope() and node.data.name != null) {
         _ = try self.patchGlobal(node.data.name.?);
       }
-      logger.debug("skipping compilation of unchecked function: {}", .{node});
+      const name = if (node.data.name) |name| name.lexeme() else "<lambda>";
+      logger.debug("skipping compilation of unchecked function: {s}", .{name});
       return _reg;
     }
     var reg: u32 = undefined;
@@ -1546,7 +1576,7 @@ pub const Compiler = struct {
         self.fun.code.write2ArgsInst(inst, reg, info.pos, self.lastLine(), self.vm);
       }
     }
-    if (comptime util.inDebugMode()) {
+    if (util.inDebugMode) {
       std.debug.print("\n", .{});
       Disassembler.disCode(&new_fn.code, new_fn.getName());
     }
@@ -1558,11 +1588,33 @@ pub const Compiler = struct {
     return _reg;
   }
 
+  fn cExternFun(self: *Self, node: *tir.BasicFunNode, _reg: u32) !u32 {
+    const token = node.data.name.?;
+    // for now, extern functions are only supported in global scopes
+    if (!self.inGlobalScope()) {
+      return self.compileError(token, "extern in non-global scope", .{});
+    }
+    const module = std.fs.path.basename(self.fun.module.nameStr());
+    const info = try self.patchGlobal(token);
+    const name = value.createString(self.vm, &self.vm.strings, token.lexeme(), false);
+    if (self.vm.getExtern(module, name)) |decl| {
+      self.initializeGlobal(info);
+      const reg = try self.getReg(token);
+      defer self.vreg.releaseReg(reg);
+      const dst = self.cConstNoOpt(reg, decl, token.line);
+      const inst: OpCode = if (info.isGSym) .Sgsym else .Sglb;
+      self.fun.code.write2ArgsInst(inst, dst, info.pos, self.lastLine(), self.vm);
+      return _reg;
+    } else {
+      return self.compileError(token, "could not resolve extern declaration", .{});
+    }
+  }
+
   fn cFunGeneric(self: *Self, node: *Node, is_method: bool, reg: u32) CompileError!u32 {
     if (self.generics.get(node)) |list| {
       for (list.items()) |itm| {
         var fun = &itm.instance.NdBasicFun;
-        if (fun.data.builtin) continue;
+        if (fun.data.modifier.isBuiltin()) continue;
         // only attach names in the local scope since if we're in the global scope,
         // the name has already been attached in preallocateGlobals()
         if (self.inLocalScope()) {
@@ -1780,8 +1832,7 @@ pub const Compiler = struct {
     return self.c(node.lnode.?, reg);
   }
 
-  inline fn cModuleStore(self: *Self, compiler: *Self, node: *tir.ImportNode, module: *value.ObjModule) !void {
-    const id = node.getImportNameToken();
+  inline fn cModuleStore(self: *Self, compiler: *Self, id: Token, module: *value.ObjModule) !void {
     assert(self.inGlobalScope());
     if (self.findGlobal(id)) |info| {
       if (info.isGSym) {
@@ -1792,9 +1843,9 @@ pub const Compiler = struct {
     }
   }
 
-  fn cModuleExec(self: *Self, compiler: *Self, node: *tir.ImportNode, new_fn: *ObjFn, call: value.Value) !void {
-    try self.cModuleStore(compiler, node, new_fn.module);
-    const reg = try self.getReg(node.getToken());
+  fn cModuleExec(self: *Self, compiler: *Self, id: Token, new_fn: *ObjFn, call: value.Value) !void {
+    try self.cModuleStore(compiler, id, new_fn.module);
+    const reg = try self.getReg(id);
     defer self.vreg.releaseReg(reg);
     const dst = self.cConstNoOpt(reg, call, self.lastLine());
     self.fun.code.write2ArgsInst(.Call, dst, 0, self.lastLine(), self.vm);
@@ -1809,12 +1860,13 @@ pub const Compiler = struct {
         return reg;
       }
     }
+    const id = node.getImportNameToken();
     if (modules.get(path)) |mod| {
       if (mod.compiled) {
         logger.debug("using cached module: '{s}'", .{path});
-        try self.cModuleExec(mod.compiler, node, mod.obj, mod.closure);
+        try self.cModuleExec(mod.compiler, id, mod.obj, mod.closure);
       } else {
-        try self.cModuleStore(mod.compiler, node, mod.obj.module);
+        try self.cModuleStore(mod.compiler, id, mod.obj.module);
       }
       return reg;
     }
@@ -1829,8 +1881,8 @@ pub const Compiler = struct {
     new_fn.name = new_fn.module.name;
     const call = value.objVal(value.createClosure(self.vm, new_fn));
     self.finishModule(path, call);
-    try self.cModuleExec(compiler, node, new_fn, call);
-    if (comptime util.inDebugMode()) {
+    try self.cModuleExec(compiler, id, new_fn, call);
+    if (util.inDebugMode) {
       std.debug.print("\n", .{});
       Disassembler.disCode(&new_fn.code, new_fn.getName());
     }
@@ -1842,7 +1894,7 @@ pub const Compiler = struct {
       for (list.items()) |itm| {
         if (itm.instance.isClass()) {
           var cls = &itm.instance.NdClass;
-          if (cls.data.builtin) continue;
+          if (cls.data.modifier.isBuiltin()) continue;
           // only attach names in the local scope since if we're in the global scope,
           // the name has already been attached in preallocateGlobals()
           if (self.inLocalScope()) {
@@ -1891,6 +1943,7 @@ pub const Compiler = struct {
       self.fun.code.write3ArgsInst(.Smtd, mreg, dst, @intCast(i), token.line, self.vm);
     }
     self.decScope();
+    self.popLocalVars();
     if (is_global) {
       const info = self.findGlobal(ident).?;
       const inst: OpCode = if (info.isGSym) .Sgsym else .Sglb;
@@ -1959,20 +2012,18 @@ pub const Compiler = struct {
   }
 
   fn compileModule(self: *Self, node: *Node) !void {
+    defer {
+      if (self.diag.hasErrors()) {
+        self.diag.display();
+        self.fun.code.words.len = 0;
+      }
+    }
     self.preallocateGlobals(node.NdProgram.decls);
     self.fun.module = value.createModule(self.vm, self.gsyms.len(), node.NdProgram.filepath);
     const token = node.getToken();
-    util.assert(
-      (self.cProgram(&node.NdProgram, VRegister.DummyReg) catch VRegister.DummyReg) == VRegister.DummyReg,
-      "should be a dummy register"
-    );
+    assert(try self.cProgram(&node.NdProgram, VRegister.DummyReg) == VRegister.DummyReg);
     self.fun.code.write2ArgsInst(.Ret, 0, 0, self.lastLine(), self.vm);
-    self.validateNoUnpatchedGlobals(token) catch {};
-    if (self.diag.hasErrors()) {
-      self.diag.display();
-      self.fun.code.words.len = 0;
-      return error.CompileError;
-    }
+    try self.validateNoUnpatchedGlobals(token);
   }
 
   fn setupEntryModule(self: *Self, node: *Node) void {

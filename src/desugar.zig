@@ -161,10 +161,6 @@ pub const Desugar = struct {
     var nd = node.cloneNode(self.al);
     const tree = self.mc.compile(&nd.NdMatch) catch return;
     const lnode = self.mc.lowerDecisionTree(tree, node.expr.getToken()) catch return;
-    if (comptime util.inDebugMode()) {
-      Node.render(lnode, 0, &self.u8w) catch {};
-      logger.debug("tree:\n{s}\n", .{self.u8w.items()});
-    }
     node.lnode = self.des(lnode);
   }
 
@@ -223,12 +219,6 @@ pub const Desugar = struct {
     // if $p is Error then:
     const ifs = self.newSimpleIfNode(cond, then, els);
     self.block.appendSlice(@constCast(&[_]*Node{decl, decl2, ifs}));
-    if (comptime util.inDebugMode()) {
-      Node.render(decl, 0, &self.u8w) catch {};
-      Node.render(decl2, 0, &self.u8w) catch {};
-      Node.render(ifs, 0, &self.u8w) catch {};
-      logger.debug("orelse:\n{s}\n", .{self.u8w.items()});
-    }
     return ident2;
   }
 
@@ -251,12 +241,6 @@ pub const Desugar = struct {
     const zero = self.newNumberNode(token.tkFrom("0", .TkNumber), 0);
     const decl2 = self.newVarDeclNode(vartk2, self.newDotAccessNode(ident.clone(self.al), zero, false));
     self.block.appendSlice(@constCast(&[_]*Node{decl1, ifs, decl2}));
-    if (comptime util.inDebugMode()) {
-      Node.render(decl1, 0, &self.u8w) catch {};
-      Node.render(ifs, 0, &self.u8w) catch {};
-      Node.render(decl2, 0, &self.u8w) catch {};
-      logger.debug("deref:\n{s}\n", .{self.u8w.items()});
-    }
     return self.newTVarNode(vartk2);
   }
 
@@ -398,12 +382,6 @@ pub const Desugar = struct {
           if (self.subPipeHolder(sub, case.body.node)) {
             is_sub = true;
           }
-          if (case.body.decls.len() > 0) {
-            logger.debug(
-              "[subPipeHolder] case.body.decls > 0: {}",
-              .{case.body.decls.len()}
-            );
-          }
         }
         return is_sub;
       },
@@ -430,7 +408,6 @@ pub const Desugar = struct {
         return if (nd.expr) |_expr| self.subPipeHolder(sub, _expr) else false;
       },
       else => {
-        logger.debug("[subPipeHolder] node: {}", .{expr});
         return false;
       }
     }
@@ -465,18 +442,9 @@ pub const Desugar = struct {
     // if not, turn rhs into call, and pass lhs as its sole argument
     if (self.subPipeHolder(node.left, node.right)) {
       self.deduplicateSubs(node.left);
-      if (comptime util.inDebugMode()) {
-        node.right.render(0, &self.u8w) catch {};
-        logger.debug("pipeline:\n{s}", .{self.u8w.items()});
-      }
       return node.right;
     }
-    var res = self.newCallNode(node.right, &[_]*Node{node.left});
-    if (comptime util.inDebugMode()) {
-      res.render(0, &self.u8w) catch {};
-      logger.debug("pipeline:\n{s}", .{self.u8w.items()});
-    }
-    return res;
+    return self.newCallNode(node.right, &[_]*Node{node.left});
   }
 
   fn desConcat(self: *Desugar, node: *tir.BinaryNode) *Node {

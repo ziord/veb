@@ -1,0 +1,147 @@
+pub type Mode =
+  | Read
+  | Write
+  | Plus
+
+pub alias Fd = num
+
+pub type OpenError = 
+  | FileNotFound
+  | PathAlreadyExists
+  | SharingViolation
+  | BadPathName
+  | NotDir
+  | NoSpaceLeft
+  | FileTooBig
+  | AccessDenied
+  | NameTooLong
+  | PipeBusy
+  | SymLinkLoop
+  | InvalidUtf8
+  | ReadOnlyFileSystem
+  | Unexpected
+
+pub type ReadError =
+  | InputOutput
+  | SystemResources
+  | IsDir
+  | OperationAborted
+  | BrokenPipe
+  | ConnectionResetByPeer
+  | ConnectionTimedOut
+  | NotOpenForReading
+  | SocketNotConnected
+  | AccessDenied
+  | EndOfFile
+  | Unexpected
+
+pub type WriteError =
+  | DiskQuota
+  | FileTooBig
+  | InputOutput
+  | NoSpaceLeft
+  | DeviceBusy
+  | InvalidArgument
+  | AccessDenied
+  | BrokenPipe
+  | SystemResources
+  | OperationAborted
+  | NotOpenForWriting
+  | Unexpected
+
+pub type DeleteError =
+  | DirNotEmpty
+  | FileNotFound
+  | BadPathName
+  | NotDir
+  | IsDir
+  | AccessDenied
+  | NameTooLong
+  | FileBusy
+  | SymLinkLoop
+  | InvalidUtf8
+  | ReadOnlyFileSystem
+  | Unexpected
+
+pub alias RenameError = OpenError
+
+type State = Opened | Closed
+
+extern def open_file(path: str, mode: Mode): Result{Fd, OpenError} ;
+
+extern def read_file(fd: Fd): Result{str, ReadError} ;
+
+extern def write_file(fd: Fd, s: str): Result{num, WriteError} ;
+
+extern def close_file(fd: Fd): void ;
+
+extern def get_stderr(): Fd ;
+
+extern def get_stdout(): Fd ;
+
+extern def get_stdin(): Fd ;
+
+pub extern def mkdir(path: str): Result{void, OpenError} ;
+
+pub extern def rmdir(path: str): Result{void, DeleteError} ;
+
+pub extern def rmfile(path: str): Result{void, DeleteError} ;
+
+pub extern def ls(path: str): Result{List{str}, OpenError} ;
+
+pub extern def rename(old: str, new: str): Result{void, RenameError} ;
+
+pub def open(path: str, mode: Mode)
+  const fd = try open_file(path, mode)
+  return Ok(File(fd, path))
+end
+
+pub class File
+  fd: Fd
+  pt: str
+  st: State = Opened
+
+  def init(fd: Fd, path: str)
+    self.fd = fd
+    self.pt = path
+  end
+
+  pub def path()
+    return self.pt
+  end
+
+  pub def close(): void
+    if self.st == State.Closed
+      return
+    end
+    close_file(self.fd)
+    self.st = State.Closed
+  end
+
+  pub def read(): Result{str, ReadError}
+    if self.st == State.Closed
+      return (
+        Error(NotOpenForReading as ReadError)
+        as Result{str, ReadError}
+      )
+    end
+    return read_file(self.fd)
+  end
+
+  pub def write(s: str): Result{num, WriteError}
+    return write_file(self.fd, s)
+  end
+
+  pub def write_lines(lines: List{str}): Result{num, WriteError}
+    let bytes = 0
+    for line in lines
+      bytes += try write_file(self.fd, line)
+      bytes += try write_file(self.fd, '\n')
+    end
+    return Ok(bytes)
+  end
+end
+
+pub const stdin = File(get_stdin(), '<stdin>')
+pub const stdout = File(get_stdout(), '<stdout>')
+pub const stderr = File(get_stderr(), '<stderr>')

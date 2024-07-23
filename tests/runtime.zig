@@ -5177,34 +5177,34 @@ test "traits <Iterator.reduce>" {
   try doRuntimeTest(src);
 }
 
-test "traits <std.collections.range>" {
+test "traits <std.iter.range>" {
   const src =
-  \\ import std.collections
-  \\ collections.range(1, Just(12), Just(2)).iter().count()
+  \\ import std.iter
+  \\ iter.range(1, Just(12), Just(2)).iter().count()
   \\ |> assert(* == 6, 'should be 6')
   \\
-  \\ collections.range(1, Just(12), None).iter().count()
+  \\ iter.range(1, Just(12), None).iter().count()
   \\ |> assert(* == 11, 'should be 6')
   \\
-  \\ let r = collections.range(1, Just(12), None)
+  \\ let r = iter.range(1, Just(12), None)
   \\ assert(r.next().?? == 1, 'should be 1')
   \\ assert(r.next().?? == 2, 'should be 2')
   \\
-  \\ let r = collections.range(1, Just(12), None).iter()
+  \\ let r = iter.range(1, Just(12), None).iter()
   \\ assert(r.next().?? == 1, 'should be 1')
   \\ assert(r.next().?? == 2, 'should be 2')
   ;
   try doRuntimeTest(src);
 }
 
-test "traits <std.collections.zip>" {
+test "traits <std.iter.zip>" {
   const src =
   \\ import std
-  \\ std.collections.zip([1, 2, 3, 4].iter(), ['a', 'b', 'c'].iter())
+  \\ std.iter.zip([1, 2, 3, 4].iter(), ['a', 'b', 'c'].iter())
   \\  .iter().count()
   \\ |> assert(* == 3, 'should be 3')
   \\
-  \\ let r = std.collections.zip([1, 2, 3].iter(), ['a', 'b', 'c', 'd'].iter())
+  \\ let r = std.iter.zip([1, 2, 3].iter(), ['a', 'b', 'c', 'd'].iter())
   \\ assert(r[0][0] == 1, 'should be 1')
   \\ assert(r[0][1] == 'a', 'should be a')
   \\ assert(r[-1][0] == 3, 'should be 1')
@@ -5213,9 +5213,9 @@ test "traits <std.collections.zip>" {
   try doRuntimeTest(src);
 }
 
-test "traits <std.collections.range & Iterator.zip>" {
+test "traits <std.iter.range & Iterator.zip>" {
   const src =
-  \\ import std.collections as c
+  \\ import std.iter as c
   \\ let k = [10, 11, 12, 13]
   \\ let r = k.iter().zip(c.range(1, Just(12), Just(2)).iter())
   \\ assert(r.len() == 4, 'should be 4')
@@ -5274,8 +5274,8 @@ test "parameter resolution" {
 
 test "for loop" {
   const src =
-  \\ import std.collections
-  \\ const range = collections.range
+  \\ import std.iter
+  \\ const range = iter.range
   \\ let i = 'a'
   \\ let j = 'b'
   \\ let l = [] as List{fn(): num}
@@ -5347,6 +5347,194 @@ test "classes <[experimental] generic methods .2>" {
   \\ assert(res[0][1] == 'one', 'should be one')
   \\ assert(res[1][0] == 'one', 'should be one')
   \\ assert(res[1][1] == 2, 'should be 2')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "builtins <str.methods>" {
+  const src =
+  \\ const j = "this is kinda"
+  \\ # slice
+  \\ assert(j.slice(-5, -1) == 'kind', 'should be same')
+  \\ assert(j.slice(-8, -1) == 'is kind', 'should be same')
+  \\ assert(j.slice(2, 7) == 'is is', 'should be same')
+  \\ assert(j.slice(-30, -7) == '', 'should be same')
+  \\ assert(j.slice(30, 7) == '', 'should be same')
+  \\ assert(j.slice(30, 70) == '', 'should be same')
+  \\ assert(j.slice(-30, -70) == '', 'should be same')
+  \\
+  \\ # at
+  \\ assert(j.at(-3) == 'n', 'should be same')
+  \\ assert(j.at(0) == 't', 'should be same')
+  \\ assert(j.at(-1) == 'a', 'should be same')
+  \\ assert(j.at(-1) == j.at(j.len()-1), 'should be same')
+  \\ assert(j.at(127) == '', 'should be same')
+  \\ assert(j.at(-150) == '', 'should be same')
+  \\
+  \\ let x = "  this is the end of the world   "
+  \\ # strip
+  \\ assert(x.strip(" ") == 'this is the end of the world', 'should be same')
+  \\ assert('boy'.strip('boymeyer') == 'boy', 'should be same')
+  \\
+  \\ # lstrip
+  \\ assert(x.lstrip(" ") == 'this is the end of the world   ', 'should be same')
+  \\
+  \\ # rstrip
+  \\ assert(x.rstrip(" ") == '  this is the end of the world', 'should be same2')
+  \\
+  \\ let x = "this is the end of the world"
+  \\ # split
+  \\ const p = x.split(' ')
+  \\ assert(p.len() == 7, 'should be same')
+  \\ assert(p[0] == 'this', 'should be same')
+  \\ assert(p[-1] == 'world', 'should be same')
+  \\ const q = '1234'
+  \\ const p = q.split('')
+  \\ assert(p.len() == 4, 'should be 4')
+  \\ for i, e in p
+  \\  assert(e == q.at(i), 'should be same')
+  \\ end
+  \\
+  \\ # find
+  \\ assert(x.find("end").? == 12, 'should be 12')
+  \\ 
+  \\ # starts_with
+  \\ assert(x.starts_with("this"), 'should be true')
+  \\
+  \\ # ends_with
+  \\ assert(x.ends_with("world"), 'should be true')
+  \\
+  \\ # count
+  \\ assert(x.count("e") == 3, 'should be 3')
+  \\ assert(x.count("o") == 2, 'should be 2')
+  \\ assert(x.count("x") == 0, 'should be 0')
+  \\
+  \\ # upper
+  \\ assert(x.upper() == 'THIS IS THE END OF THE WORLD', 'should be same')
+  \\
+  \\ # lower
+  \\ assert(x.lower() == 'this is the end of the world', 'should be same')
+  \\
+  \\ let x = "thisistheend"
+  \\ # is_alpha
+  \\ assert(x.is_alpha(), 'should be true')
+  \\
+  \\ # is_digit
+  \\ assert(!x.is_digit(), 'is not digit')
+  \\
+  \\ # is_alnum
+  \\ assert(x.is_alnum(), 'should be true')
+  \\
+  \\ # is_ascii
+  \\ assert(x.is_ascii(), 'should be true')
+  \\
+  \\ # is_lower
+  \\ assert(x.is_lower(), 'should be true')
+  \\
+  \\ # is_upper
+  \\ assert(!x.is_upper(), 'is not lower')
+  \\
+  \\ # count
+  \\ assert(x.count("the") == 1, 'should be 1')
+  \\
+  \\ const x = "12345"
+  \\
+  \\ # is_digit
+  \\ assert(x.is_digit(), 'is digit')
+  \\
+  \\ # contains
+  \\ assert(x.contains('34'), 'is true')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "builtins <map.methods>" {
+  const src =
+  \\ const x = {'a': 1, 'b': 2, 'c': 3}
+  \\ # copy
+  \\ const y = x.copy()
+  \\ assert(x.len() == y.len(), 'should be same')
+  \\ for kv in x.items()
+  \\  assert(y[kv[0]] == kv[1], 'should be same')
+  \\ end
+  \\ 
+  \\ # clear
+  \\ x.clear()
+  \\ assert(x.len() == 0 and y.len() == 3, 'should be true')
+  \\
+  \\ # pop
+  \\ const v = y.pop('b').??
+  \\ assert(v == 2, 'should be same')
+  \\ assert(y.len() == 2, 'should be 2')
+  \\
+  \\ # set
+  \\ y.set('b', 4)
+  \\ assert(y['b'] == 4, 'should be 4')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "builtins <list.methods>" {
+  const src =
+  \\ import std.list
+  \\ const x = ['a', 'b', 'c', 'd']
+  \\ # copy
+  \\ const y = x.copy()
+  \\ assert(x.len() == y.len(), 'should be same')
+  \\ for i, v in x
+  \\  assert(y[i] == v, 'should be same')
+  \\ end
+  \\
+  \\ # pop
+  \\ const v = x.pop().??
+  \\ assert(v == 'd', 'should be d')
+  \\
+  \\ # extend
+  \\ y.extend(x)
+  \\ assert(y.len() == 7, 'should be 7')
+  \\ assert(y[-1] == 'c', 'should be c')
+  \\ assert(y[-2] == 'b', 'should be b')
+  \\ assert(y[-3] == 'a', 'should be a')
+  \\
+  \\ # clear
+  \\ x.clear()
+  \\ assert(x.len() == 0 and y.len() == 7, 'should be true')
+  \\
+  \\ # append
+  \\ y.append('e')
+  \\ assert(y.len() == 8, 'should be 8')
+  \\ assert(y[-1] == 'e', 'should be e')
+  \\
+  \\ const j = '1234'.split('')
+  \\ # list.remove
+  \\ assert(j.len() == 4, 'should be 4')
+  \\ list.remove(j, '2')
+  \\ assert(j.len() == 3, 'should be 3')
+  \\
+  \\ # reverse & list.join
+  \\ j.reverse()
+  \\ assert(list.join(j, '') == '431', 'should be same')
+  \\
+  \\ # list.find
+  \\ assert(list.find(j, '1').? == 2, 'should be 2')
+  \\ 
+  \\ let x = ['a', 'b', 'c', 'd', 'c', 'b', 'd', 'c']
+  \\ # list.join
+  \\ const p = list.join(x, ' <|> ')
+  \\ assert(p == 'a <|> b <|> c <|> d <|> c <|> b <|> d <|> c', 'should be same')
+  \\
+  \\ # list.count_with
+  \\ assert(list.count_with(x, def (a: str) => a == 'c') == 3, 'should be 3')
+  \\ let x = [1, 2, 3, 4]
+  \\ assert(list.count_with(x, def (a: num) => a == 2) == 1, 'should be 1')
+  \\
+  \\ const j = '1234'.split('')
+  \\ # list.remove_with
+  \\ list.remove_with(j, def (x: str) => x == '2')
+  \\ assert(j.len() == 3, 'should be 3')
+  \\
+  \\ # list.find_with
+  \\ assert(list.find_with(j, def (x: str) => x == '1').? == 0, 'should be 0')
   ;
   try doRuntimeTest(src);
 }

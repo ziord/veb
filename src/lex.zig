@@ -38,6 +38,7 @@ pub const Keywords = std.StaticStringMap(TokenType).initComptime(.{
   .{"trait", .TkTrait},
   .{"import", .TkImport},
   .{"orelse", .TkOrElse},
+  .{"extern", .TkExtern},
   .{"return", .TkReturn},
   .{"builtin", .TkBuiltin},
   .{"continue", .TkContinue},
@@ -146,6 +147,7 @@ pub const TokenType = enum (u8) {
   TkResult,         // result
   TkImport,         // import
   TkOrElse,         // orelse
+  TkExtern,         // extern
   TkReturn,         // return
   TkBuiltin,        // builtin
   TkContinue,       // continue
@@ -293,6 +295,7 @@ pub const TokenType = enum (u8) {
       .TkWhile => "while",
       .TkImport => "import",
       .TkOrElse => "orelse",
+      .TkExtern => "extern",
       .TkReturn => "return",
       .TkBuiltin => "builtin",
       .TkContinue => "continue",

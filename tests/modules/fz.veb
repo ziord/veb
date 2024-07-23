@@ -1,0 +1,18 @@
+import std
+const math = std.math
+const fs = std.fs
+const file = try fs.file.open('tests/modules/testing.txt', fs.file.Mode.Write)
+const bytes = try file.write_lines(
+  [
+    'this is a test',
+    'this is the second line',
+    'this is the third line',
+    'this is the fourth line',
+    @string(math.pi),
+    @string(math.tau),
+  ]
+)
+file.close()
+println('wrote', bytes, 'bytes')
+assert(bytes == 122, 'should be same')
+_ = try fs.file.rmfile(file.path())

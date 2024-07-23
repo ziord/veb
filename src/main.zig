@@ -10,21 +10,21 @@ const print = util.print;
 pub const std_options = .{.log_level = if (util.getMode() == .Debug) .debug else .info};
 
 const menu =
-" veb v" ++ util.getVersion() ++ "\n" ++
-\\ 
-\\ Usage: veb [command] [options]
+"veb v" ++ util.getVersion() ++ "\n" ++
 \\
-\\ Commands:
-\\   new       Create a new project
-\\   build     Compile and build a project
-\\   run       Run a project or execute a veb file
-\\   test      Run project tests
-\\   repl      Launch a REPL environment
-\\   check     Typecheck a project or veb file
-\\ 
-\\ Options:
-\\   -h, --help        Display help message
-\\   -v, --version     Display veb's version
+\\Usage: veb [command] [options]
+\\
+\\Commands:
+\\  new       Create a new project
+\\  build     Compile and build a project
+\\  run       Run a project or execute a veb file
+\\  test      Run project tests
+\\  repl      Launch a REPL environment
+\\  check     Typecheck a project or veb file
+\\
+\\Options:
+\\  -h, --help        Display help message
+\\  -v, --version     Display veb's version
 \\
 ;
 

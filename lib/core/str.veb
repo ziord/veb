@@ -6,4 +6,80 @@ pub builtin class str
   pub def concat(other: str): str
     #[[internal]]
   end
+
+  pub def slice(start: num, stop: num): str
+    #[[internal]]
+  end
+
+  pub def at(index: num): str
+    #[[internal]]
+  end
+
+  pub def starts_with(substr: str): bool
+    #[[internal]]
+  end
+
+  pub def ends_with(substr: str): bool
+    #[[internal]]
+  end
+
+  pub def find(substr: str): Maybe{num}
+    #[[internal]]
+  end
+
+  pub def split(sep: str): List{str}
+    #[[internal]]
+  end
+
+  pub def strip(substr: str): str
+    #[[internal]]
+  end
+
+  pub def lstrip(substr: str): str
+    #[[internal]]
+  end
+
+  pub def rstrip(substr: str): str
+    #[[internal]]
+  end
+
+  pub def is_alpha(): bool
+    #[[internal]]
+  end
+
+  pub def is_digit(): bool
+    #[[internal]]
+  end
+
+  pub def is_alnum(): bool
+    #[[internal]]
+  end
+
+  pub def is_ascii(): bool
+    #[[internal]]
+  end
+
+  pub def is_lower(): bool
+    #[[internal]]
+  end
+
+  pub def is_upper(): bool
+    #[[internal]]
+  end
+
+  pub def lower(): str
+    #[[internal]]
+  end
+
+  pub def upper(): str
+    #[[internal]]
+  end
+
+  pub def count(substr: str): num
+    #[[internal]]
+  end
+
+  pub def contains(substr: str): bool
+    #[[internal]]
+  end
 end

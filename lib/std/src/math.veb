@@ -1,0 +1,83 @@
+# adapted from zig's std.math
+## π constant
+pub const pi = 3.14159265358979323846264338327950288419716939937510
+
+## tau constant = 2π
+pub const tau = 6.283185307179586
+
+## Phi or Golden ratio constant (Φ) = (1 + sqrt(5))/2
+pub const phi = 1.6180339887498948482045868343656381177203091798057628621
+
+## Euler's number (e)
+pub const e = 2.71828182845904523536028747135266249775724709369995
+
+## log2(e)
+pub const log2e = 1.442695040888963407359924681001892137
+
+## log10(e)
+pub const log10e = 0.434294481903251827651128918916605082
+
+## ln(2)
+pub const ln2 = 0.693147180559945309417232121458176568
+
+## ln(10)
+pub const ln10 = 2.302585092994045684017991454684364208
+
+## 2/sqrt(π)
+pub const two_sqrtpi = 1.128379167095512573896158903121545172
+
+## sqrt(2)
+pub const sqrt2 = 1.414213562373095048801688724209698079
+
+## 1/sqrt(2)
+pub const one_sqrt2 = 0.707106781186547524400844362104849039
+
+## pi/180.0
+pub const rad_per_deg = 0.0174532925199432957692369076848861271344287188854172545609719144
+
+## 180.0/pi
+pub const deg_per_rad = 57.295779513082320876798154814105170332405472466564321549160243861
+
+pub extern def ceil(n: num): num ;
+
+pub extern def floor(n: num): num ;
+
+pub extern def cos(n: num): num ;
+
+pub extern def sin(n: num): num ;
+
+pub extern def tan(n: num): num ;
+
+pub extern def acos(n: num): num ;
+
+pub extern def asin(n: num): num ;
+
+pub extern def atan(n: num): num ;
+
+pub extern def cosh(n: num): num ;
+
+pub extern def sinh(n: num): num ;
+
+pub extern def tanh(n: num): num ;
+
+pub extern def acosh(n: num): num ;
+
+pub extern def asinh(n: num): num ;
+
+pub extern def atanh(n: num): num ;
+
+pub extern def sqrt(n: num): num ;
+
+pub extern def deg_to_radians(n: num): num ;
+
+pub extern def rad_to_degrees(n: num): num ;
+
+pub extern def pow(x: num, y: num): num ;
+
+pub extern def log(x: num, base: num): num ;
+
+pub extern def min(x: num, y: num): num ;
+
+pub extern def max(x: num, y: num): num ;
+
+pub extern def round(n: num, digits: num): num ;

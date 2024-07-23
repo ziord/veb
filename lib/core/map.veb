@@ -36,4 +36,16 @@ pub builtin class Map{K, V}
   pub def len(): num
     #[[internal]]
   end
+
+  pub def clear(): void
+    #[[internal]]
+  end
+
+  pub def copy(): Map{K, V}
+    #[[internal]]
+  end
+
+  pub def pop(key: K): Maybe{V}
+    #[[internal]]
+  end
 end

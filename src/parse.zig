@@ -218,6 +218,7 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkResult
     .{.bp = .Term, .prefix = null, .infix = null},                      // TkImport
     .{.bp = .Term, .prefix = null, .infix = Self.orElseExpr},           // TkOrElse
+    .{.bp = .None, .prefix = null, .infix = null},                      // TkExtern
     .{.bp = .None, .prefix = null, .infix = null},                      // TkReturn
     .{.bp = .None, .prefix = null, .infix = null},                      // TkBuiltin
     .{.bp = .None, .prefix = null, .infix = null},                      // TkContinue
@@ -1144,7 +1145,7 @@ pub const Parser = struct {
     // handle builtin list/map/tuple/err/str type
     try self.advance();
     var ty = Type.newClass(self.previous_tok.lexeme(), self.previous_tok.ty, self.allocator);
-    ty.klass().builtin = true;
+    ty.klass().modifier = .Builtin;
     return ty;
   }
 
@@ -1703,7 +1704,7 @@ pub const Parser = struct {
     }
     var func = self.newNode(.{
       .NdBasicFun = tir.BasicFunNode.init(
-        undefined, name, undefined, null, false, false, false, self.allocator
+        undefined, name, undefined, null, .None, false, false, self.allocator
       )});
     self.meta.func = func;
     var tparams: ?TypeList = null;
@@ -1740,7 +1741,7 @@ pub const Parser = struct {
         break :blk try self.blockExpr();
       }
     };
-    func.NdBasicFun.update(params, name, body, ret, false, variadic, is_pub);
+    func.NdBasicFun.update(params, name, body, ret, .None, variadic, is_pub);
     func.NdBasicFun.data.trait_fun = trait_fun;
     func.NdBasicFun.data.empty_trait_fun = semic.is(.TkSemic);
     if (tparams) |*tp| {
@@ -2350,7 +2351,7 @@ pub const Parser = struct {
     return self.newNode(.{.NdClass = tir.StructNode.init(
       ident, traits, fields.items(), methods,
       if (tparams) |tp| tp.items() else null,
-      false, false, self.allocator
+      false, .None, self.allocator
     )});
   }
 
@@ -2425,7 +2426,7 @@ pub const Parser = struct {
     return self.newNode(.{.NdTrait = tir.StructNode.init(
       ident, null, &[_]*Node{}, methods,
       if (tparams) |tp| tp.items() else null,
-      false, false, self.allocator
+      false, .None, self.allocator
     )});
   }
 
@@ -2440,20 +2441,37 @@ pub const Parser = struct {
     if (self.match(.TkClass)) {
       const node = try self.classStmt();
       node.NdClass.data.public = is_pub;
-      node.NdClass.data.builtin = true;
+      node.NdClass.data.modifier = .Builtin;
       return node;
     } else {
       const node = try self.funStmt(false, false, false, false);
       const bfun = node.getBasicFun();
       bfun.data.public = is_pub;
-      bfun.data.builtin = true;
+      bfun.data.modifier = .Builtin;
       return node;
+    }
+  }
+
+  fn externStmt(self: *Self, is_pub: bool) !*Node {
+    if (self.check(.TkDef)) {
+      // extern functions are parsed like trait methods
+      const node = try self.funStmt(false, false, false, true);
+      const bfun = node.getBasicFun();
+      bfun.data.public = is_pub;
+      bfun.data.modifier = .Extern;
+      return node;
+    } else {
+      // just err
+      try self.consume(.TkDef);
+      return undefined;
     }
   }
 
   fn pubStmt(self: *Self) !*Node {
     if (self.match(.TkBuiltin)) {
       return self.builtinStmt(true);
+    } else if (self.match(.TkExtern)) {
+      return self.externStmt(true);
     } else if (self.match(.TkClass)) {
       var node = try self.classStmt();
       node.NdClass.data.public = true;
@@ -2542,7 +2560,7 @@ pub const Parser = struct {
       // if foo.bar -> try foo/src/bar
       const first = node.data.import.name[0].lexeme();
       const end = fp[first.len + std.fs.path.sep_str.len..];
-      var tmp = std.fs.path.join(self.allocator, &[_][]const u8{first, ks.SrcDir, end}) catch "";
+      var tmp = std.fs.path.join(self.allocator, &[_][]const u8{first, end}) catch "";
       file_handle = self.resolveImportPathFromDir(tmp, dir_obj) catch null;
       if (file_handle) |handle| {
         return handle;
@@ -2579,7 +2597,7 @@ pub const Parser = struct {
     if (self.imports.get(filename)) |pg| {
       node.program = pg.node;
       node.data.import.src = pg.src;
-      logger.debug("using cached import: {s}\n", .{filename});
+      logger.debug("using cached import: {s}", .{filename});
       return;
     }
     var src = util.readFileHandle(handle.file, self.allocator) catch return error.ParseError;
@@ -2589,16 +2607,17 @@ pub const Parser = struct {
     ps.imports = self.imports;
     const fn_ = ps.diag.filename;
     ps.diag.filename = &filename;
-    defer ps.diag.filename = fn_;
+    defer {
+      // reset some of these because they're passed by value and allocations in them invalidate pointers
+      ps.diag.filename = fn_;
+      self.meta.imports = ps.meta.imports;
+      self.imports = ps.imports;
+    }
     node.program = try ps.parse(true);
+    self.diag = ps.diag;
     // we need to update this as parse() assigns the main filepath to the imported program
     node.program.NdProgram.filepath = filename;
     self.imports.set(filename, .{.node = node.program, .src = src});
-    if (comptime util.inDebugMode()) {
-      var u8w = util.U8Writer.init(ps.allocator);
-      node.program.render(0, &u8w) catch unreachable;
-      logger.debug("Import ({s}):\n{s}\n", .{filename, u8w.view()});
-    }
   }
 
   fn getImports(self: *Self) !NodeItems {
@@ -2674,6 +2693,8 @@ pub const Parser = struct {
       return self.pubStmt();
     } else if (self.match(.TkBuiltin)) {
       return self.builtinStmt(false);
+    } else if (self.match(.TkExtern)) {
+      return self.externStmt(false);
     } else if (self.isDiscardIdent()) {
       return self.discardStmt();
     }

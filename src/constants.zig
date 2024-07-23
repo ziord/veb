@@ -28,6 +28,7 @@ pub const GeneratedTypeVar = @as([]const u8, "<>");
 pub const UnderscoreVar = @as([]const u8, "_");
 pub const LenVar = @as([]const u8, "len");
 pub const ListIteratorVar = @as([]const u8, "ListIterator");
+pub const CoreModuleVar = @as([]const u8, "core");
 pub const LambdaVar = @as([]const u8, "<anon>");
 pub const ScriptVar = @as([]const u8, "<script>");
 pub const PreludeFilename = @as([]const u8, "prelude.veb");

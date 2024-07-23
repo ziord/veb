@@ -101,7 +101,7 @@ pub inline fn setStr(comptime V: type, map: *std.StringHashMap(V), key: []const 
   };
 }
 
-pub const print = if (inDebugMode()) stderr_print else stdout_print;
+pub const print = if (inDebugMode) stderr_print else stdout_print;
 
 pub fn stdout_print(comptime fmt: []const u8, args: anytype) void {
   std.io.getStdOut().writer().print(fmt, args) catch return;
@@ -120,9 +120,7 @@ pub inline fn getMode() std.builtin.Mode {
   return builtin.mode;
 }
 
-pub inline fn inDebugMode() bool {
-  return comptime (builtin.mode == .Debug);
-}
+pub const inDebugMode = (builtin.mode == .Debug);
 
 pub inline fn getVersion() []const u8 {
   return "0.1.0";

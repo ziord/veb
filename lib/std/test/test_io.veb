@@ -1,0 +1,15 @@
+import std.io
+
+io.eprint('hi world! - ')
+io.eprintln('bye world!')
+
+class MyIoFmt: io.Debug
+  pub def fmt()
+    return 'MyIoFmt()'
+  end
+end
+
+const obj = MyIoFmt()
+io.debug(obj)
+
+assert(!!io.input, 'io.input should exist')

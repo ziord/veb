@@ -116,7 +116,7 @@ fn markObject(self: *Self, obj: *Obj) void {
   if (obj.marked) return;
   obj.marked = true;
   self.gray_stack.append(obj, self.allocator);
-  if (comptime util.inDebugMode()) {
+  if (util.inDebugMode) {
     logger.debug(" [*] mark object {*} type {}", .{obj, obj.id});
     v.printValue(v.objVal(obj));
     std.debug.print("\n", .{});
@@ -134,11 +134,10 @@ fn markFiber(self: *Self, fiber: *v.ObjFiber) void {
   self.markObject(&fiber.obj);
   self.markValue(fiber.errval);
   for (fiber.frames[0..fiber.frame_len]) |frame| {
-    for (frame.stack[0..v.MAX_REGISTERS], 0..) |value, i| {
+    for (frame.stack[0..v.MAX_REGISTERS]) |value| {
       if (!v.isNothing(value)) {
         self.markValue(value);
-      } else if (v.isNothing(frame.stack[i + 1])) {
-        // FIXME: this is just a heuristic for now
+      } else {
         break;
       }
     }
@@ -170,12 +169,19 @@ fn markValueMap(self: *Self, map: *v.ValueHashMap) void {
 
 fn markCachedNames(self: *Self) void {
   self.markObject(&self.vm.names.init.obj);
+  self.markObject(&self.vm.names.ok.obj);
+  self.markObject(&self.vm.names.err.obj);
+  self.markObject(&self.vm.names.just.obj);
 }
 
 fn markRoots(self: *Self) void {
   // mark temporary roots
-  for (self.vm.temp_roots.getItems()) |obj| {
-    self.markObject(obj);
+  for (self.vm.temp_roots.getItems()) |val| {
+    self.markObject(v.asObj(val));
+  }
+  // mark externs
+  for (self.vm.externs.getItems()) |val| {
+    self.markValue(val);
   }
   // mark fiber roots
   self.markFiber(self.vm.fiber);
@@ -265,10 +271,10 @@ fn removeWhites(self: *Self) void {
   var map = &self.vm.strings;
   for (map.items[0..map.len]) |itm| {
     if (!itm.key.obj.marked) {
-      if (comptime util.inDebugMode()) {
+      std.debug.assert(map.remove(itm.key, self.vm));
+      if (util.inDebugMode) {
         const obj = itm.key.obj;
         logger.debug(" [*] removing map weakref {*} type {} val ({s})", .{&obj, obj.id, itm.key.string()});
-        std.debug.assert(map.remove(itm.key, self.vm));
       }
     }
   }

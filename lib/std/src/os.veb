@@ -1,0 +1,5 @@
+pub extern def getcwd: Result{str, str} ;
+
+pub extern def getenv(key: str): Maybe{str} ;
+
+pub extern def chdir(path: str): Result{void, str} ;

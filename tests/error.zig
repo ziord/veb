@@ -4498,10 +4498,11 @@ test "function in init method .2" {
 
 test "for loop <scopes>" {
   const src =
+  \\ import std.iter 
   \\ let i = 'a'
   \\ let j = 'b'
   \\ let l = [] as List{fn(): num}
-  \\ for i, j in range(1, Just(12), None) do
+  \\ for i, j in iter.range(1, Just(12), None) do
   \\  _ = l.append(def () => j)
   \\ end
   \\ let expected = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
@@ -4516,6 +4517,81 @@ test "for loop <scopes>" {
   });
 }
 
+test "generic call parameter mismatch .1" {
+  const src =
+  \\ class Fox{T}
+  \\   pub x: List{T}
+  \\   def init(x*: T): void
+  \\     self.x = x
+  \\   end
+  \\   pub def pulse()
+  \\     return self
+  \\   end
+  \\   pub def getGen()
+  \\     alias T = Tuple{str}
+  \\     def fun(p: T)
+  \\       return p[0]
+  \\     end
+  \\     return fun
+  \\   end
+  \\ end
+  \\ let j = Fox{'mia'}(9)
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Argument type mismatch. Expected type 'mia' but found 'num'",
+  });
+}
+
+test "generic call parameter mismatch .2" {
+  const src =
+  \\ class Fox{T}
+  \\   pub x: List{T}
+  \\   def init(x*: T): void
+  \\     self.x = x
+  \\   end
+  \\   pub def pulse()
+  \\     return self
+  \\   end
+  \\   pub def getGen()
+  \\     alias T = Tuple{str}
+  \\     def fun(p: T)
+  \\       return p[0]
+  \\     end
+  \\     return fun
+  \\   end
+  \\ end
+  \\ let j = Fox{'mia'}('miah')
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Argument type mismatch. Expected type 'mia' but found 'str'",
+  });
+}
+
+test "generic call parameter mismatch .3" {
+  const src =
+  \\ class Fox{T}
+  \\    x: List{T}
+  \\    def init(x*: T): void
+  \\      self.x = x
+  \\    end
+  \\    def pulse()
+  \\      return self
+  \\    end
+  \\    def getGen()
+  \\      def fun{T}(p: T)
+  \\        return p[0]
+  \\      end
+  \\      return fun
+  \\    end
+  \\ end
+  \\ let x = Fox{num}() # tests empty variadic args
+  \\ x.getGen()([1, 2]) |> println
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Access of private method 'getGen' outside its defining class",
+  });
+}
+
 test "const variables" {
   const src =
   \\ const i = 'a'
@@ -4524,5 +4600,29 @@ test "const variables" {
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "Cannot mutate constant type 'str'",
+  });
+}
+
+test "module lib leaks" {
+  const src =
+  \\ import std
+  \\ const fs = std.fs
+  \\ fs.file.open('goooo.txt', fs.file.Mode.Read)
+  \\ _ = fs.open()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "type '{module lib.veb}' has no property 'open'",
+  });
+}
+
+test "module privacy" {
+  const src =
+  \\ import std
+  \\ const fs = std.fs
+  \\ fs.file.open('goooo.txt', fs.file.Mode.Read)
+  \\ fs.file.open_file('px')
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Access of private module property 'open_file' outside its defining module",
   });
 }

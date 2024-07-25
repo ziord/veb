@@ -1,0 +1,9 @@
+pub type Thing = A(num) | B(str)
+
+pub const PI_RO = 0xff
+
+pub class MyClass
+  pub x: num = 12
+  pub y: str = 'oops'
+  pub z: bool = false
+end

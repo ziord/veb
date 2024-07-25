@@ -1294,7 +1294,7 @@ pub const Parser = struct {
     return typ;
   }
 
-  fn typing(self: *Self, assignable: bool) !*Node { 
+  fn typing(self: *Self, assignable: bool) !*Node {
     _ = assignable;
     const token = self.current_tok;
     return self.newNode(.{.NdType = tir.TypeNode.init(try self.tExpr(), token)});
@@ -1774,6 +1774,26 @@ pub const Parser = struct {
     return std.mem.eql(u8, chars, "_");
   }
 
+  inline fn looksLikeConstantPtn(self: *Self, chars: []const u8) bool {
+    _ = self;
+    if (chars.len < 2) return false;
+    if (!std.ascii.isUpper(chars[0])) return false;
+    for (chars[1..]) |ch| {
+      if (!std.ascii.isUpper(ch) and ch != '_') return false;
+    }
+    return true;
+  }
+
+  fn mergeConstantTokens(self: *Self, tokens: []Token) Token {
+    var list = ds.ArrayList(u8).init(self.allocator);
+    var writer = list.writer();
+    for (tokens, 0..) |tk, i| {
+      if (i > 0) _ = writer.write(".") catch 0;
+      _ = writer.write(tk.lexeme()) catch 0;
+    }
+    return tokens[0].tkFrom(list.items(), .TkIdent);
+  }
+
   inline fn errIfWildcard(self: *Self, node: *Node, msg: []const u8) void {
     if (self.isWildcardPtn(node.NdTVar.token.lexeme())) {
       self.softErrMsg(node.NdTVar.token, msg);
@@ -1978,27 +1998,57 @@ pub const Parser = struct {
       );
     }
     const id = try self.variable(false);
+    var dots: ?*Type = null;
+    var tokens = ds.ArrayList(Token).init(self.allocator);
+    if (self.check(.TkDot)) {
+      tokens.append(id.NdTVar.token);
+      var lhs = Type.newDot(Type.newVariableAToken(id.NdTVar.token, self.allocator), undefined, self.allocator);
+      while (self.match(.TkDot)) {
+        try self.consume(.TkIdent);
+        tokens.append(self.previous_tok);
+        lhs.dot().rhs = Type.newVariableAToken(self.previous_tok, self.allocator);
+        if (self.check(.TkDot)) {
+          lhs = Type.newDot(lhs, undefined, self.allocator);
+        }
+      }
+      dots = lhs;
+    }
+    if (dots != null) {
+      id.* = .{.NdTVar = tir.TVarNode.init(self.previous_tok)};
+    }
     const token = id.NdTVar.token;
     if (!self.check(.TkLBracket) and !self.check(.TkLCurly)) {
       // check if this pattern starts with uppercase
       if (!std.ascii.isUpper(token.lexeme()[0])) {
         // at this point, this is a capture_pattern
         self.assertBuiltinIdentNotInUse(token);
+        if (token.len > 1 and self.looksLikeConstantPtn(token.lexeme()[1..])) {
+          self.softWarnMsg(
+            token, "this variable begins with an '_' which prevents it from being considered as a constant pattern.\n" ++
+            "    If that isn't your intention, consider removing '_' to make it a constant pattern."
+          );
+        }
         return (
           Pattern.init(
-            ptn.Variable.init(id).toVariant(self.allocator),
+            ptn.Variable.initAll(id, dots).toVariant(self.allocator),
             token,
             .{}
           ).box(self.allocator)
         );
+      } else if (self.looksLikeConstantPtn(token.lexeme())) {
+        id.NdTVar.token = if (dots != null) self.mergeConstantTokens(tokens.items()) else token;
+        var cons = try self.literalCons(id, id.NdTVar.token);
+        cons.variant.cons.dots = dots;
+        return cons;
       } else {
-        // a possible tag type
-        const cons = ptn.Constructor.newClassCons(token.lexeme(), token.ty, id);
+        var cons = ptn.Constructor.newClassCons(token.lexeme(), token.ty, id);
+        cons.dots = dots;
         return Pattern.init(cons.toVariant(self.allocator), token, .{}).box(self.allocator);
       }
     }
     try self.consume(.TkLBracket);
     var cons = ptn.Constructor.newClassCons(token.lexeme(), token.ty, id);
+    cons.dots = dots;
     var start: Token = undefined;
     var lbl_token: Token = undefined;
     var disamb = self.getDisambiguator(u32);

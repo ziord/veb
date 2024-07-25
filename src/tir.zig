@@ -647,6 +647,7 @@ pub const TypeNode = struct {
   /// whether type resolution should be skipped or not during type checking
   skip_type_resolution: bool = false,
   tkbit: TokenBit,
+  dot: ?*Node = null,
   typ: *Type,
 
   pub inline fn init(typ: *Type, token: Token) @This() {
@@ -656,6 +657,7 @@ pub const TypeNode = struct {
   pub fn dryClone(self: *@This(), al: Allocator) *TypeNode {
     return util.box(TypeNode, .{
         .tkbit = self.tkbit,
+        .dot = self.dot,
         .typ = self.typ.clone(al),
         .from_alias_or_annotation = self.from_alias_or_annotation
       }, al);
@@ -665,6 +667,7 @@ pub const TypeNode = struct {
     return Node.new(.{
       .NdType = .{
         .tkbit = self.tkbit,
+        .dot = self.dot,
         .typ = self.typ.clone(al),
         .from_alias_or_annotation = self.from_alias_or_annotation,
         .skip_type_resolution = self.skip_type_resolution,
@@ -5148,6 +5151,20 @@ pub const Dot = struct {
 
   pub fn init(lhs: *Type, rhs: *Type) @This() {
     return .{.lhs = lhs, .rhs = rhs};
+  }
+
+  pub fn toDotAccess(self: *Dot, al: Allocator) *Node {
+    var lhs: *Node = undefined;
+    if (self.lhs.isDot()) {
+      lhs = self.lhs.dot().toDotAccess(al);
+    } else {
+      lhs = Node.new(.{.NdTVar = TVarNode.init(self.lhs.variable().value)}, al);
+    }
+    return Node.new(
+      .{.NdDotAccess = DotAccessNode.init(
+        lhs, Node.new(.{.NdTVar = TVarNode.init(self.rhs.variable().value)}, al)
+      )}, al
+    );
   }
 
   pub fn isRelatedTo(this: *Dot, other: *Type, ctx: RelationContext, al: Allocator) bool {

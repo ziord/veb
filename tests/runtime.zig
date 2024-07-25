@@ -4239,6 +4239,43 @@ test "match expressions .7 <captured rest pattern>" {
   try doRuntimeTest(src);
 }
 
+test "match constant patterns .1" {
+  const src =
+  \\ class F
+  \\ end
+  \\ 
+  \\ type FooBar = A(F) | B(num)
+  \\ 
+  \\ let a: FooBar = B(12)
+  \\ 
+  \\ match a
+  \\   case A(f) => assert(false, 'nope')
+  \\   case B(foo) => assert(foo + 5 == 17, 'should be 17')
+  \\ end
+  \\ 
+  \\ const FOO_CONST = 124
+  \\ 
+  \\ match 124
+  \\   case FOO_CONST => assert(FOO_CONST == 124, 'should be 124')
+  \\   case _ => assert(false, 'unreachable')
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
+test "match dot patterns .1" {
+  const src =
+  \\ type MyStuff = A | B | C 
+  \\
+  \\ match MyStuff.A
+  \\   case MyStuff.A => assert(true, 'should be true')
+  \\   case MyStuff.B => assert(false, 'should be false')
+  \\   case MyStuff.C => assert(false, 'should be false')
+  \\ end
+  ;
+  try doRuntimeTest(src);
+}
+
 test "aspec.<methods 1>" {
   const src =
   \\ class Fish

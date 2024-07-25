@@ -220,6 +220,7 @@ pub const Compiler = struct {
   skip_gsyms: bool = false,
   u8w: U8Writer,
   allocator: *VebAllocator,
+  al: std.mem.Allocator,
   enclosing: ?*Compiler = null,
   fun: *ObjFn,
   vm: *VM,
@@ -283,6 +284,7 @@ pub const Compiler = struct {
       .diag = diag,
       .generics = generics,
       .prelude = prel,
+      .al = al,
     };
     if (prev) |p| {
       self.adoptPrelude(p);
@@ -306,10 +308,6 @@ pub const Compiler = struct {
     return error.CompileError;
   }
 
-  inline fn alloc(self: *Self) std.mem.Allocator {
-    return self.allocator.getArenaAllocator();
-  }
-
   fn lastLine(self: *Self) u32 {
     return (
       if (self.fun.code.lines.len > 0)
@@ -320,7 +318,7 @@ pub const Compiler = struct {
   }
 
   inline fn addModule(self: *Self, name: []const u8, module: *ObjFn, compiler: *Self) void {
-    modules.set(name, .{.obj = module, .compiler = compiler}, self.alloc());
+    modules.set(name, .{.obj = module, .compiler = compiler}, self.al);
   }
 
   inline fn finishModule(self: *Self, name: []const u8, module: value.Value) void {
@@ -414,7 +412,7 @@ pub const Compiler = struct {
     const reg = try self.getReg(token);
     self.locals.append(
       LocalVar.init(self.scope, token.lexeme(), reg, @intCast(self.locals.len())),
-      self.alloc(),
+      self.al,
     );
     return reg;
   }
@@ -435,7 +433,7 @@ pub const Compiler = struct {
       }
     }
     const ret: u32 = @intCast(self.upvalues.len());
-    self.upvalues.append(Upvalue.init(index, is_local), self.alloc());
+    self.upvalues.append(Upvalue.init(index, is_local), self.al);
     return ret;
   }
 
@@ -451,7 +449,7 @@ pub const Compiler = struct {
       return .{.pos = self.addGlobalVar(token), .isGSym = false};
     }
     const idx: u32 = @intCast(self.gsyms.len());
-    self.gsyms.append(GSymVar{._name = token.val, ._name_len = token.len}, self.alloc());
+    self.gsyms.append(GSymVar{._name = token.val, ._name_len = token.len}, self.al);
     return .{.pos = idx, .isGSym = true};
   }
 
@@ -462,7 +460,7 @@ pub const Compiler = struct {
       .mempos = self.storeVar(token),
       .index = @intCast(self.globals.len()),
     };
-    self.globals.append(gvar, self.alloc());
+    self.globals.append(gvar, self.al);
     return gvar.mempos;
   }
 
@@ -571,7 +569,7 @@ pub const Compiler = struct {
 
   /// adopt prelude
   fn adoptPrelude(self: *Self, other: *Self) void {
-    const al = self.alloc();
+    const al = self.al;
     for (0..other.globals.len()) |i| {
       // store the global refs
       self.globals.append(other.globals.itemAt(i), al);
@@ -821,7 +819,9 @@ pub const Compiler = struct {
 
   fn cBool(self: *Self, node: *tir.SymNode, dst: u32) u32 {
     // load rx, memidx
-    return self.cConst(dst, value.boolVal(node.token.is(.TkTrue)), node.token.line);
+    const op: OpCode = if (node.token.is(.TkTrue)) .Ltrue else .Lfalse;
+    self.fun.code.write2ArgsInst(op, dst, 0, node.token.line, self.vm);
+    return dst;
   }
 
   fn countEscapes(str: []const u8) usize {
@@ -953,12 +953,15 @@ pub const Compiler = struct {
           else if (typ.klass().isStringClass()) @intFromEnum(TypeKind.TyString)
           else blk: {
             op = OpCode.Iscls;
-            const cls = typ.klass();
             const reg = try self.getReg(node.right.getToken());
-            var name = tir.TVarNode.init(cls.getName());
-            const rk2 = try self.cVar(&name, reg);
-            self.vreg.releaseReg(reg);
-            break :blk rk2;
+            defer self.vreg.releaseReg(reg);
+            if (node.right.NdType.dot) |dot| {
+              // dot is a DotAccess node hook created by the type checker for resolving this `is` rhs type
+              break :blk try self.c(dot, reg);
+            } else {
+              var name = tir.TVarNode.init(typ.klass().getName());
+              break :blk try self.cVar(&name, reg);
+            }
           }
         );
       } else if (typ.isNoneTy() or (typ.isTagOrClass() and typ.toc().tktype.is(.TkNone))) {
@@ -1487,7 +1490,7 @@ pub const Compiler = struct {
       node.patch_index = self.fun.code.write2ArgsSJmp(.Jmp, 0, true, node.token.line, self.vm);
     }
     const dummy = self.fun.code.words.items[node.patch_index];
-    self.loop_ctrls.append(.{.ctrl = node, .dummy = dummy}, self.alloc());
+    self.loop_ctrls.append(.{.ctrl = node, .dummy = dummy}, self.al);
     return dst;
   }
 
@@ -1631,7 +1634,7 @@ pub const Compiler = struct {
     // - get a register window
     // - compile the call expr
     // - generate the instruction: call r(func), b(argc)
-    if (node.variadic) node.transformVariadicArgs(self.alloc());
+    if (node.variadic) node.transformVariadicArgs(self.al);
     const token = node.expr.getToken();
     var ty = node.expr.getType().?;
     ty = if (ty.isTop()) ty.top().child else ty;
@@ -1757,7 +1760,7 @@ pub const Compiler = struct {
       const len = node.expr.NdDotAccess.lhs.getType().?.klass().tparamsLen();
       return self.cConstNoOpt(reg, value.numberVal(@floatFromInt(len)), node.expr.getToken().line);
     }
-    if (node.variadic) node.transformVariadicArgs(self.alloc());
+    if (node.variadic) node.transformVariadicArgs(self.al);
     const token = node.expr.getToken();
     var _dst = reg;
     const n: u32 = @intCast(node.args.len);
@@ -1875,7 +1878,7 @@ pub const Compiler = struct {
     var compiler = util.box(Compiler, Compiler.init(
       self.diag, self.vm, new_fn, self.generics,
       self.allocator, self.prelude, self, null,
-    ), self.alloc());
+    ), self.al);
     self.addModule(path, new_fn, compiler);
     try compiler.compileModule(node.program);
     new_fn.name = new_fn.module.name;
@@ -2038,6 +2041,6 @@ pub const Compiler = struct {
     self.setupEntryModule(node);
     try self.compileModule(node);
     self.fun.name = self.fun.module.name;
-    modules.clearAndFree(self.alloc());
+    modules.clearAndFree(self.al);
   }
 };

@@ -105,6 +105,8 @@ pub const Disassembler = struct {
       .Supv => _2ArgsInst("supv", word),
       .Cupv => _2ArgsInst("cupv", word),
       .Fcls => _2ArgsInst("fcls", word),
+      .Ltrue => _2ArgsInst("ltrue", word),
+      .Lfalse => _2ArgsInst("lfalse", word),
       .Bclo => {
         _2ArgsInst("bclo", word);
         const bx = Code.readBX(word);

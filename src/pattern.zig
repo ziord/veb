@@ -16,7 +16,6 @@ const Diagnostic = diagnostics.Diagnostic;
 const U8Writer = util.U8Writer;
 const addDepth = util.addDepth;
 const logger = check.logger;
-const PSlice = []*Pattern;
 pub const Patterns = ds.ArrayList(*Pattern);
 
 /// C(p1...pn)
@@ -30,8 +29,9 @@ pub const Constructor = struct {
   /// token type corresponding to `name`
   tktype: TokenType,
   tag: ConsTag,
-  args: PSlice,
+  args: []*Pattern,
   name: []const u8,
+  dots: ?*Type = null,
   node: ?*Node = null,
 
   pub fn init(name: []const u8, tktype: TokenType, builtin: bool, tag: ConsTag, rested: bool) @This() {
@@ -84,6 +84,7 @@ pub const Constructor = struct {
     const name = switch (node.*) {
       .NdBool => |*lit| lit.token.lexeme(),
       .NdString => |*lit| lit.token.lexeme(),
+      .NdTVar => |*lit| lit.token.lexeme(),
       .NdNumber => |*lit| lit.lexeme(al),
       else => unreachable
     };
@@ -106,6 +107,7 @@ pub const Constructor = struct {
     for (self.args) |arg| {
       args.appendAssumeCapacity(arg.clone(al));
     }
+    new.dots = self.dots;
     new.from_map = self.from_map;
     new.args = args.items();
     if (self.node) |nd| {
@@ -141,9 +143,14 @@ pub const Constructor = struct {
 /// x => E
 pub const Variable = struct {
   ident: *Node,
+  dots: ?*Type = null,
 
   pub fn init(ident: *Node) @This() {
     return .{.ident = ident};
+  }
+
+  pub fn initAll(ident: *Node, dots: ?*Type) @This() {
+    return .{.ident = ident, .dots = dots};
   }
 
   pub fn toVariant(self: @This(), al: Allocator) *MatchVariant {
@@ -151,7 +158,7 @@ pub const Variable = struct {
   }
 
   pub fn clone(self: @This(), al: Allocator) @This() {
-    return .{.ident = self.ident.clone(al)};
+    return .{.ident = self.ident.clone(al), .dots = self.dots};
   }
 
   pub fn render(self: *@This(), depth: usize, u8w: *U8Writer) !void {
@@ -691,7 +698,7 @@ pub const MatchCompiler = struct {
   diag: *Diagnostic,
   namegen: util.NameGen,
   u8w: U8Writer,
-  /// store (body) nodes that are not have been included in the decision ir
+  /// store (body) nodes that have not been included in the decision ir
   failure: std.AutoHashMapUnmanaged(u32, *Case),
   /// select a constructor to test based on some heuristic
   heuristic: SelectionHeuristic,
@@ -1103,6 +1110,7 @@ pub const MatchCompiler = struct {
     var new = Constructor.init(cons.cname(), cons.tktype, cons.builtin, cons.tag, cons.rested);
     new.node = cons.node;
     new.from_map = cons.from_map;
+    new.dots = cons.dots;
     self.resetIdCount();
     var args = Patterns.init(self.allocator);
     if (cons.tag != .Literal) {
@@ -1712,11 +1720,15 @@ pub const DecisionTreeTransformer = struct {
             }
             _if_body.nodes = nodes.items();
           }
-          const tyn = self.newTypeNode(Type.newTagOrClass(cons.cname(), cons.tktype, self.allocator), swch.token);
+          const tyn = self.newTypeNode(
+            cons.dots orelse Type.newTagOrClass(cons.cname(), cons.tktype, self.allocator),
+            swch.token,
+          ); 
           if_cond = Node.new(.{.NdBinary = tir.BinaryNode.init(id, tyn, isToken(swch.token))}, self.allocator);
         }
       },
       .Literal => {
+        if (cons.dots) |dt| cons.node = dt.dot().toDotAccess(self.allocator);
         if_cond = Node.new(.{
           .NdBinary = tir.BinaryNode.init(id, cons.node.?, eqeqToken(swch.token))
         }, self.allocator);

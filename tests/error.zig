@@ -502,28 +502,45 @@ test "narrowing-11" {
 }
 
 test "narrowing-12" {
-    const src =
-    \\ class Fox
-    \\    x: num = 5
-    \\    u = 12
-    \\ end
-    \\ class Foo
-    \\    x = 'ok'
-    \\    u = 13
-    \\ end
-    \\ 
-    \\ type FooFox = Fo(Foo) | Fx(Fox)
-    \\ let f: FooFox = Fo(Foo())
-    \\ if f is Fo
-    \\  assert(f.u == 13, 'this should be Foo.u')
-    \\ elif f is Fx
-    \\  assert(f.u == 12, 'this should be Fox.u')
-    \\ else
-    \\  f += 5 # never
-    \\ end
+  const src =
+  \\ class Fox
+  \\    x: num = 5
+  \\    u = 12
+  \\ end
+  \\ class Foo
+  \\    x = 'ok'
+  \\    u = 13
+  \\ end
+  \\ 
+  \\ type FooFox = Fo(Foo) | Fx(Fox)
+  \\ let f: FooFox = Fo(Foo())
+  \\ if f is Fo
+  \\  assert(f.u == 13, 'this should be Foo.u')
+  \\ elif f is Fx
+  \\  assert(f.u == 12, 'this should be Fox.u')
+  \\ else
+  \\  f += 5 # never
+  \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "Expected type 'num' + 'num' but found 'never' + 'num'",
+  });
+}
+
+test "narrowing-13" {
+  const src =
+  \\ class MyFoo
+  \\ end
+  \\ 
+  \\ if MyFoo() is MyFoo
+  \\   assert(true, 'yay')
+  \\ else
+  \\   assert(false, 'nay')
+  \\ end
+  \\ 1 / ''  # propagate warning 
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Cannot narrow type at expression",
   });
 }
 
@@ -2469,6 +2486,66 @@ test "patterns-47b.<missing patterns>" {
     "Legion(_, _, str, _)",
     "Legion(_, num, _, _)",
     "Legion(str, _, _, _)"
+  });
+}
+
+test "patterns-48.<constant patterns>" {
+  const src =
+  \\ class F
+  \\ end
+  \\ 
+  \\ type FooBar = A(F) | B(num)
+  \\ 
+  \\ let a: FooBar = B(12)
+  \\ 
+  \\ match a
+  \\   case A(f) => assert(false, 'nope')
+  \\   case B(FOO) => assert(FOO + 5 == 17, 'should be 17')
+  \\ end
+  \\ 
+  \\ const FOO_CONST = 124
+  \\
+  \\ match 124
+  \\   case FOO_CONST => assert(FOO_CONST == 124, 'should be 124')
+  \\   case ME_CONST => assert(false, 'oops')
+  \\   case _ => assert(false, 'unreachable')
+  \\ end
+  ;
+ try doErrorTest(src, 1, [_][]const u8{
+    "Could not resolve type of ident: 'ME_CONST'"
+  });
+}
+
+test "patterns-49.<constant patterns>" {
+  const src =
+  \\ const FOO_CONST = 124
+  \\
+  \\ match 124
+  \\   case FOO_CONST => assert(FOO_CONST == 124, 'should be 124')
+  \\   case _ME_CONST => assert(false, 'oops')  # not a constant, an identifier
+  \\   case _ => assert(false, 'unreachable')
+  \\ end
+  ;
+  try doErrorTest(src, 3, [_][]const u8{
+    "this variable begins with an '_' which prevents it from being considered as a constant pattern",
+    "possible redundant case",
+    "case _ => assert(false, 'unreachable')",
+  });
+}
+
+test "patterns-50.<dot patterns>" {
+  const src =
+  \\ type MyStuff = A | B | C 
+  \\
+  \\ match MyStuff.A
+  \\   case MyStuff.A => println('a')
+  \\   case MyStuff.B => println('b')
+  \\ end
+  ;
+  try doErrorTest(src, 3, [_][]const u8{
+    "inexhaustive pattern match",
+    "Remaining pattern type(s):",
+    "C",
   });
 }
 

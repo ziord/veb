@@ -340,6 +340,24 @@ pub const VM = struct {
           fp.stack[rx] = fp.closure.fun.code.values.items[bx];
           continue;
         },
+        .Ltrue => {
+          // ltrue rx, _bx
+          var rx: u32 = undefined;
+          var _bx: u32 = undefined;
+          self.read2Args(code, &rx, &_bx);
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.TRUE_VAL;
+          continue;
+        },
+        .Lfalse => {
+          // lfalse rx, _bx
+          var rx: u32 = undefined;
+          var _bx: u32 = undefined;
+          self.read2Args(code, &rx, &_bx);
+          @setRuntimeSafety(false);
+          fp.stack[rx] = vl.FALSE_VAL;
+          continue;
+        },
         .Gglb => {
           // gglb rx, bx -> r(x) = G[K(bx)]
           var rx: u32 = undefined;
@@ -722,7 +740,7 @@ pub const VM = struct {
             const name = if (vl.isStruct(val)) vl.asStruct(val).name else vl.asTag(val).name;
             fp.stack[rx] = vl.boolVal(name == vl.asString(self.RK(rk2, fp)));
           } else {
-            fp.stack[rx] = vl.boolVal(false);
+            fp.stack[rx] = vl.FALSE_VAL;
           }
           continue;
         },
@@ -736,7 +754,7 @@ pub const VM = struct {
           const val = self.RK(rk1, fp);
           const name = vl.asString(self.RK(rk2, fp));
           if (vl.isNil(val)) {
-            fp.stack[rx] = vl.boolVal(false);
+            fp.stack[rx] = vl.FALSE_VAL;
           } else if (vl.asObj(val).cls) |cls| { // cls/instance
             fp.stack[rx] = vl.boolVal(cls.name == name);
           } else if (vl.isStruct(val)) { // parameterized tags
@@ -744,7 +762,7 @@ pub const VM = struct {
           } else if (vl.isTag(val)) { // non-parameterized tags
             fp.stack[rx] = vl.boolVal(vl.asTag(val).name == name);
           } else {
-            fp.stack[rx] = vl.boolVal(false);
+            fp.stack[rx] = vl.FALSE_VAL;
           }
           continue;
         },

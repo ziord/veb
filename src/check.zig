@@ -1071,6 +1071,7 @@ pub const TypeChecker = struct {
     _ = self;
     return (
       if (typ.isTagOrClass()) .{typ.toc().name, typ.toc().tktype}
+      else if (typ.isTag()) .{typ.tag().name, typ.tag().ty}
       else .{typ.klass().data.name, typ.klass().tktype}
     );
   }
@@ -1503,6 +1504,8 @@ pub const TypeChecker = struct {
             return ty;
           },
           .Literal => {
+            // if this literal's original form is a dot type, transform to a DotAccess node
+            if (cons.dots) |dt| cons.node = dt.dot().toDotAccess(self.al);
             const ty = try self.infer(cons.node.?);
             if (!expr_ty.isRelatedTo(ty, .RCAny, al)) {
               return self.error_(
@@ -1524,9 +1527,16 @@ pub const TypeChecker = struct {
           },
           .Other => {
             // Other represents a user defined constructor
-            var typ = try self.lookupName(&cons.node.?.NdTVar, true);
+            var token: Token = undefined;
+            var typ: *Type = undefined;
+            if (cons.dots) |dt| {
+              token = dt.dot().rhs.variable().token();
+              typ = try self.linker.resolve(dt, token);
+            } else {
+              token = cons.node.?.getToken();
+              typ = try self.lookupName(token, true);
+            }
             if (typ.isClass()) {
-              const token = cons.node.?.getToken();
               var ty = self.copyType(try self.getClassType(expr_ty, typ, token));
               try self.resolveType(ty, token, al);
               const tyname = self.getTypename(ty);
@@ -1607,7 +1617,6 @@ pub const TypeChecker = struct {
               }
               return ty;
             } else if (typ.isTag()) {
-              const token = cons.node.?.getToken();
               const tyname = self.getTypename(typ);
               const info = if (cons.rested) " or more" else "";
               const len = cons.args.len;
@@ -2489,6 +2498,16 @@ pub const TypeChecker = struct {
     if (!node.right.NdType.skip_type_resolution) {
       try self.resolveType(ty, node.right.getToken(), self.al);
     }
+    // TagOrClass compiles to `istoc` which is kinda slow, try to see if we can optimize
+    // it to a more direct check:
+    if (ty.isTagOrClass()) {
+      if (lhsTy.isTaggedUnion() or lhsTy.isTag()) {
+        ty.* = Type.newTag(ty.toc().name, ty.toc().tktype); // `istag`
+      } else if (lhsTy.isClass() and !lhsTy.isClsParameterized()) {
+        ty.* = Type.newClass(ty.toc().name, ty.toc().tktype, self.al); // `iscls`
+        try self.resolveType(ty, node.right.getToken(), self.al);
+      }
+    }
     // `is` returns type bool, so reassign
     const typ = UnitTypes.bol.toType().box(self.al);
     node.typ = typ;
@@ -2730,10 +2749,19 @@ pub const TypeChecker = struct {
   }
 
   fn inferType(self: *Self, node: *tir.TypeNode) !*Type {
+    const dot: ?*Type = if (node.typ.isDot()) node.typ else null;
     try self.linker.linkType(node);
     // if this type node was found in an expression
     // (i.e. not in an alias or annotation context), then return TyType
     if (!node.from_alias_or_annotation) {
+      if (node.typ.isClass()) {
+        // compiler hook for dot types that resolve to classes for resolution during compilation
+        if (dot) |dt| {
+          const dn = dt.dot().toDotAccess(self.al);
+          node.dot = dn;
+          _ = try self.infer(dn);
+        }
+      }
       return &UnitTypes.TyTy;
     }
     return node.typ;

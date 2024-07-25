@@ -182,6 +182,14 @@ pub const OpCode = enum (u8) {
   //  [6] [8]  [18]
   Load,
 
+  // ltrue rx, _bx
+  //  [6] [8]  [18]
+  Ltrue,
+
+  // lfalse rx, _bx
+  //  [6] [8]  [18]
+  Lfalse,
+
   // bclo rx, bx
   // [6] [8] [18]
   Bclo,  // build closure

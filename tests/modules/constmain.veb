@@ -1,0 +1,41 @@
+import constlib
+
+def assert_(v: any)
+  println(v)
+  assert(!!v, 'should be true')
+end
+
+match constlib.Thing.A(5)
+  case constlib.Thing.A(5) => assert_('A')
+  case constlib.Thing.B('yh') => assert_(false)
+  case constlib.B(_) => assert_(false)
+  case constlib.A(_) => assert_(false)
+end
+
+match constlib.Thing.B('yes')
+  case constlib.Thing.A(5) => assert_(false)
+  case constlib.Thing.B('yes') => assert_('B')
+  case constlib.Thing.B(_) => assert_(false)
+  case constlib.Thing.A(_) => assert_(false)
+end
+
+match constlib.B('yes') as constlib.Thing
+  case constlib.A(5) => assert_(false)
+  case constlib.B('yes') => assert_('B')
+  case constlib.Thing.B(_) => assert_(false)
+  case constlib.Thing.A(_) => assert_(false)
+end
+
+match constlib.A(5) as constlib.Thing
+  case constlib.Thing.A(5) => assert_('A')
+  case constlib.Thing.B('yh') => assert_(false)
+  case constlib.Thing.B(_) => assert_(false)
+  case constlib.Thing.A(_) => assert_(false)
+end
+
+match constlib.MyClass()
+  case constlib.MyClass(x, y, z) => do
+    # println(x, y, z)
+    assert(x == 12 and y == 'oops' and z == false, 'should all be true')
+  end
+end

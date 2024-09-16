@@ -71,7 +71,7 @@ result == 28 |> assert(*, 'should be 28')
 ```
 
 > [!TIP]
-> Check out the [tests](https://github.com/ziord/veb/tree/master/tests) directory for more examples.
+> Check out the [tests](https://github.com/ziord/veb/tree/main/tests) directory for more examples.
 
 ### Building
 You'll need to have the [Zig compiler](https://github.com/ziglang/zig/releases) (v0.13.0) installed. \

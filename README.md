@@ -58,10 +58,10 @@ display(tree)
 ```ruby
 # functional reduce
 def reduce(l: List{num}, func: fn(num, num):num, init: num)
- return match l
-  case [] => init
-  case [h, ..t] => func(reduce(t, func, init), h)
- end
+  return match l
+    case [] => init
+    case [h, ..t] => func(reduce(t, func, init), h)
+  end
 end
 const x = [1, 2, 3, 4, 5, 6, 7]
 const add = def (a: num, b: num) => a + b

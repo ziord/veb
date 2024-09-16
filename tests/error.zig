@@ -3518,7 +3518,7 @@ test "traits <duplicate methods spec>" {
   });
 }
 
-test "traits <duplicate methods trait-chain>" {
+test "traits <duplicate methods trait-chain .1>" {
   const src =
   \\ alias String = str
   \\ trait Display
@@ -3542,10 +3542,10 @@ test "traits <duplicate methods trait-chain>" {
   \\ let f1 = Foo()
   ;
   try doErrorTest(src, 4, [_][]const u8{
-    "duplicate trait method 'fmt'",
-    "pub def fmt(): String;",
-    "Method already defined here:",
-    "pub def fmt(): num;"
+    "conflicting trait method 'fmt'",
+    "pub def fmt(): num;",
+    "Method already specified here:",
+    "pub def fmt(): String;"
   });
 }
 
@@ -4315,8 +4315,8 @@ test "parameter resolution" {
   \\ f.fun(f)
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Argument type mismatch. Expected type 'Iterator{str}' but found 'Foo instance'",
-    "Argument type mismatch. Expected type 'Iterator{str}' but found 'Foo instance'",
+    "Argument type mismatch. Expected type 'Iterator{str}' but found 'Foo'",
+    "Argument type mismatch. Expected type 'Iterator{str}' but found 'Foo'",
   });
 }
 
@@ -4701,5 +4701,112 @@ test "module privacy" {
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "Access of private module property 'open_file' outside its defining module",
+  });
+}
+
+test "trait operators <ordering .1>" {
+  const src =
+  \\ class Weight: Ord{Weight}
+  \\   val: num = 0
+  \\   def init(val: num)
+  \\     self.val = val
+  \\   end
+  \\   
+  \\   pub def eq(other: Weight)
+  \\     return self.val == other.val
+  \\   end
+  \\ end
+  \\
+  \\ Weight(12)
+  ;
+  try doErrorTest(src, 5, [_][]const u8{
+    "type 'Weight' does not satisfy the trait constraint(s) of 'Ord{Weight}'",
+    "The following method(s) are not implemented:",
+    "cmp", " : ", "fn (Weight): Greater | Less | Equal",
+  });
+}
+
+test "trait operators <ordering .1b>" {
+  const src =
+  \\ class Weight: Ord{Weight}
+  \\   val: num = 0
+  \\   def init(val: num)
+  \\     self.val = val
+  \\   end
+  \\   
+  \\   pub def cmp(other: Weight)
+  \\     return Ordering.Less
+  \\   end
+  \\ end
+  \\
+  \\ Weight(12)
+  ;
+  try doErrorTest(src, 5, [_][]const u8{
+    "type 'Weight' does not satisfy the trait constraint(s) of 'Ord{Weight}'",
+    "The following method(s) are not implemented:",
+    "eq", " : ", "fn (Weight): bool",
+  });
+}
+
+test "trait operators <ordering .2>" {
+  const src =
+  \\ class Weight
+  \\   val: num = 0
+  \\   def init(val: num)
+  \\     self.val = val
+  \\   end
+  \\ end
+  \\
+  \\ const w1 = Weight(12)
+  \\ const w2 = Weight(10)
+  \\ w1 > w2
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Expected type 'num' > 'num' but found 'Weight' > 'Weight'",
+  });
+}
+
+test "trait operators <ordering .3>" {
+  const src =
+  \\ class Weight
+  \\   val: num = 0
+  \\   def init(val: num)
+  \\     self.val = val
+  \\   end
+  \\
+  \\   pub def eq(other: Weight)
+  \\    return self.val == other.val
+  \\   end
+  \\   
+  \\   pub def cmp(other: Weight)
+  \\     if self.val > other.val
+  \\       return Ordering.Greater
+  \\     elif self.val < other.val
+  \\       return Ordering.Less
+  \\     else
+  \\       return Ordering.Equal
+  \\     end
+  \\   end
+  \\ end
+  \\ Weight(12) > Weight(10)
+  \\ Weight(12) >= Weight(10)
+  \\ Weight(12) < Weight(10)
+  \\ Weight(12) <= Weight(10)
+  ;
+  try doErrorTest(src, 4, [_][]const u8{
+    "Expected type 'num' > 'num' but found 'Weight instance' > 'Weight instance'",
+    "Expected type 'num' >= 'num' but found 'Weight instance' >= 'Weight instance'",
+    "Expected type 'num' < 'num' but found 'Weight instance' < 'Weight instance'",
+    "Expected type 'num' <= 'num' but found 'Weight instance' <= 'Weight instance'",
+  });
+}
+
+test "string iterator" {
+  const src =
+  \\ import std.string
+  \\ @iter(string.String('foo')) + 5
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Expected type 'num' + 'num' but found 'Iterator{str}' + 'num'",
   });
 }

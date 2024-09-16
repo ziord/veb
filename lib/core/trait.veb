@@ -1,0 +1,37 @@
+type Ordering = Greater | Less | Equal
+
+pub builtin trait Add{T, U}
+  pub def add(other: T): U ;
+
+  pub def concat(other: T): U
+    return self.add(other)
+  end
+end
+
+pub builtin trait Sub{T, U}
+  pub def sub(other: T): U ;
+end
+
+pub builtin trait Mul{T, U}
+  pub def mul(other: T): U ;
+end
+
+pub builtin trait Div{T, U}
+  pub def div(other: T): U ;
+end
+
+pub builtin trait Eq{K}
+  pub def eq(other: K): bool ;
+end
+
+pub builtin trait Ord{T}: Eq{T}
+  pub def cmp(other: T): Ordering ;
+end
+
+pub builtin trait Debug
+  pub def deb(): str ;
+end
+
+pub builtin trait Hash
+  pub def hash(): num ;
+end

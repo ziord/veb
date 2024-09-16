@@ -357,18 +357,44 @@ pub const OpType = enum (u8) {
       .OpGeq => OpCode.Cgeq,
       .OpEqq => OpCode.Ceqq,
       .OpNeq => OpCode.Cneq,
-      else => unreachable, // todo
+      else => unreachable,
     };
   }
 
-  pub fn isCmpOp(self: @This()) bool {
+  pub fn getTraitName(self: @This()) ?[]const u8 {
+    return switch (self) {
+      .OpAdd => "Add",
+      .OpSub => "Sub",
+      .OpDiv => "Div",
+      .OpMul => "Mul",
+      .OpEqq, .OpNeq => "Eq",
+      .OpLess, .OpGrt, .OpLeq, .OpGeq => "Ord",
+      else => null,
+    };
+  }
+
+  pub inline fn isEqCmpOp(self: @This()) bool {
+    return switch (self) {
+      .OpEqq, .OpNeq => true,
+      else => false,
+    };
+  }
+  
+  pub inline fn isOrdCmpOp(self: @This()) bool {
+    return switch (self) {
+      .OpLess, .OpGrt, .OpLeq, .OpGeq => true,
+      else => false,
+    };
+  }
+
+  pub inline fn isCmpOp(self: @This()) bool {
     return switch (self) {
       .OpLess, .OpGrt, .OpLeq, .OpGeq, .OpEqq, .OpNeq => true,
       else => false,
     };
   }
 
-  pub fn isLgcOp(self: @This()) bool {
+  pub inline fn isLgcOp(self: @This()) bool {
     return switch (self) {
       .OpAnd, .OpOr => true,
       else => false,

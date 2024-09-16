@@ -1,0 +1,69 @@
+extern def hash_string(s: str): num ;
+
+pub class String:
+  | Add{String, String}
+  | Mul{num, String}
+  | Iter{str}
+  | Eq{String}
+  | Debug
+  | Hash
+
+  chars: str
+
+  def init(chars: str)
+    self.chars = chars
+  end
+
+  pub def deb()
+    return "String(" <> self.chars <> ")"
+  end
+
+  pub def hash()
+    return hash_string(self.chars)
+  end
+
+  pub def iter()
+    return StringIterator(self.chars)
+  end
+
+  pub def eq(other: String)
+    return self.chars == other.chars
+  end
+
+  pub def add(other: String)
+    return String(self.chars <> other.chars)
+  end
+
+  pub def mul(count: num)
+    let chars = self.chars
+    let result = chars
+    while count > 1
+      result = result <> chars
+      count -= 1
+    end
+    return String(result)
+  end
+end
+
+pub class StringIterator: Iterator{str}
+  cursor: num
+  chars: str
+
+  def init(chars: str)
+    self.chars = chars
+    self.cursor = 0
+  end
+
+  pub def next()
+    if self.cursor >= self.chars.len()
+      return None
+    end
+    const i = self.cursor
+    self.cursor += 1
+    return Just(self.chars.at(i))
+  end
+end
+
+pub def new(chars: str)
+  return String(chars)
+end

@@ -922,10 +922,95 @@ pub const Compiler = struct {
     return reg;
   }
 
+  const TraitFuncs = [_][]const u8 {
+    // OpAdd OpSub OpDiv OpMul OpMod OpEqq
+    "add", "sub", "div", "mul", "_", "eq",
+    // OpNeq OpLeq OpGeq OpLess OpGrt
+    "eq", "cmp", "cmp", "cmp", "cmp",
+  };
+
+  fn getOrderingTag(self: *Self, optype: tir.OpType) Type {
+    _ = self;
+    return switch (optype) {
+      .OpGrt, .OpGeq => Type.newTag("Greater", .TkIdent),
+      .OpLess, .OpLeq  => Type.newTag("Less", .TkIdent),
+      else => unreachable,
+    };
+  }
+
+  fn cBinaryOverload(self: *Self, node: *tir.BinaryNode, optype: tir.OpType, dst: u32) CompileError!?u32 {
+    // e.g. expr + expr -> expr.add(expr)
+    const ty = node.left.getType().?.klassOrInstanceClass();
+    // for == and !=, we need to ensure the class actually implements the Eq trait
+    if (optype.isEqCmpOp() and !ty.hasBuiltinTrait("Eq")) {
+      return null;
+    } else if (optype.isOrdCmpOp() and !ty.hasBuiltinTrait("Ord")) {
+      return null;
+    }
+    const token = node.left.getToken();
+    const name = TraitFuncs[@intFromEnum(optype)];
+    var fun: Node = .{.NdTVar = tir.TVarNode.init(token.tkFrom(name, .TkIdent))};
+    var da: Node = .{.NdDotAccess = tir.DotAccessNode.init(node.left, &fun)};
+    da.NdDotAccess.typ = ty.klassOrInstanceClass().klass().getMethodTy(name);
+    if (optype.isOrdCmpOp()) {
+      // >, <, >=, <=
+      // f > g -> f.cmp(g) == Tag
+      // f.cmp(g):
+      var call: Node = .{.NdBasicCall = tir.BasicCallNode.init(&da, @constCast(&[_]*Node{node.right}))};
+      call.NdBasicCall.typ = node.typ;
+      // Tag:
+      var typ = self.getOrderingTag(optype);
+      var rhs: Node = .{.NdTVar = tir.TVarNode.initType(token.tkFrom("Less", .TkIdent), &typ)};
+      // f.cmp(g) == Tag:
+      var bin: Node = .{.NdBinary = tir.BinaryNode.init(&call, &rhs, token.tkFrom("is", .TkIs))};
+      bin.NdBinary.typ = node.typ;
+      if (optype == .OpGrt or optype == .OpLess) {
+        return try self.c(&bin, dst);
+      }
+      // >= -> > or == also, <= -> < or ==
+      // f >= g -> f.cmp(g) == Tag or f.eq(g)
+      // f.eq(g):
+      const _name = TraitFuncs[@intFromEnum(tir.OpType.OpEqq)];
+      var _fun: Node = .{.NdTVar = tir.TVarNode.init(token.tkFrom(_name, .TkIdent))};
+      var _da: Node = .{.NdDotAccess = tir.DotAccessNode.init(node.left, &_fun)};
+      _da.NdDotAccess.typ = ty.klassOrInstanceClass().klass().getMethodTy(_name);
+      var or_call: Node = .{.NdBasicCall = tir.BasicCallNode.init(&_da, @constCast(&[_]*Node{node.right}))};
+      or_call.NdBasicCall.typ = node.typ;
+      var or_bin = .{.NdBinary = tir.BinaryNode.init(&bin, &or_call, token.tkFrom("or", .TkOr))};
+      return try self.c(&or_bin, dst);
+    } else if (optype != .OpNeq) {
+      // +, -, *, /, =
+      var call = tir.CallNode.init(&da, @constCast(&[_]*Node{node.right}), null, 0, false, false, node.typ);
+      return try self.cCall(&call, dst);
+    } else {
+      // != -> expr != expr -> !(expr.eq(expr))
+      var call: Node = .{.NdBasicCall = tir.BasicCallNode.init(&da, @constCast(&[_]*Node{node.right}))};
+      call.NdBasicCall.typ = node.typ;
+      var una: Node = .{.NdUnary = tir.UnaryNode.init(&call, token.tkFrom("!", .TkExMark))};
+      return try self.c(&una, dst);
+    }
+  }
+
   fn cBinary(self: *Self, node: *tir.BinaryNode, dst: u32) CompileError!u32 {
     // handle and | or
-    if (node.optype().isLgcOp()) return try self.cLgc(node, dst);
-    if (node.optype() == .OpIs) return try self.cIs(node, dst);
+    const optype = node.optype();
+    if (optype.isLgcOp()) return try self.cLgc(node, dst);
+    if (optype == .OpIs) return try self.cIs(node, dst);
+    if (
+      optype == .OpAdd or
+      optype == .OpSub or
+      optype == .OpMul or
+      optype == .OpDiv or
+      optype.isCmpOp()
+    ) {
+      if (node.left.getType()) |ty| {
+        if (ty.isClass() or ty.isInstance()) {
+          if (try self.cBinaryOverload(node, optype, dst)) |_dst| {
+            return _dst;
+          }
+        }
+      }
+    }
     self.optimizeConstRK();
     const rk1 = try self.c(node.left, dst);
     const dst2 = try self.getReg(node.left.getToken());
@@ -1139,7 +1224,7 @@ pub const Compiler = struct {
     var prop_idx: u32 = 0;
     var op: OpCode = undefined;
     if (tmp.isClass() or tmp.isInstance()) {
-      var ty = tmp.classOrInstanceClass().klass();
+      var ty = tmp.klassOrInstanceClass().klass();
       if (ty.getFieldIndex(prop.lexeme())) |idx| {
         prop_idx = @intCast(idx);
         op = .Gfd;
@@ -1239,7 +1324,7 @@ pub const Compiler = struct {
     const token = node.lhs.getToken();
     const prop = node.rhs.getToken();
     if (typ.isInstance() or typ.isClass()) {
-      var ty = typ.classOrInstanceClass().klass();
+      var ty = typ.klassOrInstanceClass().klass();
       var prop_idx: u32 = 0;
       if (ty.getFieldIndex(prop.lexeme())) |idx| {
         prop_idx = @intCast(idx);

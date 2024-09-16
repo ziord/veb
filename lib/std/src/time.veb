@@ -36,4 +36,3 @@ pub extern def millis: num ;
 pub extern def nanos: num ;
 
 pub extern def now: num ;
-

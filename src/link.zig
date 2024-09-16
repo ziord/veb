@@ -388,12 +388,8 @@ pub const TypeLinker = struct {
     self.ctx.typ_scope.insert(name, .{.typ = typ, .aspec = typ.aspec});
   }
 
-  inline fn lookup(self: *Self, name: []const u8) ?*Type {
-    return self.ctx.lookupInTypScope(name);
-  }
-
   pub inline fn lookupTypeVariable(self: *Self, typ: *Type) ?*Type {
-    return self.lookup(typ.variable().lexeme());
+    return self.ctx.lookupInTypScope(typ.variable().lexeme());
   }
 
   fn findType(self: *Self, typ: *Type, from_gen: bool) ?*Type {
@@ -700,7 +696,7 @@ pub const TypeLinker = struct {
       } else if (eqn.isClassOrTrait()) {
         // create a temp generic type and validate if this generic substitution matches
         var tparams = TypeList.init();
-        tparams.appendSlice(eqn.klassOrTrait().tparams.?, al);
+        tparams.appendSlice(eqn.klassOrTrait().tparams orelse &[_]*Type{}, al);
         var tmp = Type.init(.{.Generic = .{.tparams = tparams, .base = eqn}});
         try self.assertGenericAliasSubMatches(&tmp, typ, debug);
         var alias = eqn.alias orelse &tmp;
@@ -723,6 +719,11 @@ pub const TypeLinker = struct {
         var slice = eqn.klassOrTrait().getSlice();
         for (0..slice.len) |i| {
           slice[i] = try self.resolveType(tparams.itemAt(i), debug, al);
+        }
+        if (eqn.isTrait()) {
+          if (eqn.trait().data.trait) |trt| {
+            eqn.trait().data.trait = try self.resolveType(trt, debug, al);
+          } 
         }
         self.using_tvar -= 1;
         self.ctx.typ_scope.popScope();
@@ -860,7 +861,7 @@ pub const TypeLinker = struct {
         var slice = new_alias.generic().getSlice();
         for (alias.generic().getSlice(), 0..) |_ty, i| {
           if (_ty.isVariable()) {
-            if (self.lookup(_ty.variable().lexeme())) |_typ| {
+            if (self.ctx.lookupInTypScope(_ty.variable().lexeme())) |_typ| {
               slice[i] = self.ctx.copyType(_typ);
             } else if (self.resolved_tvars.get(_ty.variable().lexeme())) |_typ| {
               slice[i] = self.ctx.copyType(_typ);
@@ -1033,7 +1034,7 @@ pub const TypeLinker = struct {
   }
 
   pub fn linkTrait(self: *Self, node: *tir.StructNode, allow_generic: bool) !void {
-    assert(!node.data.modifier.isBuiltin() and node.data.fields.len == 0);
+    assert(node.data.fields.len == 0);
     if (node.isParameterized()) {
       if (!allow_generic) return;
       self.ban_alias = node.data.params;

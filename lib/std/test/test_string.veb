@@ -1,0 +1,31 @@
+import std.string
+import std.io
+
+const String = string.String
+
+String('this is new') == string.String('this is new')
+|> assert(*, 'should be same')
+
+String('hello ') + string.String('world!') == String('hello world!')
+|> assert(*, 'should be same')
+
+String('hello') * 3 == String('hellohellohello')
+|> assert(*, 'should be same')
+
+io.debug(String('yay'))
+
+string.new('spongebob') == String('spongebob')
+|> assert(*, 'should be same')
+
+const chars = "this is an iteration test"
+for i, ch in String(chars)
+  assert(chars.at(i) == ch, 'should be same')
+end
+
+"hash of '" <> chars <> "' is" |> println
+String(chars).hash() |> println
+
+
+String(chars) <> String(" hahaha!") |> io.debug
+String(chars) <> String(" hahaha!") == String("this is an iteration test hahaha!")
+|> assert(*, 'should be same')

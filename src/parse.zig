@@ -2258,6 +2258,7 @@ pub const Parser = struct {
 
   fn classTypeAnnotation(self: *Self) !?*Type {
     if (self.match(.TkColon)) {
+      _ = self.match(.TkPipe);
       var ty = try self.annotation();
       if (self.check(.TkPipe)) {
         var tmp = Union.init(self.allocator);
@@ -2424,8 +2425,8 @@ pub const Parser = struct {
     if (self.check(.TkWhere) and tparams != null) {
       try self.whereClause(tparams.?);
     }
-    // NOTE: Disable trait extension for now
-    // const traits = try self.classTypeAnnotation();
+    // trait extensions are only enabled in builtin mode for now
+    const trait: ?*Type = if (self.inBuiltinMode()) try self.classTypeAnnotation() else null;
     // TraitMethods
     var mdisamb = self.getDisambiguator(Token);
     var methods = tir.NodeListU.init();
@@ -2444,7 +2445,7 @@ pub const Parser = struct {
         self.softErrMsg(token, "maximum number of method declarations exceeded");
       }
       if (token.valueEql(ks.InitVar)) {
-        self.softErrArgs(token, "A trait may not define or specify the method '{s}'", .{token.lexeme()});
+        self.softErrArgs(token, "A trait may not define or specify the method '{s}'", .{value});
       }
       // NOTE: Generic trait methods are experimental and only available in Builtin Mode!
       if (method.isGenericFun()) {
@@ -2474,7 +2475,7 @@ pub const Parser = struct {
     }
     try self.consume(.TkEnd);
     return self.newNode(.{.NdTrait = tir.StructNode.init(
-      ident, null, &[_]*Node{}, methods,
+      ident, trait, &[_]*Node{}, methods,
       if (tparams) |tp| tp.items() else null,
       false, .None, self.allocator
     )});
@@ -2492,6 +2493,11 @@ pub const Parser = struct {
       const node = try self.classStmt();
       node.NdClass.data.public = is_pub;
       node.NdClass.data.modifier = .Builtin;
+      return node;
+    } else if (self.match(.TkTrait)) {
+      const node = try self.traitStmt();
+      node.NdTrait.data.public = is_pub;
+      node.NdTrait.data.modifier = .Builtin;
       return node;
     } else {
       const node = try self.funStmt(false, false, false, false);
@@ -2789,15 +2795,16 @@ pub const Parser = struct {
   }
 
   pub fn parse(self: *Self, display_diag: bool) !*Node {
+    const is_entry = self.imports.isEmpty();
     defer {
-      if (self.diag.hasAny()) {
+      if (is_entry and self.diag.hasAny()) {
         if (display_diag) self.diag.display();
       }
     }
     try self.advance();
     const entry = self.createNode();
     // cache the entry module
-    if (self.imports.isEmpty()) {
+    if (is_entry) {
       self.diag.addSrcFile(ks.PreludeFilename, prelude.CoreSrc);
       self.diag.addSrcFile(self.diag.getFilename(), self.diag.getSrc());
       self.imports.set(self.diag.getFilename(), .{.node = entry, .src = self.diag.getSrc()});

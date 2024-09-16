@@ -5353,24 +5353,24 @@ test "classes <[experimental] generic methods .1>" {
 
 test "classes <[experimental] generic methods .2>" {
   const src =
-  \\ trait Debug{K, T}
+  \\ trait Debugs{K, T}
   \\  pub def show(x: K, y: T)
   \\    return (x, y)
   \\  end
   \\ end
   \\
-  \\ class Oops{P, Q}: Debug{P, Q}
+  \\ class Oops{P, Q}: Debugs{P, Q}
   \\ end
   \\
   \\ class Fin{X, T, V}
-  \\  where X: Debug{T, V}
+  \\  where X: Debugs{T, V}
   \\  pub x: X
   \\  def init(x: X)
   \\     self.x = x
   \\  end
   \\
   \\  pub def generate{U}(y: U, a: T, b: V)
-  \\    where U: Debug{V, T}
+  \\    where U: Debugs{V, T}
   \\    return (self.x.show(a, b), y.show(b, a))
   \\  end
   \\ end
@@ -5572,6 +5572,131 @@ test "builtins <list.methods>" {
   \\
   \\ # list.find_with
   \\ assert(list.find_with(j, def (x: str) => x == '1').? == 0, 'should be 0')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "trait operators <equality>" {
+  const src =
+  \\ class Weight: Eq{Weight}
+  \\   val: num = 0
+  \\   def init(val: num)
+  \\     self.val = val
+  \\   end
+  \\   
+  \\   pub def eq(other: Weight)
+  \\     return self.val == other.val
+  \\   end
+  \\ end
+  \\
+  \\ assert(Weight(12) == Weight(12), 'should be same')
+  \\ assert(Weight(12.5) != Weight(12), 'should not be same')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "trait operators <ordering .1>" {
+  const src =
+  \\ class Weight: Ord{Weight}
+  \\   val: num = 0
+  \\   def init(val: num)
+  \\     self.val = val
+  \\   end
+  \\   
+  \\   pub def eq(other: Weight)
+  \\     return self.val == other.val
+  \\   end
+  \\
+  \\   pub def cmp(other: Weight)
+  \\     if self.val > other.val
+  \\       return Ordering.Greater 
+  \\     elif self.val < other.val
+  \\       return Ordering.Less
+  \\     else
+  \\       return Ordering.Equal
+  \\     end
+  \\   end
+  \\ end
+  \\ 
+  \\ #assert(Weight(12) > Weight(10), 'should be greater')
+  \\ assert(Weight(12) >= Weight(10), 'should be greater or equal')
+  \\ assert(Weight(12) < Weight(10) == false, 'should not be less')
+  \\ assert(Weight(12) <= Weight(10) == false, 'should not be less or equal')
+  \\ assert(Weight(12) == Weight(12), 'should be equal')
+  \\ assert(Weight(12.5) != Weight(12), 'should not be equal')
+  \\
+  \\ let w1 = Weight(13.49)
+  \\ let w2 = Weight(13.49)
+  \\ assert(w1 == w2, 'w1 == w2')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "trait operators <ordering .2>" {
+  const src =
+  \\ class Foo: Ord{Foo}
+  \\   x: num
+  \\ 
+  \\   def init(x: num)
+  \\     self.x = x 
+  \\   end
+  \\ 
+  \\   pub def eq(other: Foo)
+  \\     return self.x == other.x
+  \\   end
+  \\   
+  \\   pub def cmp(other: Foo)
+  \\     if self.x > other.x 
+  \\       return Ordering.Greater
+  \\     elif self.x < other.x
+  \\       return Ordering.Less
+  \\     else
+  \\       return Ordering.Equal
+  \\     end
+  \\   end
+  \\ end
+  \\ 
+  \\ let f1 = Foo(12)
+  \\ let f2 = Foo(28)
+  \\ 
+  \\ assert(!(f1 == f2), 'f1 == f2')
+  \\ assert(f1 != f2, 'f1 != f2')
+  \\ assert(!(f1 > f2), 'f1 > f2')
+  \\ assert(f1 < f2, 'f1 < f2')
+  \\ assert(!(f1 >= f2), 'f1 >= f2')
+  \\ assert(f1 <= f2, 'f1 <= f2')
+  \\ assert(f2 > f1, 'f2 > f1')
+  \\ assert(!(f2 < f1), 'f2 < f1')
+  \\ assert(f2 >= f1, 'f2 >= f1')
+  \\ assert(!(f2 <= f1), 'f2 <= f1')
+  ;
+  try doRuntimeTest(src);
+}
+
+test "trait operators <add & concat>" {
+  const src =
+  \\ class Weight:
+  \\   | Add{Weight, Weight}
+  \\   | Eq{Weight}
+  \\   val: num = 0
+  \\
+  \\   def init(val: num)
+  \\     self.val = val
+  \\   end
+  \\ 
+  \\   pub def add(other: Weight)
+  \\     return Weight(self.val + other.val)
+  \\   end
+  \\
+  \\   pub def eq(other: Weight)
+  \\     return self.val == other.val
+  \\   end
+  \\ end
+  \\
+  \\ let w1 = Weight(12)
+  \\ let w2 = Weight(12)
+  \\ assert(w1 + w2 == Weight(24), 'sum should be equal')
+  \\ assert(w1 <> w2 == Weight(24), 'sum should be equal')
   ;
   try doRuntimeTest(src);
 }

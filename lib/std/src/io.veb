@@ -1,13 +1,9 @@
 import fs.file
 
-pub trait Debug
-  pub def fmt(): str ;
-end
-
 pub def debug{T: Debug}(args*: T)
   let last = args.len() - 1
   for i, arg in args
-    file.stderr.write(arg.fmt())
+    file.stderr.write(arg.deb())
     if i < last
       file.stderr.write(' ')
     end

@@ -1291,6 +1291,16 @@ fn addOsExterns(vm: *VM) void {
   addExternFn(vm, "chdir", 1, osChdir);
 }
 
+//******** [string] *********//
+// hash_string(s: str): num
+fn stringHashString(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
+  _ = argc;
+  return vl.numberIntVal(vl.asString(getArg(vm, args)).hash);
+}
+
+fn addStringExterns(vm: *VM) void {
+  addExternFn(vm, "hash_string", 1, stringHashString);
+}
 
 pub const ExternPos = struct {
   start: usize,
@@ -1303,6 +1313,7 @@ pub const ExternMapping = std.StaticStringMap(ExternPos).initComptime(.{
   .{"time.veb", .{.start = 34, .end = 38}},
   .{"path.veb", .{.start = 38, .end = 46}},
   .{"os.veb", .{.start = 46, .end = 49}},
+  .{"string.veb", .{.start = 49, .end = 50}},
 });
 
 pub fn addBuiltins(vm: *VM) void {
@@ -1331,6 +1342,7 @@ pub fn addExterns(vm: *VM) void {
   addTimeExterns(vm);
   addPathExterns(vm);
   addOsExterns(vm);
+  addStringExterns(vm);
 }
 
 pub fn addNames(vm: *VM) void {

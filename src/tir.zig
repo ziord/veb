@@ -7,6 +7,7 @@ const VebAllocator = @import("allocator.zig");
 
 pub const ks = lex.ks;
 pub const Token = lex.Token;
+pub const OpType = lex.OpType;
 pub const IdentToken = lex.IdentToken;
 pub const TokenBit = lex.TokenBit;
 pub const TokenType = lex.TokenType;
@@ -2597,7 +2598,6 @@ pub const Node = union(NodeType) {
 };
 
 
-const OpType = lex.OpType;
 const U8Writer = util.U8Writer;
 const TypeHashMap = ds.ArrayHashMapUnmanaged(*Type, *Type);
 
@@ -2921,6 +2921,7 @@ pub const Type = struct {
         }
         ret.klass().immutable = cls.immutable;
         ret.klass().data.methods = methods;
+        ret.klass().data.fields = fields;
         ret.setRestFields(self);
         return ret;
       },
@@ -2951,6 +2952,7 @@ pub const Type = struct {
         }
         ret.trait().immutable = trt.immutable;
         ret.trait().data.methods = methods;
+        ret.trait().data.fields = fields;
         ret.setRestFields(self);
         return ret;
       },
@@ -3611,8 +3613,30 @@ pub const Type = struct {
     return self.info.Recursive;
   }
 
-  pub inline fn classOrInstanceClass(self: *Self) *Type {
+  pub inline fn klassOrInstanceClass(self: *Self) *Type {
     return if (self.isInstance()) self.instance().cls else self;
+  }
+
+  /// Class/Trait: check if this class/trait has a specified trait kind
+  pub fn hasBuiltinTrait(self: *Self, kind: []const u8) bool {
+    const _trait: ?*Type = if (self.isClass()) self.klass().data.trait else self;
+    if (_trait) |trt| {
+      if (trt.isTrait()) {
+        if (trt.trait().modifier.isBuiltin() and std.mem.eql(u8, trt.trait().data.name, kind)) {
+          return true;
+        }
+        if (trt.trait().data.trait) |_trt| {
+          return _trt.hasBuiltinTrait(kind);
+        }
+      } else if (trt.isUnion()) {
+        for (trt.union_().variants.values()) |ty| {
+          if (ty.hasBuiltinTrait(kind)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
   }
 
   /// check if a class type contains a recursive type (param)
@@ -5340,7 +5364,7 @@ pub const Class = struct {
     const len = self.tparamsLen();
     const slice = util.allocSlice(*Type, len + 1, al);
     @memcpy(slice[0..len], self.getSlice());
-    slice[len] = typ.classOrInstanceClass();
+    slice[len] = typ.klassOrInstanceClass();
     self.tparams = slice;
   }
 
@@ -5380,6 +5404,19 @@ pub const Class = struct {
 
   pub fn isStringClass(self: *@This()) bool {
     return self.modifier.isBuiltin() and self.tktype == .TkStr;
+  }
+
+  /// Class:
+  pub fn hasTrait(self: *@This()) bool {
+    return self.data.trait != null;
+  }
+
+  /// Trait: check if this trait is a specified builtin trait kind
+  pub fn isBuiltinTrait(self: *@This(), kind: []const u8) bool {
+    return (
+      self.modifier.isBuiltin() and
+      std.mem.eql(u8, self.data.name, kind)
+    );
   }
 
   pub fn setAsResolved(self: *@This()) void {

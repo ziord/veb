@@ -4,7 +4,7 @@ io.eprint('hi world! - ')
 io.eprintln('bye world!')
 
 class MyIoFmt: io.Debug
-  pub def fmt()
+  pub def deb()
     return 'MyIoFmt()'
   end
 end

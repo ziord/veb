@@ -1,51 +1,27 @@
 pub type @MapEntry{K, V} = @Key(K) | @Value(V)
 
 pub builtin class Map{K, V}
-  pub def set(key: K, value: V): bool
-    #[[internal]]
-  end
+  pub def set(key: K, value: V): bool ;
 
-  pub def get(key: K): Maybe{V}
-    #[[internal]]
-  end
+  pub def get(key: K): Maybe{V} ;
 
-  pub def delete(key: K): bool
-    #[[internal]]
-  end
+  pub def delete(key: K): bool ;
 
-  pub def remove(key: K): bool
-    #[[internal]]
-  end
+  pub def remove(key: K): bool ;
 
-  pub def keys(): List{K}
-    #[[internal]]
-  end
+  pub def keys: List{K} ;
 
-  pub def values(): List{V}
-    #[[internal]]
-  end
+  pub def values: List{V} ;
  
-  pub def items(): List{Tuple{K, V}}
-    #[[internal]]
-  end
+  pub def items: List{Tuple{K, V}} ;
 
-  pub def entries(): List{@MapEntry{K, V}}
-    #[[internal]]
-  end
+  pub def entries: List{@MapEntry{K, V}} ;
 
-  pub def len(): num
-    #[[internal]]
-  end
+  pub def len: num ;
 
-  pub def clear(): void
-    #[[internal]]
-  end
+  pub def clear: void ;
 
-  pub def copy(): Map{K, V}
-    #[[internal]]
-  end
+  pub def copy: Map{K, V} ;
 
-  pub def pop(key: K): Maybe{V}
-    #[[internal]]
-  end
+  pub def pop(key: K): Maybe{V} ;
 end

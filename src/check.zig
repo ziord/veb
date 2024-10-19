@@ -4145,7 +4145,7 @@ pub const TypeChecker = struct {
       try self.flowInferEntry(graph.entry());
       _ = self.cycles.pop();
       try self.resolveType(ty.function().data.ret, node.getToken(), self.al);
-      if (!_fun.data.trait_fun or !_fun.data.empty_trait_fun) {
+      if (!_fun.data.trait_like_fun or !_fun.data.empty_trait_like_fun) {
         ty.function().data.ret = try self.inferFunReturnType(node, graph, ty);
       }
       _fun.data.body.block().checked = true;
@@ -4881,7 +4881,7 @@ pub const TypeChecker = struct {
             );
             self.softErrorFmt(fun.data.name.?, 4, 2, "Trait method specified here:", .{});
           }
-        } else if (!fun.data.empty_trait_fun) {
+        } else if (!fun.data.empty_trait_like_fun) {
           var mth_ty = tm.clone(self.al);
           if (!_node.isGenericMtd()) {
             cls.appendMethodTyAndNode(mth_ty, self.al);

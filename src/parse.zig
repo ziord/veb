@@ -1742,8 +1742,8 @@ pub const Parser = struct {
       }
     };
     func.NdBasicFun.update(params, name, body, ret, .None, variadic, is_pub);
-    func.NdBasicFun.data.trait_fun = trait_fun;
-    func.NdBasicFun.data.empty_trait_fun = semic.is(.TkSemic);
+    func.NdBasicFun.data.trait_like_fun = trait_fun;
+    func.NdBasicFun.data.empty_trait_like_fun = semic.is(.TkSemic);
     if (tparams) |*tp| {
       return self.newNode(.{.NdGenericFun = tir.GenericFunNode.init(tp.items(), func)});
     } else {
@@ -2273,7 +2273,7 @@ pub const Parser = struct {
     return null;
   }
 
-  fn classStmt(self: *Self) !*Node {
+  fn classStmt(self: *Self, builtin_cls: bool) !*Node {
     // ClassDecl           :=  "class" Ident TypeParams TypeAnnotation? ClassBody "end"
     const prev_cls = self.meta.class;
     defer self.meta.class = prev_cls;
@@ -2354,7 +2354,7 @@ pub const Parser = struct {
     var mdisamb = self.getDisambiguator(Token);
     var methods = tir.NodeListU.init();
     while (self.check(.TkDef) or self.check(.TkPub)) {
-      var method = try self.funStmt(false, true, false, false);
+      var method = try self.funStmt(false, true, false, builtin_cls);
       const token = (
         if (method.isBasicFun()) method.NdBasicFun.data.name.?
         else method.NdGenericFun.fun.NdBasicFun.data.name.?
@@ -2449,7 +2449,7 @@ pub const Parser = struct {
       }
       // NOTE: Generic trait methods are experimental and only available in Builtin Mode!
       if (method.isGenericFun()) {
-        if (method.getBasicFun().data.empty_trait_fun) {
+        if (method.getBasicFun().data.empty_trait_like_fun) {
           self.softErrMsg(
             token,
             "Generic trait methods are experimental and "
@@ -2490,7 +2490,7 @@ pub const Parser = struct {
       );
     }
     if (self.match(.TkClass)) {
-      const node = try self.classStmt();
+      const node = try self.classStmt(true);
       node.NdClass.data.public = is_pub;
       node.NdClass.data.modifier = .Builtin;
       return node;
@@ -2500,7 +2500,7 @@ pub const Parser = struct {
       node.NdTrait.data.modifier = .Builtin;
       return node;
     } else {
-      const node = try self.funStmt(false, false, false, false);
+      const node = try self.funStmt(false, false, false, true);
       const bfun = node.getBasicFun();
       bfun.data.public = is_pub;
       bfun.data.modifier = .Builtin;
@@ -2529,7 +2529,7 @@ pub const Parser = struct {
     } else if (self.match(.TkExtern)) {
       return self.externStmt(true);
     } else if (self.match(.TkClass)) {
-      var node = try self.classStmt();
+      var node = try self.classStmt(false);
       node.NdClass.data.public = true;
       return node;
     } else if (self.match(.TkTrait)) {
@@ -2740,7 +2740,7 @@ pub const Parser = struct {
     } else if (self.match(.TkReturn)) {
       return self.returnStmt();
     } else if (self.match(.TkClass)) {
-      return self.classStmt();
+      return self.classStmt(false);
     } else if (self.match(.TkTrait)) {
       return self.traitStmt();
     } else if (self.match(.TkMatch)) {

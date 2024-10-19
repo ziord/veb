@@ -29,9 +29,9 @@ pub builtin trait Ord{T}: Eq{T}
 end
 
 pub builtin trait Debug
-  pub def deb(): str ;
+  pub def deb: str ;
 end
 
 pub builtin trait Hash
-  pub def hash(): num ;
+  pub def hash: num ;
 end

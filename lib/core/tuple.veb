@@ -1,5 +1,3 @@
 pub builtin class Tuple{T}
-  pub def len(): num
-    #[[internal]]
-  end
+  pub def len: num ;
 end

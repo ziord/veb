@@ -1,23 +1,11 @@
-pub builtin def @exit(code: num): noreturn
-   #[[internal]]
-end
+pub builtin def @exit(code: num): noreturn ;
 
-pub builtin def @panic(msg: any): noreturn
-  #[[internal]]
-end
+pub builtin def @panic(msg: any): noreturn ;
 
-pub builtin def @string(val: any): str
-  #[[internal]]
-end
+pub builtin def @string(val: any): str ;
 
-pub builtin def assert(arg: bool, msg: str): void
-   #[[internal]]
-end
+pub builtin def assert(arg: bool, msg: str): void ;
 
-pub builtin def print(args*: any): void
-  #[[internal]]
-end
+pub builtin def print(args*: any): void ;
 
-pub builtin def println(args*: any): void
-  #[[internal]]
-end
+pub builtin def println(args*: any): void ;

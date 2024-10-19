@@ -1187,9 +1187,9 @@ pub const FunData = struct {
   /// be accessed within this function without errors
   allow_all_aspec: bool = false,
   /// whether this is a trait function
-  trait_fun: bool = false,
+  trait_like_fun: bool = false,
   /// whether this is a trait function with no default implementation
-  empty_trait_fun: bool = false,
+  empty_trait_like_fun: bool = false,
 
   pub inline fn init(name: ?Token, body: *Node, ret: ?*Type, modifier: DeclModifier, variadic: bool, publ: bool) @This() {
     return .{
@@ -1208,8 +1208,8 @@ pub const FunData = struct {
       .variadic = self.variadic,
       .public = self.public,
       .allow_all_aspec = self.allow_all_aspec,
-      .trait_fun = self.trait_fun,
-      .empty_trait_fun = self.empty_trait_fun,
+      .trait_like_fun = self.trait_like_fun,
+      .empty_trait_like_fun = self.empty_trait_like_fun,
     }), al);
   }
 };

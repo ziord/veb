@@ -1,47 +1,25 @@
 pub builtin class List{T}: Iter{T}
-  pub def append(item: T): void
-    #[[internal]]
-  end
+  pub def append(item: T): void ;
 
-  pub def len(): num
-    #[[internal]]
-  end
+  pub def len: num ;
 
-  pub def pop(): Maybe{T}
-    #[[internal]]
-  end
+  pub def pop: Maybe{T} ;
 
-  pub def get(index: num): Maybe{T}
-    #[[internal]]
-  end
+  pub def get(index: num): Maybe{T} ;
 
-  pub def slice(start: num, stop: num): List{T}
-    #[[internal]]
-  end
+  pub def slice(start: num, stop: num): List{T} ;
 
-  pub def clear(): void
-    #[[internal]]
-  end
+  pub def clear: void ;
 
-  pub def copy(): List{T}
-    #[[internal]]
-  end
+  pub def copy: List{T} ;
 
-  pub def extend(list: List{T}): void
-    #[[internal]]
-  end
+  pub def extend(list: List{T}): void ;
 
-  pub def remove(index: num): bool
-    #[[internal]]
-  end
+  pub def remove(index: num): bool ;
 
-  pub def reverse(): void
-    #[[internal]]
-  end
+  pub def reverse: void ;
 
-  pub def iter(): Iterator{T}
-    #[[internal]]
-  end
+  pub def iter: Iterator{T} ;
 end
 
 pub class ListIterator{T}: Iterator{T}

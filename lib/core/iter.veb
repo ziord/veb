@@ -1,5 +1,5 @@
 pub trait Iterator{U}
-  pub def next(): Maybe{U};
+  pub def next: Maybe{U} ;
 
   pub def count(): num
     let len = 0
@@ -61,7 +61,7 @@ pub trait Iterator{U}
 end
 
 pub trait Iter{T}
-  pub def iter(): Iterator{T};
+  pub def iter: Iterator{T} ;
 end
 
 pub def @iter{T}(itr: Iter{T}): Iterator{T}

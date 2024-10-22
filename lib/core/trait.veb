@@ -1,4 +1,4 @@
-type Ordering = Greater | Less | Equal
+pub type Ordering = Greater | Less | Equal
 
 pub builtin trait Add{T, U}
   pub def add(other: T): U ;

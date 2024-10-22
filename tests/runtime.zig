@@ -5700,3 +5700,24 @@ test "trait operators <add & concat>" {
   ;
   try doRuntimeTest(src);
 }
+
+test "trait type parameters" {
+  const src =
+  \\ trait Sings 
+  \\   def sing ;
+  \\ end
+  \\ 
+  \\ class Bank: Sings 
+  \\   def sing end
+  \\ end
+  \\
+  \\ def foo{T: Sings}(x: T)
+  \\   return 5
+  \\ end
+  \\
+  \\ foo(Bank()) |> assert(* == 5, 'should be 5')
+  \\ foo{Sings}(Bank()) |> assert(* == 5, 'should be 5')
+  \\ foo{Sings}(Bank() as Sings) |> assert(* == 5, 'should be 5')
+  ;
+  try doRuntimeTest(src);
+}

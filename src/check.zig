@@ -394,12 +394,6 @@ pub const TypeChecker = struct {
     self.prelude = .{.core = root, .module = typ};
   }
 
-  inline fn inCoreModule(self: *Self) bool {
-    return (
-      self.cmo.node.NdProgram.filepath.ptr == ks.PreludeFilename.ptr
-    );
-  }
-
   inline fn getTVarType(txt: []const u8, al: Allocator) *Type {
     return Type.newVariableAToken(Token.getDefaultToken().tkFrom(txt, .TkIdent), al);
   }
@@ -1400,7 +1394,7 @@ pub const TypeChecker = struct {
             }
           }
         }
-        self.matchmeta.missing.set(self.getTypename(self.buildMissingPatternTypes(ty, ident, is_direct_tst)), ident.token);
+        self.matchmeta.missing.set(self.getTypename(self.buildMissingPatternTypes(ty, ident, is_direct_tst)), node.token);
         return self.void_ty;
       }
     }
@@ -2397,9 +2391,27 @@ pub const TypeChecker = struct {
           );
         }
       }
+      if (!res.ident and (res.typ.isTag() or res.typ.isTaggedUnion())) {
+        if (res.typ.getModule()) |module| {
+          if (module != self.cmt and module != self.prelude.module) {
+            return self.error_(
+              true, node.token, "Could not resolve type of ident: '{s}'", .{node.token.lexeme()}
+            );
+          }
+        }
+      }
     } else if (!res.ident) {
       if (!res.typ.isTag() or res.typ.tag().fieldsLen() != 0) {
         self.typeReferenceError(node.token, res.typ);
+      }
+      if (res.typ.isTag() or res.typ.isTaggedUnion()) {
+        if (res.typ.getModule()) |module| {
+          if (module != self.cmt and module != self.prelude.module) {
+            return self.error_(
+              true, node.token, "Could not resolve type of ident: '{s}'", .{node.token.lexeme()}
+            );
+          }
+        }
       }
     }
     var typ = res.typ;
@@ -3290,11 +3302,13 @@ pub const TypeChecker = struct {
         for (bfun.params, 0..) |param, ppos| {
           if (param.typ.typeidEql(tvar)) {
             if (!targs[tpos].typeidEql(args_inf.itemAt(ppos).klassOrInstanceClass())) {
-              return self.errorFrom(
-                true, node.args[ppos],
-                "Type parameter mismatch. Expected type '{s}' but found '{s}'",
-                .{self.getTypename(targs[tpos]), self.getTypename(args_inf.itemAt(ppos))}
-              );
+              if (!targs[tpos].isRelatedTo(args_inf.itemAt(ppos).klassOrInstanceClass(), .RCAny, self.al)) {
+                return self.errorFrom(
+                  true, node.args[ppos],
+                  "Type parameter mismatch. Expected type '{s}' but found '{s}'",
+                  .{self.getTypename(targs[tpos]), self.getTypename(args_inf.itemAt(ppos))}
+                );
+              }
             }
           }
         }
@@ -3570,9 +3584,7 @@ pub const TypeChecker = struct {
                   .{self.getTypename(targs[tpos]), self.getTypename(args_inf.itemAt(ppos))}
                 );
               }
-
-            } 
-            else if (ppos < args_inf.len() and param.typ.hasThisVariable(tvar)) {
+            } else if (ppos < args_inf.len() and param.typ.hasThisVariable(tvar)) {
               const inf_ty = blk: {
                 const t = args_inf.itemAt(ppos).klassOrInstanceClass();
                 if (!init_mtd_id.?.NdBasicFun.data.variadic) {
@@ -4114,7 +4126,7 @@ pub const TypeChecker = struct {
       defer if (alias) |name| {
         self.ctx.typ_scope.remove(name);
       };
-      // save this module for stuff
+      // save the current module, and use this function's module for type checking
       const cmo = self.cmo;
       const cmt = self.cmt;
       const ctx = self.ctx;
@@ -4124,7 +4136,7 @@ pub const TypeChecker = struct {
         self.ctx = ctx;
         self.linker.ctx = ctx;
       }
-      self.cmt = ty.function().data.module orelse self.cmt;
+      self.cmt = ty.function().data.module.?;
       self.cmo = self.cmt.module();
       self.ctx = &self.cmo.env.ctx;
       self.linker.ctx = self.ctx;
@@ -4198,6 +4210,7 @@ pub const TypeChecker = struct {
     // we need to infer this first to handle recursive classes
     var cls = &node.NdClass;
     var ty = self.createClsType(cls, node);
+    ty.klass().data.module = self.cmt;
     if (!cls.isParameterized() and !cls.data.modifier.isBuiltin()) {
       self.ctx.enterScope();
       defer self.ctx.leaveScope();
@@ -4328,6 +4341,7 @@ pub const TypeChecker = struct {
     // we need to infer this first to handle recursive classes
     var trt = &node.NdTrait;
     var ty = self.createTraitType(trt, node);
+    ty.trait().data.module = self.cmt;
     if (!trt.isParameterized() and !trt.data.modifier.isBuiltin()) {
       self.ctx.enterScope();
       defer self.ctx.leaveScope();
@@ -4783,16 +4797,6 @@ pub const TypeChecker = struct {
     return ty;
   }
 
-  fn checkDuplicateTraitMethods(self: *Self, trt1: *tir.Trait, trt2: *tir.Trait) !void {
-    for (trt1.data.methods.items()) |tm| {
-      const name = tm.function().getName();
-      if (trt2.getMethod(name.lexeme())) |mth| {
-        self.softError(name, "conflicting trait method '{s}'", .{name.lexeme()});
-        return self.errorFmt(mth.getToken(), 4, 2, "Method already specified here:", .{});
-      }
-    }
-  }
-
   fn _checkTrait(self: *Self, ty: *Type, trait: *Type, debug: Token) TypeCheckError!void {
     // `ty` may be a Class or Trait
     if (trait.isUnion()) {
@@ -4897,9 +4901,7 @@ pub const TypeChecker = struct {
           self.missing_tmtds.append(.{name, self.getTypename(tm), cls_token});
         }
       }
-    } else if (ty.isTrait()) {
-      try self.checkDuplicateTraitMethods(ty.trait(), trait.trait());
-    } else {
+    } else if (!ty.isTrait()) {
       return self.error_(
         true, debug, "Expected trait or class type but found '{s}'",
         .{self.getTypename(ty)}
@@ -5047,7 +5049,7 @@ pub const TypeChecker = struct {
     var cunit = CompUnit.init(self.al);
     cunit.program = program;
     const typ = Type.newModule(root, node.getImportName(), self.al);
-    typ.module().env.ctx.addModule(self.prelude.module, self.al);
+    typ.module().env.ctx.addPreludeModule(self.prelude.module);
     self.modules.set(path, .{.cunit = cunit, .typ = typ}, self.al);
     return typ;
   }
@@ -5069,7 +5071,7 @@ pub const TypeChecker = struct {
     self.cmt = typ;
     self.cmo = typ.module();
     self.ctx = &self.cmo.env.ctx;
-    self.ctx.addModule(self.prelude.module, self.al);
+    self.ctx.addPreludeModule(self.prelude.module);
     self.resolving.append(typ, self.al);
     self.linker.ctx = self.ctx;
     self.ctx.enterScope();

@@ -6,7 +6,7 @@ A delightful, statically typed programming language for writing reliable softwar
 > This project is highly experimental and a work in progress. Expect bugs.
 
 ### Syntax and Examples
-**Functions**
+#### Functions
 ```ruby
 # function to compute the nth fibonacci number
 def fib(n: num)
@@ -18,7 +18,7 @@ end
 fib(35) |> println
 ```
 
-**Pattern Matching**
+#### Pattern Matching
 ```ruby
 # create and display a simple binary tree
 type Tree{a} =
@@ -53,8 +53,30 @@ let tree: Tree{num} = Node(
 )
 display(tree)
 ```
+**Exhaustiveness**
+```python
+# create and match on a tag
+type Legion = Legion(str, num, str, bool)
+let j = Legion('a', 5, 'boy', true)
+match j
+ case Legion('a', 1, 'first', true) => println('you rock!')
+end
+```
+Results in:
+```
+TypeError: inexhaustive pattern match.
 
-**Higher-order Functions**
+  .lang/test.veb.3:7:
+    match j
+          ^
+  Remaining pattern type(s):
+    Legion(_, _, _, false)
+    Legion(_, _, str, _)
+    Legion(_, num, _, _)
+    Legion(str, _, _, _)
+```
+
+#### Higher-order Functions
 ```ruby
 # functional reduce
 def reduce(l: List{num}, func: fn(num, num):num, init: num)

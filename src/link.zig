@@ -182,8 +182,10 @@ fn CreateTContext(comptime CoreTypScope: type, comptime TypScope: type, comptime
     var_scope: VarScope,
     /// modules directly/indirectly linked to this context
     modules: ds.ArrayListUnmanaged(*tir.Module),
+    /// the core/prelude module containing bultins and such
+    prelude: ?*tir.Module = null,
     /// data
-    data: ContextData,
+    data: ContextData = .{},
 
     const Self = @This();
 
@@ -193,7 +195,6 @@ fn CreateTContext(comptime CoreTypScope: type, comptime TypScope: type, comptime
         .typ_scope = TypScope.init(al),
         .var_scope = VarScope.init(al),
         .modules = ds.ArrayListUnmanaged(*tir.Module).init(),
-        .data = .{},
       };
     }
 
@@ -227,6 +228,10 @@ fn CreateTContext(comptime CoreTypScope: type, comptime TypScope: type, comptime
       self.modules.append(ty.module(), al);
     }
 
+    pub inline fn addPreludeModule(self: *Self, ty: *Type) void {
+      self.prelude = ty.module();
+    }
+
     pub inline fn copyType(self: *Self, typ: *Type) *Type {
       // we need to deepcopy typ
       return typ.clone(self.typ_scope.allocator());
@@ -236,17 +241,12 @@ fn CreateTContext(comptime CoreTypScope: type, comptime TypScope: type, comptime
       if (self.var_scope.lookup(name)) |info| {
         return info;
       }
-      var i = self.modules.len() -| 1;
-      for (0..self.modules.len()) |_| {
-        if (self.modules.itemAt(i).env.ctx.var_scope.lookup(name)) |info| {
-          // extra core module check ensures only core module item selection 
-          if (info.aspec.isPublic() and self.modules.itemAt(i).env.alias.ptr == tir.ks.CoreModuleVar.ptr) {
+      if (self.prelude) |core| {
+        if (core.env.ctx.var_scope.lookup(name)) |info| {
+          if (info.aspec.isPublic()) {
             return info;
-          } else {
-            break;
           }
         }
-        i -|= 1;
       }
       return null;
     }
@@ -255,12 +255,21 @@ fn CreateTContext(comptime CoreTypScope: type, comptime TypScope: type, comptime
       if (self.typ_scope.lookup(name)) |info| {
         return info;
       }
+      // check connected modules
       var i = self.modules.len() -| 1;
       for (0..self.modules.len()) |_| {
         if (self.modules.itemAt(i).env.ctx.typ_scope.lookup(name)) |info| {
           return info;
         }
         i -|= 1;
+      }
+      // check prelude if available
+      if (self.prelude) |core| {
+        if (core.env.ctx.typ_scope.lookup(name)) |info| {
+          if (info.aspec.isPublic()) {
+            return info;
+          }
+        }
       }
       return null;
     }
@@ -283,12 +292,19 @@ fn CreateTContext(comptime CoreTypScope: type, comptime TypScope: type, comptime
       if (self.core_typ_scope.lookup(name)) |typ| {
         return typ;
       }
+      // check connected modules
       var i = self.modules.len() -| 1;
       for (0..self.modules.len()) |_| {
         if (self.modules.itemAt(i).env.ctx.core_typ_scope.lookup(name)) |typ| {
           return typ;
         }
         i -|= 1;
+      }
+      // check prelude if available
+      if (self.prelude) |core| {
+        if (core.env.ctx.core_typ_scope.lookup(name)) |typ| {
+          return typ;
+        }
       }
       return null;
     }
@@ -929,6 +945,7 @@ pub const TypeLinker = struct {
     if (typ.isTaggedUnion()) {
       for (typ.taggedUnion().variants.items()) |ty| {
         self.insert(ty.tag().name, ty);
+        ty.tag().module = self.tc.cmt;
         if (node.alias.typ.isGeneric()) {
           ty.tag().alias_is_parameterized = true;
           if (ty.tag().fieldsLen() > 0) {
@@ -938,6 +955,7 @@ pub const TypeLinker = struct {
       }
     } else if (typ.isTag()) {
       self.insert(typ.tag().name, typ);
+      typ.tag().module = self.tc.cmt;
       if (node.alias.typ.isGeneric()) {
         typ.tag().alias_is_parameterized = true;
         if (typ.tag().fieldsLen() > 0) {

@@ -111,7 +111,7 @@ pub const Diagnostic = struct {
       i -= 1;
     }
     try self.printSquig(level, if (lexeme.len != 0) lexeme.len else 1, token);
-    self.data.append(.{.level = level, .msg = "\n\n", .token = token});
+    self.data.append(.{.level = level, .msg = "\n", .token = token});
   }
 
   fn printSquig(self: *Self, level: DiagLevel, i: usize, token: Token) !void {

@@ -2891,6 +2891,7 @@ pub const Type = struct {
           params[i] = ty._clone(map, false, al);
         }
         _fun.data.params = params;
+        _fun.data.module = fun.data.module;
         new.setRestFields(self);
         return new;
       },
@@ -2922,6 +2923,7 @@ pub const Type = struct {
         ret.klass().immutable = cls.immutable;
         ret.klass().data.methods = methods;
         ret.klass().data.fields = fields;
+        ret.klass().data.module = cls.data.module;
         ret.setRestFields(self);
         return ret;
       },
@@ -2953,6 +2955,7 @@ pub const Type = struct {
         ret.trait().immutable = trt.immutable;
         ret.trait().data.methods = methods;
         ret.trait().data.fields = fields;
+        ret.trait().data.module = trt.data.module;
         ret.setRestFields(self);
         return ret;
       },
@@ -2998,6 +3001,7 @@ pub const Type = struct {
         t.fields = params;
         t.instantiated = tg.instantiated;
         t.alias_is_parameterized = tg.alias_is_parameterized;
+        t.module = tg.module;
         ret.setRestFields(self);
         return ret;
       },
@@ -3878,6 +3882,16 @@ pub const Type = struct {
     return switch (self.info) {
       .Variable => |*name| name.lexeme(),
       else => "",
+    };
+  }
+
+  pub fn getModule(self: *Self) ?*Type {
+    return switch (self.info) {
+      .Tag => |*tg| tg.module,
+      .TaggedUnion => |*tu| tu.variants.itemAt(0).tag().module,
+      .Function => |*fun| fun.data.module,
+      .Class, .Trait => |*ct| ct.data.module,
+      else => null,
     };
   }
 
@@ -5291,6 +5305,7 @@ pub const Class = struct {
     public: bool,
     node: ?*Node,
     trait: ?*Type,
+    module: ?*Type = null,
   };
 
   pub inline fn init(
@@ -5684,6 +5699,7 @@ pub const Tag = struct {
   ty: TokenType,
   instantiated: bool = false,
   alias_is_parameterized: bool = false,
+  module: ?*Type = null,
 
 
   pub const TagFieldList = ds.ArrayListUnmanaged(TagField);
@@ -5904,5 +5920,5 @@ pub const Top = struct {
 
 comptime {
   std.debug.assert(@sizeOf(Node) == 40);
-  std.debug.assert(@sizeOf(Type) == 56);
+  std.debug.assert(@sizeOf(Type) == 64);
 }

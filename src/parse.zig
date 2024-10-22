@@ -2431,7 +2431,7 @@ pub const Parser = struct {
     var mdisamb = self.getDisambiguator(Token);
     var methods = tir.NodeListU.init();
     while (self.check(.TkDef) or self.check(.TkPub)) {
-      var method = try self.funStmt(false, true, !self.inBuiltinMode(), true);
+      var method = try self.funStmt(false, true, false, true);
       const token = (
         if (method.isBasicFun()) method.NdBasicFun.data.name.?
         else method.NdGenericFun.fun.NdBasicFun.data.name.?

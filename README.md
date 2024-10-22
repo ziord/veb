@@ -54,7 +54,7 @@ let tree: Tree{num} = Node(
 display(tree)
 ```
 **Exhaustiveness**
-```python
+```ruby
 # create and match on a tag
 type Legion = Legion(str, num, str, bool)
 let j = Legion('a', 5, 'boy', true)

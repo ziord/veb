@@ -66,7 +66,7 @@ Results in:
 ```
 TypeError: inexhaustive pattern match.
 
-  .lang/test.veb.3:7:
+  .lang/test.veb.4:7:
     match j
           ^
   Remaining pattern type(s):

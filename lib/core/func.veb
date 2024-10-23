@@ -1,6 +1,6 @@
-pub builtin def @exit(code: num): noreturn ;
+pub builtin def @exit(code: num): never ;
 
-pub builtin def @panic(msg: any): noreturn ;
+pub builtin def @panic(msg: any): never ;
 
 pub builtin def @string(val: any): str ;
 

@@ -933,7 +933,7 @@ pub const TypeLinker = struct {
 
 
   pub fn linkAlias(self: *Self, node: *tir.AliasNode) !void {
-    var aliasee = node.aliasee.typ;
+    const aliasee = node.aliasee.typ;
     var typ = node.alias.typ;
     const lexeme = (
       if (typ.isGeneric()) typ.generic().base.variable().lexeme()
@@ -962,7 +962,7 @@ pub const TypeLinker = struct {
           typ.tag().fields.?.items()[0].tdecl = node.alias.typ;
         }
       }
-    } else if (!node.alias.typ.isGeneric() and !aliasee.isNeverTy()) {
+    } else if (!node.alias.typ.isGeneric()) {
       self.diag.skipEntry();
       defer self.diag.resumeEntry();
       const ty = self.resolve(aliasee, node.aliasee.tkbit.toToken()) catch {

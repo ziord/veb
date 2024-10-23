@@ -274,7 +274,7 @@ pub const TypeChecker = struct {
     var tyNil: Type = Type.init(.{.Concrete = nil});
     var tyAny: Type = Type.newConcrete(.TyAny);
     var tyVoid: Type = Type.newConcrete(.TyVoid);
-    var tyNoReturn: Type = Type.newConcrete(.TyNoReturn);
+    var tyNever: Type = Type.newConcrete(.TyNever);
     var TyTy: Type = Type.init(.{.Top = tyty});
   };
 
@@ -2640,10 +2640,10 @@ pub const TypeChecker = struct {
     const token = Token.fromBinaryNode(node);
     var lhsTy = try self.infer(node.left);
     const rhsTy = try self.infer(node.right);
-    // Here we use the op_tkty TkNoReturn for disambiguation btwn generated assignments
+    // Here we use the op_tkty TkNever for disambiguation btwn generated assignments
     // and user defined assignments.
-    if (node.op_tkty == .TkNoReturn) {
-      if (rhsTy.isNoreturnTy()) {
+    if (node.op_tkty == .TkNever) {
+      if (rhsTy.isNeverTy()) {
         // if we are assigning Noreturn to an ident from a desugared OrElse expr,
         // where type must be Result or noreturn, just return the ident's type.
         return lhsTy;
@@ -3891,7 +3891,7 @@ pub const TypeChecker = struct {
   fn excludeNoreturn(typ: *Type, al: Allocator) *Type {
     var uni = Union.init(al);
     for (typ.union_().variants.values()) |ty| {
-      if (ty.isNoreturnTy()) {
+      if (ty.isNeverTy()) {
         continue;
       }
       uni.set(ty, al);
@@ -3955,7 +3955,7 @@ pub const TypeChecker = struct {
     var has_void_ty = false;
     var has_rec_ty = false;
     var has_non_void_ty = false;
-    var has_noreturn_ty = false;
+    var has_never_ty = false;
     var has_return_node = false;
     var i = @as(usize, 0);
     m: while (i < prev_flo_nodes.len()) : (i += 1) {
@@ -3973,16 +3973,16 @@ pub const TypeChecker = struct {
               has_rec_ty = true;
             } else if (ty.isVoidTy()) {
               has_void_ty = true;
-            } else if (ty.isNoreturnTy()) {
-              has_noreturn_ty = true;
+            } else if (ty.isNeverTy()) {
+              has_never_ty = true;
             } else {
               has_non_void_ty = true;
             }
             continue;
           }
         } else if (last.getTypeE()) |ty| {
-          if (ty.isNoreturnTy()) {
-            has_noreturn_ty = true;
+          if (ty.isNeverTy()) {
+            has_never_ty = true;
           } else if (last.isCondition() or last.isMCondition()) {
             has_void_ty = !(
               if (last.isCondition()) last.NdCondition.has_never_typ_in_false_path
@@ -4018,7 +4018,7 @@ pub const TypeChecker = struct {
     }
     // if we find the function has type noreturn, and there's no return node in the function,
     // simply turn off has_void_ty:
-    if (has_noreturn_ty and !has_return_node) {
+    if (has_never_ty and !has_return_node) {
       has_void_ty = false;
     }
     // When inferring a function's return type:
@@ -4048,7 +4048,7 @@ pub const TypeChecker = struct {
       }
     }
     if (add_never_ty) uni.set(nvr_ty, al);
-    if (has_noreturn_ty) uni.set(&UnitTypes.tyNoReturn, al);
+    if (has_never_ty) uni.set(&UnitTypes.tyNever, al);
     if (has_void_ty) uni.set(void_ty, al);
     var inf_ret_ty = if (uni.variants.isNotEmpty()) uni.toType(al) else void_ty.*;
     if (node.NdBasicFun.data.ret) |ret_ty| {
@@ -4067,22 +4067,20 @@ pub const TypeChecker = struct {
                 );
               }
             }
-          } else if (!node.NdBasicFun.data.modifier.isBuiltin() and !ret_ty.isLikeVoid() and !ret_ty.isLikeNoreturn()) {
-            if (!(ret_ty.isRecursive() and ret_ty.recursive().base.isNeverTy())) {
-              // control reaches exit from this node (`nd`), although this node
-              // doesn't return anything hence (void), but return type isn't void
-              return self.errorFrom(
-                true, last,
-                "Control flow reaches exit from this point without returning type '{s}'",
-                .{self.getTypename(ret_ty)}
-              );
-            }
+          } else if (!node.NdBasicFun.data.modifier.isBuiltin() and !ret_ty.isLikeVoid() and !ret_ty.isLikeNever()) {
+            // control reaches exit from this node (`nd`), although this node
+            // doesn't return anything hence (void), but return type isn't void
+            return self.errorFrom(
+              true, last,
+              "Control flow reaches exit from this point without returning type '{s}'",
+              .{self.getTypename(ret_ty)}
+            );
           }
         }
       }
       const ty = self.returnType(&inf_ret_ty, node);
       if (!node.NdBasicFun.data.modifier.isBuiltin() and !ret_ty.isRelatedTo(ty, .RCAny, al)) {
-        if (!ret_ty.isNoreturnTy()) {
+        if (!ret_ty.isNeverTy()) {
           return self.errorFrom(
             true, node,
             "Expected return type '{s}' but found '{s}'",
@@ -4095,7 +4093,7 @@ pub const TypeChecker = struct {
           );
           return self.errorFrom(
             true, debug,
-            "Control flow reaches exit; function declared type '" ++ ks.NoReturnVar ++ "' returns",
+            "Control flow reaches exit; function declared type '" ++ ks.NeverVar ++ "' returns",
             .{}
           );
         }

@@ -40,13 +40,13 @@ pub const Analysis = struct {
     }
   }
 
-  fn hasAtLeastOneIncomingEdgeWithTypeNotNoreturn(self: *Self, flo: FlowNode) bool {
+  fn hasAtLeastOneIncomingEdgeWithTypeNotNever(self: *Self, flo: FlowNode) bool {
     _ = self;
     // check if this flow node has at least one incoming/prev edge with type that isn't noreturn
     for (flo.getPrevNeighbours().items()) |ngh| {
       if (ngh.node.get().bb.getLast()) |lst| {
         if (lst.getTypeE()) |typ| {
-          if (!typ.isNoreturnTy()) return true;
+          if (!typ.isNeverTy()) return true;
         } else {
           return true;
         }
@@ -61,7 +61,7 @@ pub const Analysis = struct {
       for (dt.bb.items(), 0..) |node, i| {
         if (node.isEmpty()) continue;
         if (node.getTypeE()) |typ| {
-          if (typ.isNoreturnTy() and !node.isFun()) { // skip func decls
+          if (typ.isNeverTy() and !node.isFun()) { // skip func decls
             if (node != dt.bb.getLast().?) {
               var next = dt.bb.nodes.itemAt(i + 1);
               self.diag.addDiagnosticsWithLevel(
@@ -72,7 +72,7 @@ pub const Analysis = struct {
             } else {
               for (flo_node.getNextNeighbours().items()) |fln| {
                 // hasAtLeastOneIncomingEdgeWithTypeNotNoreturn() <- ensure the code is not reachable from other parts
-                if (!fln.node.isExitNode() and !self.hasAtLeastOneIncomingEdgeWithTypeNotNoreturn(fln.node)) {
+                if (!fln.node.isExitNode() and !self.hasAtLeastOneIncomingEdgeWithTypeNotNever(fln.node)) {
                   self.diag.addDiagnosticsWithLevel(
                     .DiagError,
                     fln.node.get().bb.nodes.itemAt(0).getToken(),

@@ -2608,23 +2608,23 @@ pub const MAX_RECURSIVE_DEPTH = 0x3e8;
 
 pub const TypeKind = enum (u4) {
   /// boolean type:
-  ///  bool
+  ///  Bool
   TyBool,
   /// number type:
-  ///  num
+  ///  Num
   TyNumber,
   /// string type:
-  ///  str
+  ///  Str
   TyString,
   /// nil type:
   ///  nil
   TyNil,
-  /// void type:
-  ///  void
+  /// unit type:
+  ///  Unit
   TyVoid,
-  /// noreturn type:
-  ///  noreturn
-  TyNoReturn,
+  /// never type:
+  ///  Never
+  TyNever,
   /// any type:
   ///  any
   TyAny,
@@ -3157,7 +3157,7 @@ pub const Type = struct {
   }
 
   pub fn newNever(allocator: Allocator) *Self {
-    return newVariableWToken(deriveToken(ks.NeverVar)).box(allocator);
+    return init(.{.Concrete = Concrete.init(.TyNever)}).box(allocator);
   }
 
   pub inline fn newVoid() Self {
@@ -3456,8 +3456,8 @@ pub const Type = struct {
   }
 
   /// a type that may be noreturn
-  pub inline fn isLikeNoreturn(self: *Self) bool {
-    return self.isLikeXTy(isNoreturnTy);
+  pub inline fn isLikeNever(self: *Self) bool {
+    return self.isLikeXTy(isNeverTy);
   }
 
   inline fn isConcreteTypeEq(self: *Self, kind: TypeKind) bool {
@@ -3499,16 +3499,12 @@ pub const Type = struct {
     return self.isConcreteTypeEq(.TyVoid);
   }
 
-  pub inline fn isNoreturnTy(self: *Self) bool {
-    return self.isConcreteTypeEq(.TyNoReturn);
+  pub inline fn isNeverTy(self: *Self) bool {
+    return self.isConcreteTypeEq(.TyNever);
   }
 
   pub inline fn isAnyTy(self: *Self) bool {
     return self.isConcreteTypeEq(.TyAny);
-  }
-
-  pub inline fn isNeverTy(self: *Self) bool {
-    return (self.isVariable() and self.variable().value.valueEql(ks.NeverVar));
   }
 
   pub fn isListTy(self: *Self) bool {
@@ -3905,7 +3901,7 @@ pub const Type = struct {
           .TyString   => self.tid = 3 << ID_SEED,
           .TyNil      => self.tid = 4 << ID_SEED,
           .TyVoid     => self.tid = 9 << ID_SEED,
-          .TyNoReturn => self.tid = 10 << ID_SEED,
+          .TyNever    => self.tid = 10 << ID_SEED,
           .TyAny      => self.tid = 11 << ID_SEED,
         }
       },
@@ -4351,7 +4347,7 @@ pub const Type = struct {
         .TyString   => _ = try u8w.writer().write(ks.StrVar),
         .TyNil      => _ = try u8w.writer().write(ks.NilVar),
         .TyVoid     => _ = try u8w.writer().write(ks.VoidVar),
-        .TyNoReturn => _ = try u8w.writer().write(ks.NoReturnVar),
+        .TyNever    => _ = try u8w.writer().write(ks.NeverVar),
         .TyAny      => _ = try u8w.writer().write(ks.AnyVar),
       },
       .Constant => |*cons| {

@@ -144,10 +144,10 @@ pub const Desugar = struct {
       if (case.body.node.isBlock()) {
         const index: usize = if (case.body.node.NdBlock.nodes.len > 1) 1 else 0;
         const src = case.body.node.NdBlock.nodes[index];
-        const assign = self.newAssignNode(ident.clone(self.al), src, token.tkFrom("=", .TkNoReturn));
+        const assign = self.newAssignNode(ident.clone(self.al), src, token.tkFrom("=", .TkNever));
         case.body.node.NdBlock.nodes[index] = self.newExprStmtNode(assign, assign.hasSugar());
       } else {
-        const assign = self.newAssignNode(ident.clone(self.al), case.body.node, token.tkFrom("=", .TkNoReturn));
+        const assign = self.newAssignNode(ident.clone(self.al), case.body.node, token.tkFrom("=", .TkNever));
         case.body.node = self.newExprStmtNode(assign, assign.hasSugar());
       }
     }
@@ -195,7 +195,7 @@ pub const Desugar = struct {
       var stmt: *Node = undefined;
       // assign err to generated ident
       if (!node.err.isRet()) {
-        const assign = self.newAssignNode(ident2.clone(self.al), node.err, token.tkFrom("=", .TkNoReturn));
+        const assign = self.newAssignNode(ident2.clone(self.al), node.err, token.tkFrom("=", .TkNever));
         stmt = self.newExprStmtNode(assign, assign.hasSugar());
       } else {
         stmt = node.err;

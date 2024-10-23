@@ -2609,6 +2609,27 @@ test "generic-classes-6<mutual-recursion>" {
   try doRuntimeTest(src);
 }
 
+test "mutual recursion" {
+  const src =
+  \\ def mutA(x: num)
+  \\  if x > 2
+  \\    return mutB(x)
+  \\  else
+  \\    return x
+  \\  end
+  \\ end
+  \\ def mutB(y: num)
+  \\  if y > 2
+  \\    return mutA(y)
+  \\  else
+  \\    return y
+  \\  end
+  \\ end
+  \\ mutA(1) + mutB(2) |> assert(* == 3, 'should be 3')
+  ;
+  try doRuntimeTest(src);
+}
+
 test "generic call linking" {
   const src =
   \\ class Bar

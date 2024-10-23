@@ -1357,7 +1357,7 @@ pub const Compiler = struct {
     // desugaring can make a noreturn type assigned to a var. for ex $p = panic(..)
     // don't compile the lhs of an assignment that falls into this scenario.
     if (node.right.getType()) |ty| {
-      if (ty.isNoreturnTy()) {
+      if (ty.isNeverTy()) {
         return self.c(node.right, reg);
       }
     }

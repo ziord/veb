@@ -125,41 +125,42 @@ test "casting.<active types>" {
   });
 }
 
-test "noreturn" {
+test "never .1" {
   const src =
-  \\ def foo(): noreturn
+  \\ def foo(): never
   \\  println("oops")
   \\ end
   \\
   \\ foo()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Control flow reaches exit; function declared type 'noreturn' returns",
+    "Control flow reaches exit; function declared type 'never' returns",
   });
 }
 
-test "never & noreturn" {
+test "never .2" {
   const src =
   \\ def foo()
   \\  foo()
   \\ end
   \\
-  \\ let j: noreturn = foo()
+  \\ let j: never = foo()
+  \\ j = 5
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Cannot initialize type 'noreturn' with type 'never'",
+    "Cannot assign type 'num' to type 'never'",
   });
 }
 
-test "never & noreturn .2" {
+test "never .3" {
   const src =
-  \\ def noret: noreturn
-  \\  noret()
+  \\ def noret: never
+  \\  5
   \\ end
   \\ noret()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Control flow reaches exit; function declared type 'noreturn' returns",
+    "Control flow reaches exit; function declared type 'never' returns",
   });
 }
 
@@ -183,7 +184,19 @@ test "never & void .2" {
   \\ let j: void = foo()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected return type 'never' but found 'void'",
+    "Control flow reaches exit; function declared type 'never' returns",
+  });
+}
+
+test "never & void .3" {
+  const src =
+  \\ def foo(): never
+  \\  @exit(12)
+  \\ end
+  \\ let j: void = foo()
+  ;
+  try doErrorTest(src, 1, [_][]const u8{
+    "Cannot initialize type 'void' with type 'never'",
   });
 }
 
@@ -706,6 +719,95 @@ test "dca-9" {
   try doErrorTest(src, 2, [_][]const u8{
     "Dead code: control flow never reaches this code",
     "return 7",
+  });
+}
+
+test "dca-10.<recursive>" {
+  const src =
+  \\ # mutually recursive
+  \\ def mutA{U}(x: U)
+  \\  return mutB(x)
+  \\ end
+  \\
+  \\ def mutB{T}(y: T)
+  \\  return mutA(y)
+  \\ end
+  \\ 
+  \\ mutA(10)
+  \\ mutB('b')
+  \\
+  \\ def mutA(x: num)
+  \\  if x > 2
+  \\    return mutB(x)
+  \\  else
+  \\    return x
+  \\  end
+  \\ end
+  \\
+  \\ def mutB(y: num)
+  \\  if y > 2
+  \\    return mutA(y)
+  \\  else
+  \\    return y
+  \\  end
+  \\ end
+  \\ mutA(10) + mutB(7)
+  \\
+  \\ # recursive
+  \\ def mutMe(x: str)
+  \\  return mutMe('5')
+  \\ end
+  \\ mutMe('fox')
+  \\
+  \\ alias J =  Tuple{num, str}
+  \\ def fox{A, B}(x: A, y: B)
+  \\  let p: J = (13, '4')
+  \\  return fox(x, y)
+  \\ end
+  \\ fox('a', None)
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "Dead code: control flow never reaches this code",
+    "mutB('b')",
+  });
+}
+
+test "dca-11.<recursive>" {
+  const src =
+  \\ # mutually recursive
+  \\ def mutA(x: num)
+  \\  if x > 2
+  \\    return mutB(x)
+  \\  else
+  \\    return x
+  \\  end
+  \\ end
+  \\
+  \\ def mutB(y: num)
+  \\  if y > 2
+  \\    return mutA(y)
+  \\  else
+  \\    return y
+  \\  end
+  \\ end
+  \\ mutA(10) + mutB(7)
+  \\
+  \\ # recursive
+  \\ def mutMe(x: str)
+  \\  return mutMe('5')
+  \\ end
+  \\ mutMe('fox')
+  \\
+  \\ alias J =  Tuple{num, str}
+  \\ def fox{A, B}(x: A, y: B)
+  \\  let p: J = (13, '4')
+  \\  return fox(x, y)
+  \\ end
+  \\ fox('a', None)
+  ;
+  try doErrorTest(src, 2, [_][]const u8{
+    "Dead code: control flow never reaches this code",
+    "alias J =  Tuple{num, str}",
   });
 }
 

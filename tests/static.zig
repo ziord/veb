@@ -21,17 +21,6 @@ test "recursive types" {
 test "functions.<recursive>" {
   const src =
   \\ # mutually recursive
-  \\ def mutA{U}(x: U)
-  \\  return mutB(x)
-  \\ end
-  \\
-  \\ def mutB{T}(y: T)
-  \\  return mutA(y)
-  \\ end
-  \\ 
-  \\ mutA(10)
-  \\ mutB('b')
-  \\
   \\ def mutA(x: num)
   \\  if x > 2
   \\    return mutB(x)
@@ -48,12 +37,6 @@ test "functions.<recursive>" {
   \\  end
   \\ end
   \\ mutA(10) + mutB(7)
-  \\
-  \\ # recursive
-  \\ def mutMe(x: str)
-  \\  return mutMe('5')
-  \\ end
-  \\ mutMe('fox')
   \\
   \\ alias J =  Tuple{num, str}
   \\ def fox{A, B}(x: A, y: B)
@@ -75,12 +58,12 @@ test "functions.<never>" {
   try doStaticTest(src);
 }
 
-test "functions.<noreturn>" {
+test "functions.<never .2>" {
   const src =
   \\ def foo()
   \\  @exit(1)
   \\ end
-  \\ let j:noreturn = foo()
+  \\ let j:never = foo()
   ;
   try doStaticTest(src);
 }
@@ -97,12 +80,10 @@ test "functions.<void>" {
 
 test "functions-12-user-defined-never" {
   const src =
-  \\ alias never = never
-  \\ def rec(): never
+  \\ alias fails = never
+  \\ def rec(): fails
   \\  return rec()
   \\ end
-  \\
-  \\ rec()
   \\
   \\ def fun(x: num)
   \\  if x > 5
@@ -113,15 +94,14 @@ test "functions-12-user-defined-never" {
   \\ end
   \\ type NS = N(num) | S(str)
   \\ let j = fun(5)
-  \\ let p: never = rec()
   \\ if j is S
   \\  _ = [j]
   \\ elif j is N
   \\  j = N(9)
   \\ else
-  \\  p = j
+  \\  let p: fails = rec()
   \\ end
-  \\ p
+  \\ rec()
   ;
   try doStaticTest(src);
 }

@@ -222,7 +222,7 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkReturn
     .{.bp = .None, .prefix = null, .infix = null},                      // TkBuiltin
     .{.bp = .None, .prefix = null, .infix = null},                      // TkContinue
-    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkNoReturn
+    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkNever
     .{.bp = .None, .prefix = Self.number, .infix = null},               // TkNumber
     .{.bp = .None, .prefix = Self.string, .infix = null},               // TkString
     .{.bp = .None, .prefix = Self.string, .infix = null},               // TkEscString
@@ -1260,13 +1260,13 @@ pub const Parser = struct {
         try self.consume(.TkRBracket);
       },
       // Concrete
-      .TkBool, .TkNum, .TkStr, .TkVoid, .TkNoReturn, .TkAny, => |ty| {
+      .TkBool, .TkNum, .TkStr, .TkVoid, .TkNever, .TkAny, => |ty| {
           const tkind: TypeKind = switch (ty) {
           .TkBool => .TyBool,
           .TkNum => .TyNumber,
           .TkStr => .TyString,
           .TkVoid => .TyVoid,
-          .TkNoReturn => .TyNoReturn,
+          .TkNever => .TyNever,
           .TkAny => .TyAny,
           else => unreachable,
         };

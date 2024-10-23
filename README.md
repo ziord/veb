@@ -56,10 +56,10 @@ display(tree)
 **Exhaustiveness**
 ```ruby
 # create and match on a tag
-type Legion = Legion(str, num, str, bool)
-let j = Legion('a', 5, 'boy', true)
+type Legion = Legion(Str, Num, Str, Bool)
+let j = Legion('a', 1, 'first', True)
 match j
- case Legion('a', 1, 'first', true) => println('you rock!')
+ case Legion('a', 1, 'first', True) => println('you rock!')
 end
 ```
 Results in:
@@ -70,10 +70,10 @@ TypeError: inexhaustive pattern match.
     match j
           ^
   Remaining pattern type(s):
-    Legion(_, _, _, false)
-    Legion(_, _, str, _)
-    Legion(_, num, _, _)
-    Legion(str, _, _, _)
+    Legion(_, _, _, False)
+    Legion(_, _, Str, _)
+    Legion(_, Num, _, _)
+    Legion(Str, _, _, _)
 ```
 
 #### Higher-order Functions

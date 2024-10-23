@@ -2621,7 +2621,7 @@ pub const TypeKind = enum (u4) {
   TyNil,
   /// unit type:
   ///  Unit
-  TyVoid,
+  TyUnit,
   /// never type:
   ///  Never
   TyNever,
@@ -2704,7 +2704,7 @@ pub const Type = struct {
 
   const Self = @This();
 
-  var void_ty = Type.newVoid();
+  var void_ty = Type.newUnit();
 
   pub inline fn init(data: TypeInfo) Self {
     return Self {.info = data};
@@ -3160,8 +3160,8 @@ pub const Type = struct {
     return init(.{.Concrete = Concrete.init(.TyNever)}).box(allocator);
   }
 
-  pub inline fn newVoid() Self {
-    return Self.init(.{.Concrete = Concrete.init(.TyVoid)});
+  pub inline fn newUnit() Self {
+    return Self.init(.{.Concrete = Concrete.init(.TyUnit)});
   }
 
   pub fn newBuiltinGenericClass(name: []const u8, tktype: TokenType, al: Allocator) *Type {
@@ -3451,8 +3451,8 @@ pub const Type = struct {
   }
 
   /// a type that may be void
-  pub inline fn isLikeVoid(self: *Self) bool {
-    return self.isLikeXTy(isVoidTy);
+  pub inline fn isLikeUnit(self: *Self) bool {
+    return self.isLikeXTy(isUnitTy);
   }
 
   /// a type that may be noreturn
@@ -3495,8 +3495,8 @@ pub const Type = struct {
     return self.isConcreteTypeEq(.TyNil);
   }
 
-  pub inline fn isVoidTy(self: *Self) bool {
-    return self.isConcreteTypeEq(.TyVoid);
+  pub inline fn isUnitTy(self: *Self) bool {
+    return self.isConcreteTypeEq(.TyUnit);
   }
 
   pub inline fn isNeverTy(self: *Self) bool {
@@ -3900,7 +3900,7 @@ pub const Type = struct {
           .TyNumber   => self.tid = 2 << ID_SEED,
           .TyString   => self.tid = 3 << ID_SEED,
           .TyNil      => self.tid = 4 << ID_SEED,
-          .TyVoid     => self.tid = 9 << ID_SEED,
+          .TyUnit     => self.tid = 9 << ID_SEED,
           .TyNever    => self.tid = 10 << ID_SEED,
           .TyAny      => self.tid = 11 << ID_SEED,
         }
@@ -4030,11 +4030,11 @@ pub const Type = struct {
   }
 
   inline fn getConstantTrueHash() u32 {
-    return 1835456;
+    return 1835424;
   }
 
   inline fn getConstantFalseHash() u32 {
-    return 1835531;
+    return 1835499;
   }
 
   pub inline fn typeidEql(self: *Self, other: *Self) bool {
@@ -4346,7 +4346,7 @@ pub const Type = struct {
         .TyNumber   => _ = try u8w.writer().write(ks.NumVar),
         .TyString   => _ = try u8w.writer().write(ks.StrVar),
         .TyNil      => _ = try u8w.writer().write(ks.NilVar),
-        .TyVoid     => _ = try u8w.writer().write(ks.VoidVar),
+        .TyUnit     => _ = try u8w.writer().write(ks.UnitVar),
         .TyNever    => _ = try u8w.writer().write(ks.NeverVar),
         .TyAny      => _ = try u8w.writer().write(ks.AnyVar),
       },

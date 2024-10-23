@@ -4,33 +4,33 @@ const doErrorTest = lib.doErrorTest;
 test "binary operators" {
   const src =
   \\ _ = 'fox' + 5
-  \\ _ = false - 'foobar'
+  \\ _ = False - 'foobar'
   \\ _ = [] * ()
   \\ _ = None / {'x': 5}
-  \\ _ = ~false / {'x': 5}
-  \\ _ = None ^ true
-  \\ _ = 'fin' > true
+  \\ _ = ~False / {'x': 5}
+  \\ _ = None ^ True
+  \\ _ = 'fin' > True
   \\ _ = [('1', 2, 'a')] < ('oops')!
   \\ _ = ([1, 2])! <= ('oops')!
-  \\ _ = false >= None
+  \\ _ = False >= None
   \\ _ = [('1', 2, 'a')] == ('oops')!
   \\ _ = 'mist' != 6
-  \\ let q = List{num} + str
+  \\ let q = List{Num} + Str
   ;
   try doErrorTest(src, 13, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'str' + 'num'",
-    "Expected type 'num' - 'num' but found 'bool' - 'str'",
-    "Expected type 'num' * 'num' but found 'List{any}' * 'Tuple{}'",
-    "Expected type 'num' / 'num' but found 'None' / 'Map{str, num}'",
-    "Expected type ~ 'num' but found ~ 'bool'",
-    "Expected type 'num' ^ 'num' but found 'None' ^ 'bool'",
-    "Expected type 'num' > 'num' but found 'str' > 'bool'",
-    "Expected type 'num' < 'num' but found 'List{Tuple{str, num, str}}' < 'Error(str)'",
-    "Expected type 'num' <= 'num' but found 'Error(List{num})' <= 'Error(str)'",
-    "Expected type 'num' >= 'num' but found 'bool' >= 'None'",
-    "Types must be related for this operation. 'List{Tuple{str, num, str}}' is not related to 'Error(str)'",
-    "Types must be related for this operation. 'str' is not related to 'num'",
-    "Expected type 'num' + 'num' but found 'Type' + 'Type'",
+    "Expected type 'Num' + 'Num' but found 'Str' + 'Num'",
+    "Expected type 'Num' - 'Num' but found 'Bool' - 'Str'",
+    "Expected type 'Num' * 'Num' but found 'List{Any}' * 'Tuple{}'",
+    "Expected type 'Num' / 'Num' but found 'None' / 'Map{Str, Num}'",
+    "Expected type ~ 'Num' but found ~ 'Bool'",
+    "Expected type 'Num' ^ 'Num' but found 'None' ^ 'Bool'",
+    "Expected type 'Num' > 'Num' but found 'Str' > 'Bool'",
+    "Expected type 'Num' < 'Num' but found 'List{Tuple{Str, Num, Str}}' < 'Error(Str)'",
+    "Expected type 'Num' <= 'Num' but found 'Error(List{Num})' <= 'Error(Str)'",
+    "Expected type 'Num' >= 'Num' but found 'Bool' >= 'None'",
+    "Types must be related for this operation. 'List{Tuple{Str, Num, Str}}' is not related to 'Error(Str)'",
+    "Types must be related for this operation. 'Str' is not related to 'Num'",
+    "Expected type 'Num' + 'Num' but found 'Type' + 'Type'",
   });
 }
 
@@ -38,7 +38,7 @@ test "builtin properties .1" {
   const src =
   \\ let j = (1, 2)
   \\ j[0] += 5
-  \\ let p = {'b': 5 as num | str}
+  \\ let p = {'b': 5 as Num | Str}
   \\ p[5]
   \\ let p = []
   \\ p[1]
@@ -46,9 +46,9 @@ test "builtin properties .1" {
   \\ p["fox"]
   ;
   try doErrorTest(src, 3, [_][]const u8{
-    "Cannot mutate immutable type 'Tuple{num, num}'",
-    "Expected type 'num' | 'num' but found 'num' | 'Type'",
-    "Cannot index 'List{any}' type with type 'str'",
+    "Cannot mutate immutable type 'Tuple{Num, Num}'",
+    "Expected type 'Num' | 'Num' but found 'Num' | 'Type'",
+    "Cannot index 'List{Any}' type with type 'Str'",
   });
 }
 
@@ -64,21 +64,21 @@ test "builtin properties .2" {
   \\ p["fox"]
   ;
   try doErrorTest(src, 3, [_][]const u8{
-    "Cannot mutate immutable type 'Tuple{num, num}'",
-    "Cannot index type 'Map{str, num}' with type 'num'",
-    "Cannot index 'List{any}' type with type 'str'",
+    "Cannot mutate immutable type 'Tuple{Num, Num}'",
+    "Cannot index type 'Map{Str, Num}' with type 'Num'",
+    "Cannot index 'List{Any}' type with type 'Str'",
   });
 }
 
 test "builtin generics" {
   const src =
   \\ let j: List{} = []
-  \\ let k: Map{str} = {1: 1}
-  \\ let i: Tuple{num, bool} = (false,)
-  \\ let x: Error{num, list{num}} = (56)!
+  \\ let k: Map{Str} = {1: 1}
+  \\ let i: Tuple{Num, Bool} = (False,)
+  \\ let x: Error{Num, list{Num}} = (56)!
   \\ alias T{K} = List{K{T}}
   \\ type T{K} = List{K{T}}
-  \\ type X{K} = num | str | K{bool}
+  \\ type X{K} = Num | Str | K{Bool}
   ;
   try doErrorTest(src, 6, [_][]const u8{
     "empty type parameters are not supported",
@@ -86,32 +86,32 @@ test "builtin generics" {
     "generic type instantiated with wrong number of paramters. Expected 2 but found 1",
     "type variable in generic parameter cannot be generic",
     "expected token '<ident>' but found 'List'",
-    "expected token '<ident>' but found 'num'",
+    "expected token '<ident>' but found 'Num'",
   });
 }
 
 test "casting.<regular>" {
   const src =
   \\ let j = (1, 2)
-  \\ _ = j as Tuple{str, num}
-  \\ let j = {'a': 5} as Map{str, Tuple{num, bool}}
+  \\ _ = j as Tuple{Str, Num}
+  \\ let j = {'a': 5} as Map{Str, Tuple{Num, Bool}}
   \\ let t = []
-  \\ _ = t as List{str}
-  \\ let j: any = 5
-  \\ _ = (j as num) + 6
+  \\ _ = t as List{Str}
+  \\ let j: Any = 5
+  \\ _ = (j as Num) + 6
   ;
   try doErrorTest(src, 4, [_][]const u8{
-    "Cannot cast from type 'Tuple{num, num}' to type 'Tuple{str, num}'",
-    "Cannot cast from type 'Map{str, num}' to type 'Map{str, Tuple{num, bool}}'",
-    "Cannot cast from type 'List{any}' to type 'List{str}'",
-    "Cannot cast from type 'any' to type 'num'",
+    "Cannot cast from type 'Tuple{Num, Num}' to type 'Tuple{Str, Num}'",
+    "Cannot cast from type 'Map{Str, Num}' to type 'Map{Str, Tuple{Num, Bool}}'",
+    "Cannot cast from type 'List{Any}' to type 'List{Str}'",
+    "Cannot cast from type 'Any' to type 'Num'",
   });
 }
 
 test "casting.<active types>" {
   const src =
   \\ type H = A | B
-  \\ type H20 = X(List{Tuple{num}}) | Y(List{List{str}})
+  \\ type H20 = X(List{Tuple{Num}}) | Y(List{List{Str}})
   \\ let j: H = A
   \\ let p = j as B
   \\ println(p)
@@ -121,82 +121,82 @@ test "casting.<active types>" {
   ;
   try doErrorTest(src, 2, [_][]const u8{
     "Cannot cast from type 'H' to type 'B' because the active type is 'A'",
-    "Cannot cast from type 'H20' to type 'H20.X' because the active type is 'Y(List{List{str}})'"
+    "Cannot cast from type 'H20' to type 'H20.X' because the active type is 'Y(List{List{Str}})'"
   });
 }
 
-test "never .1" {
+test "Never .1" {
   const src =
-  \\ def foo(): never
+  \\ def foo(): Never
   \\  println("oops")
   \\ end
   \\
   \\ foo()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Control flow reaches exit; function declared type 'never' returns",
+    "Control flow reaches exit; function declared type 'Never' returns",
   });
 }
 
-test "never .2" {
+test "Never .2" {
   const src =
   \\ def foo()
   \\  foo()
   \\ end
   \\
-  \\ let j: never = foo()
+  \\ let j: Never = foo()
   \\ j = 5
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Cannot assign type 'num' to type 'never'",
+    "Cannot assign type 'Num' to type 'Never'",
   });
 }
 
-test "never .3" {
+test "Never .3" {
   const src =
-  \\ def noret: never
+  \\ def noret: Never
   \\  5
   \\ end
   \\ noret()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Control flow reaches exit; function declared type 'never' returns",
+    "Control flow reaches exit; function declared type 'Never' returns",
   });
 }
 
-test "never & void .1" {
+test "Never & Unit .1" {
   const src =
-  \\ def foo(): never
+  \\ def foo(): Never
   \\  foo()
   \\ end
-  \\ let j: void = foo()
+  \\ let j: Unit = foo()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Cannot initialize type 'void' with type 'never'",
+    "Cannot initialize type 'Unit' with type 'Never'",
   });
 }
 
-test "never & void .2" {
+test "Never & Unit .2" {
   const src =
-  \\ def foo(): never
+  \\ def foo(): Never
   \\  3
   \\ end
-  \\ let j: void = foo()
+  \\ let j: Unit = foo()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Control flow reaches exit; function declared type 'never' returns",
+    "Control flow reaches exit; function declared type 'Never' returns",
   });
 }
 
-test "never & void .3" {
+test "Never & Unit .3" {
   const src =
-  \\ def foo(): never
+  \\ def foo(): Never
   \\  @exit(12)
   \\ end
-  \\ let j: void = foo()
+  \\ let j: Unit = foo()
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Cannot initialize type 'void' with type 'never'",
+    "Cannot initialize type 'Unit' with type 'Never'",
   });
 }
 
@@ -204,12 +204,12 @@ test "type linking" {
   const src =
   \\ alias HashMap{K, V} = Map{K, V}
   \\ alias Q = Q
-  \\ alias StringHashMap{V} = HashMap{str, J}
+  \\ alias StringHashMap{V} = HashMap{Str, J}
   \\ alias NumList = List{X}
   \\ let a: NumList = [1, 2]
-  \\ let b: HashMap{num, bool} = {0: false}
-  \\ let c: StringHashMap{bool} = {'foo': false}
-  \\ let x: str = 'over the garden wall!'
+  \\ let b: HashMap{Num, Bool} = {0: False}
+  \\ let c: StringHashMap{Bool} = {'foo': False}
+  \\ let x: Str = 'over the garden wall!'
   \\ let y: Q = 'oops' as Pinky
   ;
   try doErrorTest(src, 3, [_][]const u8{
@@ -221,17 +221,17 @@ test "type linking" {
   const src2 =
   \\ alias T = T
   \\ alias S = S
-  \\ type Q = A(T) | B(S) | C(any)
+  \\ type Q = A(T) | B(S) | C(Any)
   \\ let j: Q = C(5)
   \\ j += j
-  \\ let t: List{(num?)?} = [Just(Just(5) as num?) as (num?)?, None, None]
+  \\ let t: List{(Num?)?} = [Just(Just(5) as Num?) as (Num?)?, None, None]
   \\ t * t
   \\ t.?
   ;
   try doErrorTest(src2, 3, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'Q' + 'Q'",
-    "Expected type 'num' * 'num' but found 'List{Just(Just(num) | None) | None}' * 'List{Just(Just(num) | None) | None}'",
-    "Types must be related for this operation. Narrowed type 'List{Just(Just(num) | None) | None}' is not related to 'None'",
+    "Expected type 'Num' + 'Num' but found 'Q' + 'Q'",
+    "Expected type 'Num' * 'Num' but found 'List{Just(Just(Num) | None) | None}' * 'List{Just(Just(Num) | None) | None}'",
+    "Types must be related for this operation. Narrowed type 'List{Just(Just(Num) | None) | None}' is not related to 'None'",
   });
 }
 
@@ -241,26 +241,26 @@ test "conditionals" {
   \\ end
   \\ while [{},] do
   \\ end
-  \\ str is num
-  \\ 5 is false
+  \\ Str is Num
+  \\ 5 is False
   ;
   try doErrorTest(src, 4, [_][]const u8{
-    "Expected condition expression to be of type 'bool' but found 'num'",
-    "Expected condition expression to be of type 'bool' but found 'List{Map{any, any}}'",
+    "Expected condition expression to be of type 'Bool' but found 'Num'",
+    "Expected condition expression to be of type 'Bool' but found 'List{Map{Any, Any}}'",
     "Expected type instance in lhs of `is` operator but found 'Type'",
-    "Expected type 'Type' in rhs of `is` operator but found type 'false'\n    Help: For constant types, consider using '==' or '!=' operator instead.",
+    "Expected type 'Type' in rhs of `is` operator but found type 'False'\n    Help: For constant types, consider using '==' or '!=' operator instead.",
   });
 }
 
 test "circularity" {
   const src =
-  \\ type T{P} = A1(str) | B1(S{P})
-  \\ type S{K} = A2(K) | B2(T{num})
-  \\ let p: T{str} = A1('fox')
-  \\ p = B1(A2(5) as S{str})
+  \\ type T{P} = A1(Str) | B1(S{P})
+  \\ type S{K} = A2(K) | B2(T{Num})
+  \\ let p: T{Str} = A1('fox')
+  \\ p = B1(A2(5) as S{Str})
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Cannot cast from type 'A2(num)' to type 'S{str}'",
+    "Cannot cast from type 'A2(Num)' to type 'S{Str}'",
   });
 }
 
@@ -268,24 +268,24 @@ test "circularity-2" {
   const src =
   \\ type T{P} = A1(P) | B1(S{P})
   \\ type S{K} = A2(K) | B2(T{K})
-  \\ let p: T{str} = A1('fox')
-  \\ p = B1(A2(5) as S{num})
+  \\ let p: T{Str} = A1('fox')
+  \\ p = B1(A2(5) as S{Num})
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Cannot assign type 'B1(A2(num) | B2(A1(num) | B1({...})))' to type 'T{str}'",
+    "Cannot assign type 'B1(A2(Num) | B2(A1(Num) | B1({...})))' to type 'T{Str}'",
   });
 }
 
 test "narrowing-1" {
   const src =
-  \\ type StrNum = Str(str) | Num(num)
-  \\ let x: StrNum? = Just(Str('foobar') as StrNum)
+  \\ type StrNum = Ext(Str) | Zen(Num)
+  \\ let x: StrNum? = Just(Ext('foobar') as StrNum)
   \\ let p = 10
   \\ match x
-  \\  case Just(Str(f)) => f > p
-  \\  case Just(Num(q)) => 'yodo'
+  \\  case Just(Ext(f)) => f > p
+  \\  case Just(Zen(q)) => 'yodo'
   \\  case None => do
-  \\    type LM = L(List{num}) | M(Map{str, num})
+  \\    type LM = L(List{Num}) | M(Map{Ext, Zen})
   \\    let x: LM = L([5])
   \\    let p = 10
   \\    if x is LM.L
@@ -295,14 +295,14 @@ test "narrowing-1" {
   \\ end
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Expected type 'num' > 'num' but found 'str' > 'num'",
-    "Expected type 'num' + 'num' but found 'L(List{num})' + 'num'",
+    "Expected type 'Num' > 'Num' but found 'Str' > 'Num'",
+    "Expected type 'Num' + 'Num' but found 'L(List{Num})' + 'Num'",
   });
 }
 
 test "narrowing-2" {
   const src =
-  \\ type T = L(List{num}) | M(Map{str, num})
+  \\ type T = L(List{Num}) | M(Map{Str, Num})
   \\ let x: T = L([5])
   \\ if x is T.L
   \\ elif x is T.M
@@ -311,51 +311,51 @@ test "narrowing-2" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type ~ 'num' but found ~ 'never'",
+    "Expected type ~ 'Num' but found ~ 'Never'",
   });
 }
 
 test "narrowing-3" {
   const src =
-  \\ let x: num? = Just(9)
-  \\ if x is not num and x is num
+  \\ let x: Num? = Just(9)
+  \\ if x is not Num and x is Num
   \\   x + 5
   \\ else 
   \\   0+x
   \\ end
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'Just(num) | None' + 'num'",
-    "Expected type 'num' + 'num' but found 'num' + 'Just(num) | None'",
+    "Expected type 'Num' + 'Num' but found 'Just(Num) | None' + 'Num'",
+    "Expected type 'Num' + 'Num' but found 'Num' + 'Just(Num) | None'",
   });
 }
 
 test "narrowing-4" {
   const src =
-  \\ let x: num? = Just(9)
-  \\ if x is not num and x is num
+  \\ let x: Num? = Just(9)
+  \\ if x is not Num and x is Num
   \\   x + 5
-  \\ elif x is not num
+  \\ elif x is not Num
   \\   0+x
   \\ end
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Types must be related for this operation. Narrowed type 'Just(num) | None' is not related to 'num'",
-    "elif x is not num",
+    "Types must be related for this operation. Narrowed type 'Just(Num) | None' is not related to 'Num'",
+    "elif x is not Num",
   });
 }
 
 test "narrowing-5" {
   const src =
-  \\ let x: Tuple{List{Tuple{num, List{num}}}, num} = ([(9, [] as List{num})], 5)
+  \\ let x: Tuple{List{Tuple{Num, List{Num}}}, Num} = ([(9, [] as List{Num})], 5)
   \\ let p = 0
-  \\ if x[0] is List{Tuple{num, List{num}}}
-  \\    if x[0][0] is Tuple{num, List{num}}
-  \\      if x[0][0][1] is List{num}
+  \\ if x[0] is List{Tuple{Num, List{Num}}}
+  \\    if x[0][0] is Tuple{Num, List{Num}}
+  \\      if x[0][0][1] is List{Num}
   \\        p /= 5
   \\      end
   \\    end
-  \\ elif x[1] is num
+  \\ elif x[1] is Num
   \\    p += x
   \\ else
   \\    x[0]
@@ -363,16 +363,16 @@ test "narrowing-5" {
   \\ p
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'num' + 'Tuple{List{Tuple{num, List{num}}}, num}'",
+    "Expected type 'Num' + 'Num' but found 'Num' + 'Tuple{List{Tuple{Num, List{Num}}}, Num}'",
   });
 }
 
 test "narrowing-6.1" {
   const src =
-  \\ type NumStr = N(num) | S(str)
-  \\ type ListStr = L(List{NumStr}) | S(str)
+  \\ type NumStr = N(Num) | S(Str)
+  \\ type ListStr = L(List{NumStr}) | S(Str)
   \\ let x: (ListStr)? = Just(L([NumStr.N(5) as NumStr, NumStr.S('a')]) as ListStr)
-  \\ if x.? is L and x.?[0] is num
+  \\ if x.? is L and x.?[0] is Num
   \\   # pass
   \\ end
   ;
@@ -383,29 +383,29 @@ test "narrowing-6.1" {
 
 test "narrowing-6.2" {
   const src =
-  \\ type NumStr = N(num) | S(str)
-  \\ type ListStr = L(List{NumStr}) | S(str)
+  \\ type NumStr = N(Num) | S(Str)
+  \\ type ListStr = L(List{NumStr}) | S(Str)
   \\ let x: (ListStr)? = Just(L([NumStr.N(5) as NumStr, NumStr.S('a')]) as ListStr)
   \\ if x.? is L
   \\   match x.?
   \\    case L([t, ..]) => t += 5
-  \\    case L([..]) => assert(false, 'yay')
+  \\    case L([..]) => assert(False, 'yay')
   \\   end
   \\ else
   \\    x.?
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'NumStr' + 'num'",
+    "Expected type 'Num' + 'Num' but found 'NumStr' + 'Num'",
   });
 }
 
 test "narrowing-6.3" {
   const src =
-  \\ type NumStr = N(num) | S(str)
-  \\ type ListStr = L(List{NumStr}) | S(str)
+  \\ type NumStr = N(Num) | S(Str)
+  \\ type ListStr = L(List{NumStr}) | S(Str)
   \\ let x: (ListStr)? = Just(L([NumStr.N(5) as NumStr, ListStr.S('a')]) as ListStr)
-  \\ if x.? is L and x.?[0] is num
+  \\ if x.? is L and x.?[0] is Num
   \\   # pass
   \\ end
   ;
@@ -420,7 +420,7 @@ test "narrowing-7" {
   \\ let x: AB = A
   \\ let y: AB = B
   \\ if x is A and y is A or y is B
-  \\    x # num | str
+  \\    x # Num | Str
   \\    y *= 5
   \\ else
   \\    x + y
@@ -428,54 +428,54 @@ test "narrowing-7" {
   \\ y
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Expected type 'num' * 'num' but found 'A | B' * 'num'",
-    "Expected type 'num' + 'num' but found 'B | A' + 'A'",
+    "Expected type 'Num' * 'Num' but found 'A | B' * 'Num'",
+    "Expected type 'Num' + 'Num' but found 'B | A' + 'A'",
   });
 }
 
 test "narrowing-8" {
   const src =
-  \\ type NumStr = Num(num) | Str(str)
-  \\ type T = L(List{List{NumStr}}) | M(Map{str, List{NumStr}})
-  \\ let x: T =  L([[Num(5) as NumStr]])
+  \\ type NumStr = Zen(Num) | Ext(Str)
+  \\ type T = L(List{List{NumStr}}) | M(Map{Str, List{NumStr}})
+  \\ let x: T =  L([[Zen(5) as NumStr]])
   \\ let p = 10
   \\
   \\ match x
-  \\  case M({'a': [Num(g), ..]} as m) => if g + 2 > 0xff
+  \\  case M({'a': [Zen(g), ..]} as m) => if g + 2 > 0xff
   \\    m['a'][0] + 5
   \\  end
-  \\  case M(_) => assert(false, '')
+  \\  case M(_) => assert(False, '')
   \\  case L(q) => p -= q[0][1]
   \\ end
   \\ assert(p == 5, 'should be 5')
   \\ p
   ;
   try doErrorTest(src, 4, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'NumStr' + 'num'",
+    "Expected type 'Num' + 'Num' but found 'NumStr' + 'Num'",
     "m['a'][0] + 5",
-    "Expected type 'num' - 'num' but found 'num' - 'NumStr'",
+    "Expected type 'Num' - 'Num' but found 'Num' - 'NumStr'",
     "case L(q) => p -= q[0][1]",
   });
 }
 
 test "narrowing-9" {
   const src =
-  \\ type T = A | Str(str)
-  \\ let x: T = Str('fox')
-  \\ if x is not Str
+  \\ type T = A | Ext(Str)
+  \\ let x: T = Ext('fox')
+  \\ if x is not Ext
   \\    x += 10
   \\ end
   \\ x
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'A' + 'num'",
+    "Expected type 'Num' + 'Num' but found 'A' + 'Num'",
   });
 }
 
 test "narrowing-10" {
   const src =
   \\ type NumStr =
-  \\  | N(num) | S(str)
+  \\  | N(Num) | S(Str)
   \\ def fun(n: NumStr)
   \\  if n is S
   \\    return n
@@ -488,7 +488,7 @@ test "narrowing-10" {
   \\ fun(S('fancy'))
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' / 'num' but found 'never' / 'never'",
+    "Expected type 'Num' / 'Num' but found 'Never' / 'Never'",
   });
 }
 
@@ -510,14 +510,14 @@ test "narrowing-11" {
   \\ let x = fish(Five(5))
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'never' + 'num'",
+    "Expected type 'Num' + 'Num' but found 'Never' + 'Num'",
   });
 }
 
 test "narrowing-12" {
   const src =
   \\ class Fox
-  \\    x: num = 5
+  \\    x: Num = 5
   \\    u = 12
   \\ end
   \\ class Foo
@@ -532,11 +532,11 @@ test "narrowing-12" {
   \\ elif f is Fx
   \\  assert(f.u == 12, 'this should be Fox.u')
   \\ else
-  \\  f += 5 # never
+  \\  f += 5 # Never
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'never' + 'num'",
+    "Expected type 'Num' + 'Num' but found 'Never' + 'Num'",
   });
 }
 
@@ -546,9 +546,9 @@ test "narrowing-13" {
   \\ end
   \\ 
   \\ if MyFoo() is MyFoo
-  \\   assert(true, 'yay')
+  \\   assert(True, 'yay')
   \\ else
-  \\   assert(false, 'nay')
+  \\   assert(False, 'nay')
   \\ end
   \\ 1 / ''  # propagate warning 
   ;
@@ -574,7 +574,7 @@ test "dca-0" {
 
 test "dca-1" {
   const src =
-  \\ type NumStr = N(num) | S(str)
+  \\ type NumStr = N(Num) | S(Str)
   \\ def fun(n: NumStr)
   \\  if n is N
   \\    return n
@@ -651,7 +651,7 @@ test "dca-4" {
 
 test "dca-5" {
   const src =
-  \\ while true do
+  \\ while True do
   \\  continue
   \\  let j = 5
   \\ end
@@ -664,7 +664,7 @@ test "dca-5" {
 
 test "dca-6" {
   const src =
-  \\ while true do
+  \\ while True do
   \\  continue
   \\  let j = 5
   \\ end
@@ -677,7 +677,7 @@ test "dca-6" {
 
 test "dca-7" {
   const src =
-  \\ while true do
+  \\ while True do
   \\  break
   \\  let j = 5
   \\ end
@@ -705,7 +705,7 @@ test "dca-8" {
 
 test "dca-9" {
   const src =
-  \\ def fun(x: num)
+  \\ def fun(x: Num)
   \\  match x
   \\    case 1..100 as x => return x
   \\    case 101..200 => return 12
@@ -736,7 +736,7 @@ test "dca-10.<recursive>" {
   \\ mutA(10)
   \\ mutB('b')
   \\
-  \\ def mutA(x: num)
+  \\ def mutA(x: Num)
   \\  if x > 2
   \\    return mutB(x)
   \\  else
@@ -744,7 +744,7 @@ test "dca-10.<recursive>" {
   \\  end
   \\ end
   \\
-  \\ def mutB(y: num)
+  \\ def mutB(y: Num)
   \\  if y > 2
   \\    return mutA(y)
   \\  else
@@ -754,12 +754,12 @@ test "dca-10.<recursive>" {
   \\ mutA(10) + mutB(7)
   \\
   \\ # recursive
-  \\ def mutMe(x: str)
+  \\ def mutMe(x: Str)
   \\  return mutMe('5')
   \\ end
   \\ mutMe('fox')
   \\
-  \\ alias J =  Tuple{num, str}
+  \\ alias J =  Tuple{Num, Str}
   \\ def fox{A, B}(x: A, y: B)
   \\  let p: J = (13, '4')
   \\  return fox(x, y)
@@ -775,7 +775,7 @@ test "dca-10.<recursive>" {
 test "dca-11.<recursive>" {
   const src =
   \\ # mutually recursive
-  \\ def mutA(x: num)
+  \\ def mutA(x: Num)
   \\  if x > 2
   \\    return mutB(x)
   \\  else
@@ -783,7 +783,7 @@ test "dca-11.<recursive>" {
   \\  end
   \\ end
   \\
-  \\ def mutB(y: num)
+  \\ def mutB(y: Num)
   \\  if y > 2
   \\    return mutA(y)
   \\  else
@@ -793,12 +793,12 @@ test "dca-11.<recursive>" {
   \\ mutA(10) + mutB(7)
   \\
   \\ # recursive
-  \\ def mutMe(x: str)
+  \\ def mutMe(x: Str)
   \\  return mutMe('5')
   \\ end
   \\ mutMe('fox')
   \\
-  \\ alias J =  Tuple{num, str}
+  \\ alias J =  Tuple{Num, Str}
   \\ def fox{A, B}(x: A, y: B)
   \\  let p: J = (13, '4')
   \\  return fox(x, y)
@@ -807,7 +807,7 @@ test "dca-11.<recursive>" {
   ;
   try doErrorTest(src, 2, [_][]const u8{
     "Dead code: control flow never reaches this code",
-    "alias J =  Tuple{num, str}",
+    "alias J =  Tuple{Num, Str}",
   });
 }
 
@@ -818,13 +818,13 @@ test "constant types" {
   \\ y * x
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' * 'num' but found '7' * '5'",
+    "Expected type 'Num' * 'Num' but found '7' * '5'",
   });
 }
 
 test "functions-1" {
   const src =
-  \\ alias T = num
+  \\ alias T = Num
   \\ def j(a: T): T
   \\  return (a * 2)
   \\ end
@@ -834,7 +834,7 @@ test "functions-1" {
   \\    def foo{T}(a: T): T
   \\     return a
   \\    end
-  \\    let j = foo{str}('5')
+  \\    let j = foo{Str}('5')
   \\    let k = foo(10)
   \\    let p = foo(56)
   \\    k += 5
@@ -843,7 +843,7 @@ test "functions-1" {
   \\ funny(12)
   ;
   try doErrorTest(src, 3, [_][]const u8{
-    "Argument type mismatch. Expected type 'T' but found 'str'",
+    "Argument type mismatch. Expected type 'T' but found 'Str'",
     "Non-generic function called as generic",
     "Argument arity mismatch. Expected 0 argument(s) but found 1",
   });
@@ -851,7 +851,7 @@ test "functions-1" {
 
 test "functions-2" {
   const src =
-  \\ def foo(a: num)
+  \\ def foo(a: Num)
   \\  return foo(a)
   \\ end
   \\
@@ -863,7 +863,7 @@ test "functions-2" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' - 'num' but found 'never' - 'never'",
+    "Expected type 'Num' - 'Num' but found 'Never' - 'Never'",
   });
 }
 
@@ -873,7 +873,7 @@ test "functions-3" {
   \\  let j: T = x
   \\  return fancy{T}(j)
   \\ end
-  \\ fancy(false)
+  \\ fancy(False)
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "Non-generic function called as generic",
@@ -882,11 +882,11 @@ test "functions-3" {
 
 test "functions-4" {
   const src =
-  \\ def fancy{T}(x: T): fn{T}(num): str
+  \\ def fancy{T}(x: T): fn{T}(Num): Str
   \\  let j: T = x
   \\  return fancy{T}(j)
   \\ end
-  \\ fancy(false)
+  \\ fancy(False)
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "expected token '(' but found '{'",
@@ -895,11 +895,11 @@ test "functions-4" {
 
 test "functions-5" {
   const src =
-  \\ def fancy{T}(x: T): str
+  \\ def fancy{T}(x: T): Str
   \\  let j: T = x
-  \\  return def{T}(j: num) => j
+  \\  return def{T}(j: Num) => j
   \\ end
-  \\ fancy(false)
+  \\ fancy(False)
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "generic lambdas are unsupported",
@@ -910,31 +910,31 @@ test "functions-6" {
   const src =
   \\ def fun
   \\ end
-  \\ def fancy(x: any)
+  \\ def fancy(x: Any)
   \\  return try fun()
   \\ end
-  \\ fancy(false)
+  \\ fancy(False)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected error union type in 'try/orelse' expression. Type 'void' is not an error union",
+    "Expected error union type in 'try/orelse' expression. Type 'Unit' is not an error union",
   });
 }
 
 test "functions-7.<function arguments>" {
   const src =
-  \\ def funny(t: List{str})
+  \\ def funny(t: List{Str})
   \\  println(t)
   \\ end
   \\ funny([])
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Argument type mismatch. Expected type 'List{str}' but found 'List{any}'",
+    "Argument type mismatch. Expected type 'List{Str}' but found 'List{Any}'",
   });
 }
 
 test "error type" {
   const src =
-  \\ def fancy(x: num)
+  \\ def fancy(x: Num)
   \\  if x > 5
   \\    return ('bad')!
   \\  else 
@@ -945,15 +945,15 @@ test "error type" {
   \\ j + 5
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'Error(str) | Ok(num)' + 'num'",
+    "Expected type 'Num' + 'Num' but found 'Error(Str) | Ok(Num)' + 'Num'",
   });
 }
 
 test "simple-classes-1" {
   const src =
   \\ class Fox
-  \\    x: num
-  \\    def init(): void
+  \\    x: Num
+  \\    def init(): Unit
   \\      self.x = 0
   \\    end
   \\    def pulse()
@@ -965,14 +965,14 @@ test "simple-classes-1" {
   \\ f.y + f.y
   \\
   \\ class Foo
-  \\  y: str
+  \\  y: Str
   \\ end
   \\
   \\ Foo()
   \\
   \\ class Bar
-  \\  y: str
-  \\  def init(t: str)
+  \\  y: Str
+  \\  def init(t: Str)
   \\    self.y = t
   \\  end
   \\ end
@@ -990,9 +990,9 @@ test "simple-classes-1" {
 test "simple-classes-2" {
   const src =
   \\ class Fox
-  \\    x: num
+  \\    x: Num
   \\    u = 12
-  \\    def init(): void
+  \\    def init(): Unit
   \\      self.x = 0
   \\    end
   \\    def pulse()
@@ -1000,9 +1000,9 @@ test "simple-classes-2" {
   \\    end
   \\ end
   \\ class Racoon
-  \\    x: num
+  \\    x: Num
   \\    u = 12
-  \\    def init(): void
+  \\    def init(): Unit
   \\      self.x = self.u
   \\      return
   \\    end
@@ -1033,7 +1033,7 @@ test "immutable method mod" {
   \\ j.fish = def => 10
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Cannot mutate immutable type 'fn (): num'",
+    "Cannot mutate immutable type 'fn (): Num'",
     "j.fish = def => 10"
   });
 }
@@ -1041,7 +1041,7 @@ test "immutable method mod" {
 test "field init" {
   const src =
   \\ class Foo
-  \\  x: str
+  \\  x: Str
   \\  def init()
   \\  end
   \\ end
@@ -1060,8 +1060,8 @@ test "generic-classes-1" {
   \\ q.lens()
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "type 'Map{str, num}' has no property 'doesNotExist'",
-    "type 'List{num}' has no property 'lens'",
+    "type 'Map{Str, Num}' has no property 'doesNotExist'",
+    "type 'List{Num}' has no property 'lens'",
   });
 }
 
@@ -1069,7 +1069,7 @@ test "generic-classes-2" {
   const src =
   \\ class Fox{T}
   \\    x: List{T}
-  \\    def init(x*: T): void
+  \\    def init(x*: T): Unit
   \\      self.x = x
   \\    end
   \\    def pulse()
@@ -1083,8 +1083,8 @@ test "generic-classes-2" {
   \\      return fun
   \\    end
   \\ end
-  \\ let x = Fox{num}(6, 7, 8)
-  \\ let t: Fox{num} = x
+  \\ let x = Fox{Num}(6, 7, 8)
+  \\ let t: Fox{Num} = x
   \\ t.pulse().y
   \\ t.pulse().getGen()((7)!)
   \\ t.pulse().pulse().x.len()[0]
@@ -1094,11 +1094,11 @@ test "generic-classes-2" {
   \\ x.pulse().getGen()(5)
   ;
   try doErrorTest(src, 5, [_][]const u8{
-    "type 'Fox{num}' has no property 'y'",
-    "Type 'Error(num)' is not indexable",
-    "Type 'num' is not indexable",
-    "Expected type 'num' - 'num' but found 'num' - 'str'",
-    "Type 'num' is not indexable"
+    "type 'Fox{Num}' has no property 'y'",
+    "Type 'Error(Num)' is not indexable",
+    "Type 'Num' is not indexable",
+    "Expected type 'Num' - 'Num' but found 'Num' - 'Str'",
+    "Type 'Num' is not indexable"
   });
 }
 
@@ -1106,7 +1106,7 @@ test "generic-classes-3" {
   const src =
   \\ class Fox{T}
   \\    x: List{T}
-  \\    def init(x*: T): void
+  \\    def init(x*: T): Unit
   \\      self.x = x
   \\    end
   \\    def pulse()
@@ -1139,13 +1139,13 @@ test "generic-classes-3" {
   \\ let j: Poo{'miah'} = Fox{'mia'}('mia')
   ;
   try doErrorTest(src, 8, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'List{mia}' + 'num'",
+    "Expected type 'Num' + 'Num' but found 'List{mia}' + 'Num'",
     "Could not resolve type of ident: 'j'",
     "Could not resolve type of ident: 'p'",
-    "Expected type 'num' + 'num' but found 'List{mia}' + 'num'",
-    "Expected type 'num' + 'num' but found 'num' + 'str'",
-    "Expected type 'num' + 'num' but found 'str' + 'str'",
-    "Argument type mismatch. Expected type 'mia' but found 'num'",
+    "Expected type 'Num' + 'Num' but found 'List{mia}' + 'Num'",
+    "Expected type 'Num' + 'Num' but found 'Num' + 'Str'",
+    "Expected type 'Num' + 'Num' but found 'Str' + 'Str'",
+    "Argument type mismatch. Expected type 'mia' but found 'Num'",
     "Cannot initialize type 'Poo{miah}' with type 'Fox{mia} instance'"
   });
 }
@@ -1164,12 +1164,12 @@ test "generic-classes-4" {
   \\    end
   \\ end
   \\
-  \\ let j = Foo{num}()
+  \\ let j = Foo{Num}()
   \\ let t = j.see((5))
   \\ t.ees('oops')
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Argument type mismatch. Expected type 'num' but found 'str'"
+    "Argument type mismatch. Expected type 'Num' but found 'Str'"
   });
 }
 
@@ -1190,50 +1190,50 @@ test "loopy" {
   \\ x + 5
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'num' + 'str'",
-    "Expected type 'num' + 'num' but found 'AB' + 'num'",
+    "Expected type 'Num' + 'Num' but found 'Num' + 'Str'",
+    "Expected type 'Num' + 'Num' but found 'AB' + 'Num'",
   });
 }
 
 test "labeled argument" {
   const src =
-  \\ def fun(x: str, y: num, a: List{num}, b: Result{any, str})
+  \\ def fun(x: Str, y: Num, a: List{Num}, b: Result{Any, Str})
   \\  println('x is', x, 'y is', y, 'a is', a, 'b is', b)
   \\ end
   \\ fun(y='ops', a=6, x=[6], ('oops')!)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Argument type mismatch. Expected type 'str' but found 'List{num}'",
+    "Argument type mismatch. Expected type 'Str' but found 'List{Num}'",
   });
 }
 
 test "labeled argument 2" {
   const src =
-  \\ def fun(x: str, y: num, a: List{num}, b: Result{any, str})
+  \\ def fun(x: Str, y: Num, a: List{Num}, b: Result{Any, Str})
   \\  println('x is', x, 'y is', y, 'a is', a, 'b is', b)
   \\ end
   \\ fun(y='ops', a=6, x='ok', ('oops')!)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Argument type mismatch. Expected type 'num' but found 'str'",
+    "Argument type mismatch. Expected type 'Num' but found 'Str'",
   });
 }
 
 test "labeled argument 3" {
   const src =
-  \\ def fun(x: str, y: num, a: List{num}, b: Result{any, str})
+  \\ def fun(x: Str, y: Num, a: List{Num}, b: Result{Any, Str})
   \\  println('x is', x, 'y is', y, 'a is', a, 'b is', b)
   \\ end
   \\ fun(y=5, a=6, x='ok', ('oops')!)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Argument type mismatch. Expected type 'List{num}' but found 'num'"
+    "Argument type mismatch. Expected type 'List{Num}' but found 'Num'"
   });
 }
 
 test "labeled argument 4" {
   const src =
-  \\ def fun(x: str, y: num, a*: List{num})
+  \\ def fun(x: Str, y: Num, a*: List{Num})
   \\  println('x is', x, 'y is', y, 'a is', a)
   \\ end
   \\ fun(y=5, a=[2, 3], y='oo', a=[1, 2], a=[5, 6, 7])
@@ -1245,7 +1245,7 @@ test "labeled argument 4" {
 
 test "labeled argument 5" {
   const src =
-  \\ def fun(x: str, y: num, a*: List{num})
+  \\ def fun(x: Str, y: Num, a*: List{Num})
   \\  println('x is', x, 'y is', y, 'a is', a)
   \\ end
   \\ fun(y=5, a=[2, 3])
@@ -1257,7 +1257,7 @@ test "labeled argument 5" {
 
 test "labeled argument 6" {
   const src =
-  \\ def fun(x: str, y: num, a: List{num}, b: Result{any, str})
+  \\ def fun(x: Str, y: Num, a: List{Num}, b: Result{Any, Str})
   \\  println('x is', x, 'y is', y, 'a is', a, 'b is', b)
   \\ end
   \\ fun(6='a', 12: 9)
@@ -1300,8 +1300,8 @@ test "patterns-1.<ordinary match>" {
  try doErrorTest(src, 4, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Tuple(_, str)",
-    "Tuple(str, _)"
+    "Tuple(_, Str)",
+    "Tuple(Str, _)"
   });
 }
 
@@ -1316,13 +1316,13 @@ test "patterns-2.<scopes>" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Cannot assign type 'num' to type 'str'",
+    "Cannot assign type 'Num' to type 'Str'",
   });
 }
 
 test "patterns-3.<nested match>" {
   const src =
-  \\ let z = false
+  \\ let z = False
   \\ match (('a', 'b'), ('x', 'y'))
   \\
   \\  case (('x', 'y'), ..) => do
@@ -1336,7 +1336,7 @@ test "patterns-3.<nested match>" {
   \\  case (('a', t, ..) as d, ..) => do
   \\    let h = z
   \\    println('second')
-  \\    z = true
+  \\    z = True
   \\  end
   \\  case (('x', k), y) => do
   \\    let v = z
@@ -1364,7 +1364,7 @@ test "patterns-3.1.<exhaustiveness>" {
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Tuple(_, Just(num))",
+    "Tuple(_, Just(Num))",
   });
 }
 
@@ -1373,17 +1373,17 @@ test "patterns-3.2.<redundancy>" {
   \\ let i = [1, 2]
   \\ let k = (i.get(0), i.get(1))
   \\ match k
-  \\  case (None, None) => assert(false, 'a')
-  \\  case (Just(a), Just(b)) => assert(true, 'b')
-  \\  case (_, Just(_)) => assert(false, 'red')
-  \\  case (None, _) => assert(false, 'c')
-  \\  case (_, None) => assert(false, 'd')
+  \\  case (None, None) => assert(False, 'a')
+  \\  case (Just(a), Just(b)) => assert(True, 'b')
+  \\  case (_, Just(_)) => assert(False, 'red')
+  \\  case (None, _) => assert(False, 'c')
+  \\  case (_, None) => assert(False, 'd')
   \\ end
   \\ 1/''
   ;
   try doErrorTest(src, 2, [_][]const u8{
     "possible redundant case",
-    "case (None, _) => assert(false, 'c')",
+    "case (None, _) => assert(False, 'c')",
   });
 }
 
@@ -1476,17 +1476,17 @@ test "patterns-7.<tuple exhaustiveness>" {
   try doErrorTest(src, 4, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Tuple(_, str)",
-    "Tuple(str, _)"
+    "Tuple(_, Str)",
+    "Tuple(Str, _)"
   });
 }
 
 test "patterns-8.<list exhaustiveness>" {
   const src =
-  \\ let z = false
+  \\ let z = False
   \\ match [('a', 'b')]
   \\  case [('x', 'y')] => println('first')
-  \\  case [('a', 'b' as o)] as d => z = true
+  \\  case [('a', 'b' as o)] as d => z = True
   \\  case [('q', 'k')] => println('third')
   \\ end
   \\ assert(z, 'should be matched')
@@ -1494,26 +1494,26 @@ test "patterns-8.<list exhaustiveness>" {
   try doErrorTest(src, 5, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Tuple(_, str)",
-    "Tuple(str, _)",
-    "List{Tuple{str, str}}"
+    "Tuple(_, Str)",
+    "Tuple(Str, _)",
+    "List{Tuple{Str, Str}}"
   });
 }
 
 test "patterns-9.<match redundancy>" {
   const src =
-  \\ let z = false
+  \\ let z = False
   \\ class Cat
   \\ end
   \\ class Dog
   \\ end
   \\ type Animal = C(Cat) | D(Dog)
   \\ let p: Animal = C(Cat())
-  \\ let z = false
+  \\ let z = False
   \\ match p
   \\  case D(Dog()) => println('good')
   \\  case D(Dog()) => println('hmm')
-  \\  case C(Cat()) => z = true
+  \\  case C(Cat()) => z = True
   \\ end
   \\ assert(z, 'should be matched')
   ;
@@ -1532,14 +1532,14 @@ test "patterns-10.<type checks>" {
   \\ end
   \\ type Animal = C(Cat) | D(Dog)
   \\ let p: Animal = C(Cat())
-  \\ let z = false
+  \\ let z = False
   \\ match p
   \\  case D(Dog()) => println('hmm')
   \\  case C(Cat('fox')) => println('nope')
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' but found 'str'"
+    "Expected type 'Num' but found 'Str'"
   });
 }
 
@@ -1552,7 +1552,7 @@ test "patterns-11.<type checks>" {
   \\ end
   \\ type Animal = C(Cat) | D(Dog)
   \\ let p: Animal = C(Cat())
-  \\ let z = false
+  \\ let z = False
   \\ match p
   \\  case [] => println('hmm')
   \\  case [C(Cat(5))] => println('nope')
@@ -1569,7 +1569,7 @@ test "patterns-11.<type checks>" {
   \\ end
   \\ type Animal = C(Cat) | D(Dog)
   \\ let p: Animal = C(Cat())
-  \\ let z = false
+  \\ let z = False
   \\ match p
   \\  case Cat(5) => println('nope')
   \\ end
@@ -1588,7 +1588,7 @@ test "patterns-12.<type checks>" {
   \\ end
   \\ type Animal = C(Cat) | D(Dog)
   \\ let p: Animal = C(Cat())
-  \\ let z = false
+  \\ let z = False
   \\ match [p]
   \\  case [] => println('hmm')
   \\  case [D(Cat(5))] => println('nope')
@@ -1610,7 +1610,7 @@ test "patterns-13.<type checks>" {
   \\ end
   \\ type Animal = C(Cat) | D(Dog)
   \\ let p: Animal = C(Cat())
-  \\ let z = false
+  \\ let z = False
   \\ match p
   \\  case D(Dog(x=5)) => println('nope')
   \\ end
@@ -1630,7 +1630,7 @@ test "patterns-14.<type checks (fields)>" {
   \\ end
   \\ type Animal = C(Cat) | D(Dog)
   \\ let p: Animal = D(Dog())
-  \\ let z = false
+  \\ let z = False
   \\ match p
   \\  case D(Dog(x=5, j=10)) => println('nope')
   \\ end
@@ -1650,7 +1650,7 @@ test "patterns-14b.<label arguments>" {
   \\ end
   \\ type Animal = C(Cat) | D(Dog)
   \\ let p: Animal = D(Dog())
-  \\ let z = false
+  \\ let z = False
   \\ match p
   \\  case D(Dog(y=5, x, ..)) => println('nope')
   \\ end
@@ -1670,7 +1670,7 @@ test "patterns-14b.<type checks (fields)>" {
   \\ end
   \\ type Animal = C(Cat) | D(Dog)
   \\ let p: Animal = D(Dog())
-  \\ let z = false
+  \\ let z = False
   \\ match p
   \\  case D(Dog(x, y, ..)) => println('nope')
   \\ end
@@ -1683,29 +1683,29 @@ test "patterns-14b.<type checks (fields)>" {
   });
 }
 
-test "patterns-15.<match on bool (exhaustiveness)>" {
+test "patterns-15.<match on Bool (exhaustiveness)>" {
   const src =
   \\ match (1 < 2)
-  \\  case false => println('nay')
+  \\  case False => println('nay')
   \\ end
   ;
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "true",
+    "True",
   });
 }
 
-test "patterns-16.<match on bool (exhaustiveness)>" {
+test "patterns-16.<match on Bool (exhaustiveness)>" {
   const src =
   \\ match (1 < 2)
-  \\  case true => println('nay')
+  \\  case True => println('nay')
   \\ end
   ;
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "false",
+    "False",
   });
 }
 
@@ -1720,15 +1720,15 @@ test "patterns-17.<ranges (exhaustiveness)>" {
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "num",
+    "Num",
   });
 }
 
 test "patterns-18.<redundancy>" {
   const src =
-  \\ match true
-  \\  case false => println('nay')
-  \\  case true => println('yay')
+  \\ match True
+  \\  case False => println('nay')
+  \\  case True => println('yay')
   \\  case _ => println('oops')
   \\ end
   \\ 1 / '' # necessary for error propagation
@@ -1801,20 +1801,20 @@ test "patterns-22.<match on generics (exhaustiveness)>" {
   \\    self.j = j
   \\  end
   \\ end
-  \\ let z = false
+  \\ let z = False
   \\ type Fx{T, V} = F1(Fox{T}) | F2(Fox{V})
-  \\ let j: Fx{str,num} = F1(Fox('pin'))
+  \\ let j: Fx{Str,Num} = F1(Fox('pin'))
   \\ match j
   \\  case F2(Fox(6)) => println('whew')
   \\  case F2(Fox(_)) => println('caught ya num')
-  \\  case F1(Fox('pin')) as x => z = true
+  \\  case F1(Fox('pin')) as x => z = True
   \\ end
   \\ assert(z, 'should be matched')
   ;
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Fox(str)",
+    "Fox(Str)",
   });
 }
 
@@ -1829,7 +1829,7 @@ test "patterns-23.<match on generics (exhaustiveness)>" {
   \\ class Ant{T}
   \\ end
   \\ type Fx{T, V, K} = F1(Fox{T}) | F2(Fox{V}) | F3(Fox{K}) | F4(Ant{T})
-  \\ let j: Fx{str, num, str} = F4(Ant{str}())
+  \\ let j: Fx{Str, Num, Str} = F4(Ant{Str}())
   \\ match j
   \\  case F1(Fox(..)) as x => println('yes', x)
   \\  case F2(Fox([6])) => println('whew')
@@ -1839,7 +1839,7 @@ test "patterns-23.<match on generics (exhaustiveness)>" {
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "F3(Fox{str}) | F4(Ant{str})",
+    "F3(Fox{Str}) | F4(Ant{Str})",
   });
 }
 
@@ -1852,17 +1852,17 @@ test "patterns-24.<match on generics (redundancy)>" {
   \\  end
   \\ end
   \\ type Fx{T, V} = F1(Fox{T}) | F2(Fox{V})
-  \\ let j: Fx{str, num} = F1(Fox{str}('pin', 'pan'))
+  \\ let j: Fx{Str, Num} = F1(Fox{Str}('pin', 'pan'))
   \\ match j
   \\  case F1(Fox(..)) as x => println('yes', x)
-  \\  case F1(Fox(_)) => println('caught ya str')
+  \\  case F1(Fox(_)) => println('caught ya Str')
   \\  case F2(Fox([6])) => println('whew')
   \\  case F2(Fox(_)) => println('caught ya num')
   \\ end
   ;
   try doErrorTest(src, 2, [_][]const u8{
     "possible redundant case",
-    "case F1(Fox(_)) => println('caught ya str')"
+    "case F1(Fox(_)) => println('caught ya Str')"
   });
 }
 
@@ -1877,7 +1877,7 @@ test "patterns-25.<match on generics (redundancy)>" {
   \\ class Ant{T}
   \\ end
   \\ type Fx{T, V, K} = F1(Fox{T}) | F2(Fox{V}) | F3(Ant{T})
-  \\ let j: Fx{str, num, str} = F3(Ant{str}())
+  \\ let j: Fx{Str, Num, Str} = F3(Ant{Str}())
   \\ match j
   \\  case F1(Fox(..)) as x => println('yes', x)
   \\  case F2(Fox([6])) => println('whew')
@@ -1931,11 +1931,11 @@ test "patterns-26.<redundancy-hard-error>" {
 
 test "patterns-27.<redundancy>" {
   const src =
-  \\ let j = true
+  \\ let j = True
   \\ match j
-  \\   case false as k => println(j, k)
+  \\   case False as k => println(j, k)
   \\   case _ as t => match t
-  \\      case true => println("B.1")
+  \\      case True => println("B.1")
   \\      case _ => println('err.2')
   \\   end
   \\ end
@@ -1950,57 +1950,57 @@ test "patterns-27.<redundancy>" {
 test "patterns-28.<match on maps (redundancy)>" {
   const src =
   \\ class Fox
-  \\  url: str
-  \\  def init(url: str)
+  \\  url: Str
+  \\  def init(url: Str)
   \\    self.url = url
   \\  end
   \\ end
-  \\ type Fmt = Class(Fox) | Str(str)
-  \\ let foo = {"sound": Class(Fox('fin.co')) as Fmt, "format": Str("txt")}
+  \\ type Fmt = Class(Fox) | Ext(Str)
+  \\ let foo = {"sound": Class(Fox('fin.co')) as Fmt, "format": Ext("txt")}
   \\ match foo
   \\  case {"sound": _, "format": _} => println(1)
-  \\  case {"sound" as a: Class(Fox(url)) as b, "format": Str("txt"),} => println(12, url, a, b)
+  \\  case {"sound" as a: Class(Fox(url)) as b, "format": Ext("txt"),} => println(12, url, a, b)
   \\  case {..} => println('default')
   \\ end
   ;
   try doErrorTest(src, 2, [_][]const u8{
     "possible redundant case",
-    "case {\"sound\" as a: Class(Fox(url)) as b, \"format\": Str(\"txt\"),} => println(12, url, a, b)"
+    "case {\"sound\" as a: Class(Fox(url)) as b, \"format\": Ext(\"txt\"),} => println(12, url, a, b)"
   });
 }
 
 test "patterns-29.<match on maps (exhaustiveness)>" {
   const src =
   \\ class Fox
-  \\  url: str
-  \\  def init(url: str)
+  \\  url: Str
+  \\  def init(url: Str)
   \\    self.url = url
   \\  end
   \\ end
-  \\ type Fmt = Class(Fox) | Str(str)
-  \\ let foo = {"sound": Class(Fox('fin.co')) as Fmt, "format": Str("txt")}
+  \\ type Fmt = Class(Fox) | Ext(Str)
+  \\ let foo = {"sound": Class(Fox('fin.co')) as Fmt, "format": Ext("txt")}
   \\ match foo
-  \\  case {"sound" as a: Class(Fox(url)) as b, "format": Str("ogg"),} => println(12, url, a, b)
+  \\  case {"sound" as a: Class(Fox(url)) as b, "format": Ext("ogg"),} => println(12, url, a, b)
   \\  case {"sound": _, "format": _} => println(1)
   \\ end
   ;
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Map{str, _}",
+    "Map{Str, _}",
   });
 }
 
 test "patterns-29.<match on maps (exhaustivenes 2)>" {
   const src =
   \\ class Fox
-  \\  url: str
-  \\  def init(url: str)
+  \\  url: Str
+  \\  def init(url: Str)
   \\    self.url = url
   \\  end
   \\ end
-  \\ type Fmt = Class(Fox) | Str(str)
-  \\ let foo = {"sound": Class(Fox('fin.co')) as Fmt, "format": Str("txt")}
+  \\ type Fmt = Class(Fox) | Ext(Str)
+  \\ let foo = {"sound": Class(Fox('fin.co')) as Fmt, "format": Ext("txt")}
   \\ match foo
   \\  case { a: Class(Fox('url')) as b} => println(12, url, a, b)
   \\ end
@@ -2008,53 +2008,53 @@ test "patterns-29.<match on maps (exhaustivenes 2)>" {
   try doErrorTest(src, 4, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Fox(str)",
-    "Map{_, Class(Fox) | Str(str)}",
+    "Fox(Str)",
+    "Map{_, Class(Fox) | Ext(Str)}",
   });
 }
 
 test "patterns-29.<match on maps (exhaustivenes 3)>" {
   const src =
   \\ class Fox
-  \\  url: str
-  \\  def init(url: str)
+  \\  url: Str
+  \\  def init(url: Str)
   \\    self.url = url
   \\  end
   \\ end
-  \\ type Fmt = Class(Fox) | Str(str)
-  \\ let foo = {"sound": Class(Fox('fin.co')) as Fmt, "format": Str("txt")}
+  \\ type Fmt = Class(Fox) | Ext(Str)
+  \\ let foo = {"sound": Class(Fox('fin.co')) as Fmt, "format": Ext("txt")}
   \\ match foo
-  \\  case { a: Class(Fox('url')) as b, x: Str("ogg"),} => println(12, url, a, b)
+  \\  case { a: Class(Fox('url')) as b, x: Ext("ogg"),} => println(12, url, a, b)
   \\ end
   ;
   try doErrorTest(src, 5, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Str(str)",
-    "Map{_, Class(Fox) | Str(str)}",
-    "Fox(str)",
+    "Ext(Str)",
+    "Map{_, Class(Fox) | Ext(Str)}",
+    "Fox(Str)",
   });
 }
 
 test "patterns-30.<match on maps (redundancy)>" {
   const src =
   \\ class Fox
-  \\  url: str
-  \\  def init(url: str)
+  \\  url: Str
+  \\  def init(url: Str)
   \\    self.url = url
   \\  end
   \\ end
-  \\ type Fmt = Class(Fox) | Str(str)
-  \\ let foo = {"sound": Class(Fox('fin.co')) as Fmt, "format": Str("txt")}
+  \\ type Fmt = Class(Fox) | Ext(Str)
+  \\ let foo = {"sound": Class(Fox('fin.co')) as Fmt, "format": Ext("txt")}
   \\ match foo
   \\  case {..} => println('default')
-  \\  case {"sound" as a: Class(Fox(url)) as b, "format": Str("ogg"),} => println(12, url, a, b)
+  \\  case {"sound" as a: Class(Fox(url)) as b, "format": Ext("ogg"),} => println(12, url, a, b)
   \\  case {"sound": _, "format": _} => println(1)
   \\ end
   ;
   try doErrorTest(src, 4, [_][]const u8{
     "possible redundant case",
-    "case {\"sound\" as a: Class(Fox(url)) as b, \"format\": Str(\"ogg\"),} => println(12, url, a, b)",
+    "case {\"sound\" as a: Class(Fox(url)) as b, \"format\": Ext(\"ogg\"),} => println(12, url, a, b)",
     "possible redundant case",
     "case {\"sound\": _, \"format\": _} => println(1)",
   });
@@ -2079,7 +2079,7 @@ test "patterns-30b.<match on lists (redundancy)>" {
 
 test "patterns-31.<match in functions>" {
   const src =
-  \\ def fib(n: num)
+  \\ def fib(n: Num)
   \\  match n
   \\    case 0..1 => do
   \\      return n
@@ -2096,13 +2096,13 @@ test "patterns-31.<match in functions>" {
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "num",
+    "Num",
   });
 }
 
 test "patterns-32.<match in functions>" {
   const src =
-  \\ def check(n: num)
+  \\ def check(n: Num)
   \\  match n
   \\   case 1..4 => return 1
   \\   case 5..9 => return 2
@@ -2114,14 +2114,14 @@ test "patterns-32.<match in functions>" {
   \\ j += 4
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "cannot return multiple types: 'num & void'",
-    "Expected type 'num' + 'num' but found 'num & void' + 'num'"
+    "cannot return multiple types: 'Num & Unit'",
+    "Expected type 'Num' + 'Num' but found 'Num & Unit' + 'Num'"
   });
 }
 
-test "cfa.<void returns>" {
+test "cfa.<Unit returns>" {
   const src =
-  \\ def check(n: num)
+  \\ def check(n: Num)
   \\  if n > 5
   \\    do
   \\    end
@@ -2132,13 +2132,13 @@ test "cfa.<void returns>" {
   \\ check(3) + 5
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'num & void' + 'num'",
+    "Expected type 'Num' + 'Num' but found 'Num & Unit' + 'Num'",
   });
 }
 
-test "cfa-2.<void returns>" {
+test "cfa-2.<Unit returns>" {
   const src =
-  \\ def check(n: num)
+  \\ def check(n: Num)
   \\  if n > 5
   \\    return 5
   \\  else
@@ -2149,16 +2149,16 @@ test "cfa-2.<void returns>" {
   \\ check(3) + 5
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'num & void' + 'num'",
+    "Expected type 'Num' + 'Num' but found 'Num & Unit' + 'Num'",
   });
 }
 
 test "patterns-33.<match in functions>" {
   const src =
-  \\ def check(n: num)
+  \\ def check(n: Num)
   \\  match n
   \\   case 1..4 => return 'a'
-  \\   case 5..9 => return true
+  \\   case 5..9 => return True
   \\    case 11..50 as q => println('yep')
   \\   case _ => return 3
   \\  end
@@ -2167,14 +2167,14 @@ test "patterns-33.<match in functions>" {
   \\ j += 4
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "cannot return multiple types: 'str & bool & num & void'",
-    "Expected type 'num' + 'num' but found 'str & bool & num & void' + 'num'"
+    "cannot return multiple types: 'Str & Bool & Num & Unit'",
+    "Expected type 'Num' + 'Num' but found 'Str & Bool & Num & Unit' + 'Num'"
   });
 }
 
 test "patterns-34.<match in functions>" {
   const src =
-  \\ def check(n: num): num
+  \\ def check(n: Num): Num
   \\  match n
   \\   case 1..4 => return 5
   \\   case 5..9 => println('jjj')
@@ -2185,13 +2185,13 @@ test "patterns-34.<match in functions>" {
   \\ check(13)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Control flow reaches exit from this point without returning type 'num'",
+    "Control flow reaches exit from this point without returning type 'Num'",
   });
 }
 
 test "patterns-35.<match in functions>" {
   const src =
-  \\ def check(n: num): num
+  \\ def check(n: Num): Num
   \\  match n
   \\   case 1..4 => return 5
   \\   case 5..9 => return 'oops'
@@ -2202,14 +2202,14 @@ test "patterns-35.<match in functions>" {
   \\ check(13)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected return type 'num' but found 'str'",
+    "Expected return type 'Num' but found 'Str'",
   });
 }
 
 test "patterns-36.<inexhaustive rested patterns>" {
   const src =
-  \\ let z = false
-  \\ match ('a', false, 'b', true, 'c', false)
+  \\ let z = False
+  \\ match ('a', False, 'b', True, 'c', False)
   \\  case ('x', _, 'c', _, ..) => println('has keys "x" and "c"')
   \\  case ('a', _, 'b', _ as p, ..) if z => println(z)
   \\  case (..) if !z => println('has something or none')
@@ -2218,16 +2218,16 @@ test "patterns-36.<inexhaustive rested patterns>" {
   try doErrorTest(src, 5, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Tuple(_, _, str, _, _, _)",
-    "bool",
-    "Tuple(str, _, _, _, _, _)"
+    "Tuple(_, _, Str, _, _, _)",
+    "Bool",
+    "Tuple(Str, _, _, _, _, _)"
   });
 }
 
 test "patterns-37.<inexhaustive rested patterns>" {
   const src =
-  \\ let z = false
-  \\ match {'a': false, 'b': true, 'c': false}
+  \\ let z = False
+  \\ match {'a': False, 'b': True, 'c': False}
   \\  case {'x': _, 'c': _, ..} => println('has keys "x" and "c"')
   \\  case {'a': _, 'b': _ as p, ..} if p => z = p
   \\  case {..} if !z => println('has something or none')
@@ -2236,13 +2236,13 @@ test "patterns-37.<inexhaustive rested patterns>" {
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Map{str, _}",
+    "Map{Str, _}",
   });
 }
 
 test "patterns-38.<inexhaustive patterns>" {
   const src =
-  \\ def goodOrBad(n: num)
+  \\ def goodOrBad(n: Num)
   \\   if n > 25
   \\    return ('oops')!
   \\   end
@@ -2257,13 +2257,13 @@ test "patterns-38.<inexhaustive patterns>" {
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Ok(num)",
+    "Ok(Num)",
   });
 }
 
 test "patterns-39.<inexhaustive patterns>" {
   const src =
-  \\ def goodOrBad(n: num)
+  \\ def goodOrBad(n: Num)
   \\   if n > 25
   \\    return ('oops')!
   \\   end
@@ -2278,67 +2278,67 @@ test "patterns-39.<inexhaustive patterns>" {
   try doErrorTest(src, 4, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Error(str)",
-    "Ok(num)",
+    "Error(Str)",
+    "Ok(Num)",
   });
 }
 
 test "patterns-40.<annotated tags>" {
   const src =
-  \\ type T = Tag(a: num, b: str, c: bool)
-  \\  match Tag(a=5, b='oops', c=false)
+  \\ type T = Tag(a: Num, b: Str, c: Bool)
+  \\  match Tag(a=5, b='oops', c=False)
   \\    case Tag(a=5, b=6, c=7) => println('yay')
   \\  end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'str' but found 'num'",
+    "Expected type 'Str' but found 'Num'",
   });
 }
 
 test "patterns-41.<annotated tags>" {
   const src =
-  \\ type T = Tag(a: num, b: str, c: bool)
-  \\  match Tag(a=5, b='oops', c=false)
-  \\    case Tag(a=5, b='oops', c=false) => println('yay')
+  \\ type T = Tag(a: Num, b: Str, c: Bool)
+  \\  match Tag(a=5, b='oops', c=False)
+  \\    case Tag(a=5, b='oops', c=False) => println('yay')
   \\  end
   ;
   try doErrorTest(src, 5, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Tag(_, _, true)",
-    "Tag(_, str, _)",
-    "Tag(num, _, _)",
+    "Tag(_, _, True)",
+    "Tag(_, Str, _)",
+    "Tag(Num, _, _)",
   });
 }
 
 test "patterns-42.<annotated tags>" {
   const src =
-  \\ type T = Tag(a: num, b: str, c: bool)
-  \\  match Tag(a=5, b='oops', c=false)
-  \\    case Tag(a=7, b='nope', d=true) => println('nay')
+  \\ type T = Tag(a: Num, b: Str, c: Bool)
+  \\  match Tag(a=5, b='oops', c=False)
+  \\    case Tag(a=7, b='nope', d=True) => println('nay')
   \\  end
   ;
   try doErrorTest(src, 5, [_][]const u8{
     "type 'T' has no field 'd'",
     "inexhaustive pattern match",
     "Remaining pattern type(s):",
-    "Tag(_, str, _)",
-    "Tag(num, _, _)"
+    "Tag(_, Str, _)",
+    "Tag(Num, _, _)"
   });
 }
 
 test "patterns-43.<annotated tags exhaustiveness>" {
   const src =
-  \\ type T = Tag(a: num, b: str, c: bool)
-  \\  match Tag(a=5, b='oops', c=false)
-  \\    case Tag(a=5, b='oopsy', c=false) => println('nay')
-  \\    case Tag(a=_, b=_, c=true) => println('nay')
+  \\ type T = Tag(a: Num, b: Str, c: Bool)
+  \\  match Tag(a=5, b='oops', c=False)
+  \\    case Tag(a=5, b='oopsy', c=False) => println('nay')
+  \\    case Tag(a=_, b=_, c=True) => println('nay')
   \\  end
   ;
   try doErrorTest(src, 3, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Tag(_, _, false)",
+    "Tag(_, _, False)",
   });
 }
 
@@ -2350,7 +2350,7 @@ test "patterns-44.<constant types>" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type '5' but found 'num'",
+    "Expected type '5' but found 'Num'",
   });
 }
 
@@ -2362,7 +2362,7 @@ test "patterns-44.<constant types 2>" {
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type '5' but found 'num'",
+    "Expected type '5' but found 'Num'",
   });
 }
 
@@ -2469,7 +2469,7 @@ test "patterns-45e.<redundancy in list>" {
   });
 }
 
-test "patterns-45f.<redundancy in list (false +ve)>" {
+test "patterns-45f.<redundancy in list (False +ve)>" {
   const src =
   \\ let list = [1, 2, 3]
   \\ match list
@@ -2483,13 +2483,13 @@ test "patterns-45f.<redundancy in list (false +ve)>" {
   ;
   try doErrorTest(src, 4, [_][]const u8{
     "possible redundant case",
-    "case [..] => 'ea' |> println", // false +ve
+    "case [..] => 'ea' |> println", // False +ve
     "possible redundant case",
     "case _ => 'other' |> println",
   });
 }
 
-test "patterns-45g.<redundancy in list (false +ve)>" {
+test "patterns-45g.<redundancy in list (False +ve)>" {
   const src =
   \\ let list = [1, 2, 3]
   \\ match list
@@ -2502,7 +2502,7 @@ test "patterns-45g.<redundancy in list (false +ve)>" {
   ;
   try doErrorTest(src, 2, [_][]const u8{
     "possible redundant case",
-    "case [..] => 'ea' |> println", // false +ve
+    "case [..] => 'ea' |> println", // False +ve
   });
 }
 
@@ -2519,7 +2519,7 @@ test "patterns-46.<missing patterns>" {
   \\  case R(Rat()) => 15
   \\  case _ => 5
   \\ end
-  \\ type Season = Spring | Summer | Autumn | Winter | Mag(str, num, str, num)
+  \\ type Season = Spring | Summer | Autumn | Winter | Mag(Str, Num, Str, Num)
   \\ match Autumn as Season
   \\   case Spring => "Mild"
   \\   case Summer => "Hot"
@@ -2531,63 +2531,63 @@ test "patterns-46.<missing patterns>" {
  try doErrorTest(src, 6, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Mag(_, _, _, num)",
-    "Mag(_, _, str, _)",
-    "Mag(_, num, _, _)",
-    "Mag(str, _, _, _)",
+    "Mag(_, _, _, Num)",
+    "Mag(_, _, Str, _)",
+    "Mag(_, Num, _, _)",
+    "Mag(Str, _, _, _)",
   });
 }
 
 test "patterns-47.<missing patterns>" {
   const src =
   \\ class Panda
-  \\  pub x: num
-  \\  pub y: str
-  \\  def init(a: num, b: str)
+  \\  pub x: Num
+  \\  pub y: Str
+  \\  def init(a: Num, b: Str)
   \\    self.x = a
   \\    self.y = b
   \\  end
   \\ end
-  \\ type Legion = Legion(str, num, Panda, bool)
-  \\ let j = Legion('a', 5, Panda(5, 'boy'), true)
+  \\ type Legion = Legion(Str, Num, Panda, Bool)
+  \\ let j = Legion('a', 5, Panda(5, 'boy'), True)
   \\ match j
-  \\  case Legion('a', 5, Panda(5, 'boy'), true) => println('you rock!')
+  \\  case Legion('a', 5, Panda(5, 'boy'), True) => println('you rock!')
   \\ end
   ;
  try doErrorTest(src, 7, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Legion(_, _, _, false)",
-    "Panda(_, str)",
-    "Panda(num, _)",
-    "Legion(_, num, _, _)",
-    "Legion(str, _, _, _)"
+    "Legion(_, _, _, False)",
+    "Panda(_, Str)",
+    "Panda(Num, _)",
+    "Legion(_, Num, _, _)",
+    "Legion(Str, _, _, _)"
   });
 }
 
 test "patterns-47b.<missing patterns>" {
   const src =
   \\ class Panda
-  \\  pub x: num
-  \\  pub y: str
-  \\  def init(a: num, b: str)
+  \\  pub x: Num
+  \\  pub y: Str
+  \\  def init(a: Num, b: Str)
   \\    self.x = a
   \\    self.y = b
   \\  end
   \\ end
-  \\ type Legion = Legion(str, num, str, bool)
-  \\ let j = Legion('a', 5, 'boy', true)
+  \\ type Legion = Legion(Str, Num, Str, Bool)
+  \\ let j = Legion('a', 5, 'boy', True)
   \\ match j
-  \\  case Legion('a', 5, 'boy', true) => println('you rock!')
+  \\  case Legion('a', 5, 'boy', True) => println('you rock!')
   \\ end
   ;
  try doErrorTest(src, 6, [_][]const u8{
     "inexhaustive pattern match.",
     "Remaining pattern type(s):",
-    "Legion(_, _, _, false)",
-    "Legion(_, _, str, _)",
-    "Legion(_, num, _, _)",
-    "Legion(str, _, _, _)"
+    "Legion(_, _, _, False)",
+    "Legion(_, _, Str, _)",
+    "Legion(_, Num, _, _)",
+    "Legion(Str, _, _, _)"
   });
 }
 
@@ -2596,12 +2596,12 @@ test "patterns-48.<constant patterns>" {
   \\ class F
   \\ end
   \\ 
-  \\ type FooBar = A(F) | B(num)
+  \\ type FooBar = A(F) | B(Num)
   \\ 
   \\ let a: FooBar = B(12)
   \\ 
   \\ match a
-  \\   case A(f) => assert(false, 'nope')
+  \\   case A(f) => assert(False, 'nope')
   \\   case B(FOO) => assert(FOO + 5 == 17, 'should be 17')
   \\ end
   \\ 
@@ -2609,8 +2609,8 @@ test "patterns-48.<constant patterns>" {
   \\
   \\ match 124
   \\   case FOO_CONST => assert(FOO_CONST == 124, 'should be 124')
-  \\   case ME_CONST => assert(false, 'oops')
-  \\   case _ => assert(false, 'unreachable')
+  \\   case ME_CONST => assert(False, 'oops')
+  \\   case _ => assert(False, 'unreachable')
   \\ end
   ;
  try doErrorTest(src, 1, [_][]const u8{
@@ -2624,14 +2624,14 @@ test "patterns-49.<constant patterns>" {
   \\
   \\ match 124
   \\   case FOO_CONST => assert(FOO_CONST == 124, 'should be 124')
-  \\   case _ME_CONST => assert(false, 'oops')  # not a constant, an identifier
-  \\   case _ => assert(false, 'unreachable')
+  \\   case _ME_CONST => assert(False, 'oops')  # not a constant, an identifier
+  \\   case _ => assert(False, 'unreachable')
   \\ end
   ;
   try doErrorTest(src, 3, [_][]const u8{
     "this variable begins with an '_' which prevents it from being considered as a constant pattern",
     "possible redundant case",
-    "case _ => assert(false, 'unreachable')",
+    "case _ => assert(False, 'unreachable')",
   });
 }
 
@@ -2653,12 +2653,12 @@ test "patterns-50.<dot patterns>" {
 
 test "parse-modes .1" {
   const src =
-  \\ class str
-  \\   x: num
+  \\ class Str
+  \\   x: Num
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "expected token '<ident>' but found 'str'",
+    "expected token '<ident>' but found 'Str'",
   });
 }
 
@@ -2684,7 +2684,7 @@ test "parse-modes .3" {
 
 test "typing.<untagged unions>" {
   const src =
-  \\ let x: str | num = 5
+  \\ let x: Str | Num = 5
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "expected token '=' but found '|'",
@@ -2693,17 +2693,17 @@ test "typing.<untagged unions>" {
 
 test "typing.<nullable>" {
   const src =
-  \\ let x: num? = None
-  \\ let y: str? = x
+  \\ let x: Num? = None
+  \\ let y: Str? = x
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Cannot initialize type 'Just(str) | None' with type 'Just(num) | None'",
+    "Cannot initialize type 'Just(Str) | None' with type 'Just(Num) | None'",
   });
 }
 
 test "typing.<tagged unions>" {
   const src =
-  \\ def stup(x: num)
+  \\ def stup(x: Num)
   \\  if x > 2
   \\    return None
   \\  else
@@ -2714,13 +2714,13 @@ test "typing.<tagged unions>" {
   \\ stup(1).? + 5
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "expected 'Maybe' type, found 'Error(str)'",
+    "expected 'Maybe' type, found 'Error(Str)'",
   });
 }
 
 test "typing.<tagged unions 2>" {
   const src =
-  \\ type NumStr = N(num) | S(str)
+  \\ type NumStr = N(Num) | S(Str)
   \\ def fun(n: NumStr)
   \\  if n is S
   \\    return n
@@ -2729,7 +2729,7 @@ test "typing.<tagged unions 2>" {
   \\ fun(S('fancy'))
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "cannot return multiple types: 'S(str) & void'",
+    "cannot return multiple types: 'S(Str) & Unit'",
   });
 }
 
@@ -2759,40 +2759,40 @@ test "typing.<tagged unions 4>" {
   \\ type Cat = A(name:Str, age:Num) | B
   \\ alias Fox = Foo
   \\ type BTree{T} = Node(T) | Branch(BTree{T}, BTree{T})
-  \\ let tree: BTree{num} = Branch(Node(1), Node(2))
-  \\ alias Foxy = str
-  \\ type Bio = Fox(num) | Name(Foxy)
+  \\ let tree: BTree{Num} = Branch(Node(1), Node(2))
+  \\ alias Foxy = Str
+  \\ type Bio = Fox(Num) | Name(Foxy)
   \\ type Pairk{K, V} = Pair(K, V)
-  \\ let p:Pairk{str, str} = Pair(0, 0)
+  \\ let p:Pairk{Str, Str} = Pair(0, 0)
   \\ type VOrC{V, C} = Vee(V) | Cee(C)
   \\ alias A{K, V} = Map{K, Map{K, VOrC{VOrC{K, V}, K}}}
-  \\ 2 as A{str, num}
+  \\ 2 as A{Str, Num}
   \\ alias A{K, V} = Maybe{VOrC{K, V}}
-  \\ 2 as A{bool, str}
+  \\ 2 as A{Bool, Str}
   ;
   try doErrorTest(src, 3, [_][]const u8{
-    "Cannot initialize type 'Pairk{str, str}' with type 'Pair(num, num)'",
-    "Cannot cast from type 'num' to type 'A{str, num}'",
-    "Cannot cast from type 'num' to type 'A{bool, str}'"
+    "Cannot initialize type 'Pairk{Str, Str}' with type 'Pair(Num, Num)'",
+    "Cannot cast from type 'Num' to type 'A{Str, Num}'",
+    "Cannot cast from type 'Num' to type 'A{Bool, Str}'"
   });
 }
 
 test "typing.<immutable varargs>" {
   const src =
-  \\ def fun(x*: num)
+  \\ def fun(x*: Num)
   \\  x[0] = 12
   \\ end
   \\
   \\ fun(2, 3, 4)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Cannot mutate immutable type 'List{num}'",
+    "Cannot mutate immutable type 'List{Num}'",
   });
 }
 
 test "typing.<type and tag collision>" {
   const src =
-  \\ type J = J(str) | T(num)
+  \\ type J = J(Str) | T(Num)
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "type with name 'J' shadows one of its variants",
@@ -2821,7 +2821,7 @@ test "typing.<tag collision>" {
 
 test "tags.<params>" {
   const src =
-  \\ type T = A(str)
+  \\ type T = A(Str)
   \\ let j = A()
   ;
   try doErrorTest(src, 1, [_][]const u8{
@@ -2831,7 +2831,7 @@ test "tags.<params>" {
 
 test "tags.<duplicate>" {
   const src =
-  \\ type T = A(x:str, y:num)
+  \\ type T = A(x:Str, y:Num)
   \\ let j = A(x='a', x=5)
   ;
   try doErrorTest(src, 1, [_][]const u8{
@@ -2841,7 +2841,7 @@ test "tags.<duplicate>" {
 
 test "tags.<label incomplete>" {
   const src =
-  \\ type T = A(x:str, num)
+  \\ type T = A(x:Str, Num)
   \\ let j = A(j='a', 5)
   ;
   try doErrorTest(src, 1, [_][]const u8{
@@ -2851,7 +2851,7 @@ test "tags.<label incomplete>" {
 
 test "tags.<label>" {
   const src =
-  \\ type T = A(x:str, y:num)
+  \\ type T = A(x:Str, y:Num)
   \\ let j = A(j='a', 5)
   ;
   try doErrorTest(src, 1, [_][]const u8{
@@ -2862,7 +2862,7 @@ test "tags.<label>" {
 test "aspec.<fields 1>" {
   const src =
   \\ class Foo
-  \\  x: num = 19
+  \\  x: Num = 19
   \\  y = 11
   \\ end
   \\ let j = Foo()
@@ -2877,14 +2877,14 @@ test "aspec.<fields 1>" {
 test "aspec.<fields 2>" {
   const src =
   \\ class Fish
-  \\  pub x: str
-  \\  pub y: num
-  \\  j: List{num}
+  \\  pub x: Str
+  \\  pub y: Num
+  \\  j: List{Num}
   \\
   \\  def init()
   \\    self.x = 'a'
   \\    self.y = 6
-  \\    self.j = [] as List{num}
+  \\    self.j = [] as List{Num}
   \\  end
   \\
   \\  pub def fox()
@@ -2909,14 +2909,14 @@ test "aspec.<fields 2>" {
 test "aspec.<fields 3>" {
   const src =
   \\ class Fish
-  \\  pub x: str
-  \\  pub y: num
-  \\  j: List{num}
+  \\  pub x: Str
+  \\  pub y: Num
+  \\  j: List{Num}
   \\
   \\  def init()
   \\    self.x = 'a'
   \\    self.y = 6
-  \\    self.j = [] as List{num}
+  \\    self.j = [] as List{Num}
   \\  end
   \\
   \\  pub def fox()
@@ -2934,14 +2934,14 @@ test "aspec.<fields 3>" {
 test "aspec.<fields 4>" {
   const src =
   \\ class Fish
-  \\  pub x: str
-  \\  pub y: num
-  \\  j: List{num}
+  \\  pub x: Str
+  \\  pub y: Num
+  \\  j: List{Num}
   \\
   \\  def init()
   \\    self.x = 'a'
   \\    self.y = 6
-  \\    self.j = [] as List{num}
+  \\    self.j = [] as List{Num}
   \\  end
   \\
   \\  pub def fox()
@@ -2974,14 +2974,14 @@ test "aspec.<methods 1>" {
 test "aspec.<methods 2>" {
   const src =
   \\ class Fish
-  \\  x: str
-  \\  pub y: num
-  \\  j: List{num}
+  \\  x: Str
+  \\  pub y: Num
+  \\  j: List{Num}
   \\
   \\  def init()
   \\    self.x = 'a'
   \\    self.y = 0
-  \\    self.j = [] as List{num}
+  \\    self.j = [] as List{Num}
   \\  end
   \\
   \\  def fox()
@@ -3001,14 +3001,14 @@ test "aspec.<methods 2>" {
 test "aspec.<methods 2.5>" {
   const src =
   \\ class Fish
-  \\  pub x: str
-  \\  pub y: num
-  \\  j: List{num}
+  \\  pub x: Str
+  \\  pub y: Num
+  \\  j: List{Num}
   \\
   \\  def init()
   \\    self.x = 'a'
   \\    self.y = 0
-  \\    self.j = [] as List{num}
+  \\    self.j = [] as List{Num}
   \\  end
   \\
   \\  def doom()
@@ -3031,9 +3031,9 @@ test "aspec.<methods 2.5>" {
 test "aspec.<methods 3>" {
   const src =
   \\ class Fish
-  \\  x: str
-  \\  y: num
-  \\  j: List{num}
+  \\  x: Str
+  \\  y: Num
+  \\  j: List{Num}
   \\
   \\  def pub fox()
   \\    return self.doStuff()
@@ -3047,8 +3047,8 @@ test "aspec.<methods 3>" {
 
 test "tag namespaces" {
   const src =
-  \\ type Cat = A(str) | B(str)
-  \\ type Dog = A(num) | B(str)
+  \\ type Cat = A(Str) | B(Str)
+  \\ type Dog = A(Num) | B(Str)
   \\ let x: Cat = Cat.A('fox')
   \\ let y: Dog = Dog.A(12)
   \\ println(x, y)
@@ -3067,7 +3067,7 @@ test "tag namespaces .2" {
   \\ j + 5
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'T' + 'num'",
+    "Expected type 'Num' + 'Num' but found 'T' + 'Num'",
   });
 }
 
@@ -3112,17 +3112,17 @@ test "binary tree" {
   \\      Node (7, Empty, Empty)
   \\    )
   \\  )
-  \\ print_tree(tree as Tree{str})
+  \\ print_tree(tree as Tree{Str})
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Cannot cast from type 'Node(num, Node(num, {...}, {...}) | Empty, Node(num, {...}, {...}) | Empty)' to type 'Tree{str}'",
+    "Cannot cast from type 'Node(Num, Node(Num, {...}, {...}) | Empty, Node(Num, {...}, {...}) | Empty)' to type 'Tree{Str}'",
   });
 }
 
 test "parameterized access" {
   const src =
   \\ type T{K, V} = K
-  \\ let x: T{str, num} = T.K
+  \\ let x: T{Str, Num} = T.K
   ;
   try doErrorTest(src, 1, [_][]const u8{
     "bad access of parameterized type",
@@ -3135,7 +3135,7 @@ test "unary add" {
   \\ println(+x)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type + 'num' but found + 'str'",
+    "Expected type + 'Num' but found + 'Str'",
   });
 }
 
@@ -3153,8 +3153,8 @@ test "match <statement in expr>" {
   const src =
   \\ let j = 10
   \\ let k = j |> match *
-  \\  case 1..6 as p => j = true
-  \\  case _ as w => j = false
+  \\  case 1..6 as p => j = True
+  \\  case _ as w => j = False
   \\ end
   ;
   try doErrorTest(src, 1, [_][]const u8{
@@ -3165,7 +3165,7 @@ test "match <statement in expr>" {
 test "traits <required methods .1>" {
   const src =
   \\ trait Display
-  \\  pub def fmt(): str;
+  \\  pub def fmt(): Str;
   \\ end
   \\
   \\ class Foo: Display
@@ -3175,14 +3175,14 @@ test "traits <required methods .1>" {
   try doErrorTest(src, 5, [_][]const u8{
     "type 'Foo' does not satisfy the trait constraint(s) of 'Display':",
     "The following method(s) are not implemented:",
-    "fmt", " : ", "fn (): str",
+    "fmt", " : ", "fn (): Str",
   });
 }
 
 test "traits <required methods .2>" {
   const src =
   \\ trait Display
-  \\  pub def fmt(): str;
+  \\  pub def fmt(): Str;
   \\ end
   \\
   \\ class Foo: Display
@@ -3193,7 +3193,7 @@ test "traits <required methods .2>" {
   \\ Foo()
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Expected method 'fn (): str' but found 'fn (): num'",
+    "Expected method 'fn (): Str' but found 'fn (): Num'",
     "pub def fmt()",
   });
 }
@@ -3201,7 +3201,7 @@ test "traits <required methods .2>" {
 test "traits <required methods .3>" {
   const src =
   \\ trait Display
-  \\  pub def fmt(): str
+  \\  pub def fmt(): Str
   \\    return "NotImplemented"
   \\  end
   \\ end
@@ -3214,14 +3214,14 @@ test "traits <required methods .3>" {
   \\ Foo()
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Expected method 'fn (): str' but found 'fn (): num'",
+    "Expected method 'fn (): Str' but found 'fn (): Num'",
     "pub def fmt()",
   });
 }
 
 test "traits <required methods .3.5>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\
   \\ trait Clone{T}
   \\  pub def clone(): T;
@@ -3231,12 +3231,12 @@ test "traits <required methods .3.5>" {
   \\  pub def shift(x: T): T;
   \\ end
   \\
-  \\ class Stuff: Shifts{num} | Clone{Stuff}
+  \\ class Stuff: Shifts{Num} | Clone{Stuff}
   \\    x = 12
   \\  pub def clone()
   \\    return 'Stuff()'
   \\  end
-  \\  pub def shift(shr: num)
+  \\  pub def shift(shr: Num)
   \\    return self.x >> shr
   \\  end
   \\ end
@@ -3246,16 +3246,16 @@ test "traits <required methods .3.5>" {
   \\ println(s.shift(2))
   ;
   try doErrorTest(src, 4, [_][]const u8{
-    "Expected method 'fn (): Stuff' but found 'fn (): str",
+    "Expected method 'fn (): Stuff' but found 'fn (): Str",
     "pub def clone()",
     "This error was triggered from here:",
-    "class Stuff: Shifts{num} | Clone{Stuff}"
+    "class Stuff: Shifts{Num} | Clone{Stuff}"
   });
 }
 
 test "traits <required methods .4>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\ trait Display
   \\  pub def fmt(): String;
   \\ end
@@ -3271,14 +3271,14 @@ test "traits <required methods .4>" {
   try doErrorTest(src, 8, [_][]const u8{
     "type 'Foo' does not satisfy the trait constraint(s) of 'Display & Clone':",
     "The following method(s) are not implemented:",
-    "fmt", " : ", "fn (): str",
+    "fmt", " : ", "fn (): Str",
     "clone", " : ", "fn (): Clone",
   });
 }
 
 test "traits <required methods .5>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\ trait Display
   \\  pub def fmt(): String;
   \\ end
@@ -3294,14 +3294,14 @@ test "traits <required methods .5>" {
   try doErrorTest(src, 8, [_][]const u8{
     "type 'Foo' does not satisfy the trait constraint(s) of 'Display & Clone{Foo}':",
     "The following method(s) are not implemented:",
-    "fmt", " : ", "fn (): str",
+    "fmt", " : ", "fn (): Str",
     "clone", " : ", "fn (): Foo",
   });
 }
 
 test "traits <required methods .6>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\ trait Display
   \\  pub def fmt(): String;
   \\ end
@@ -3326,7 +3326,7 @@ test "traits <required methods .6>" {
 
 test "traits <required methods .7>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\ trait Display
   \\  pub def fmt(): String;
   \\ end
@@ -3343,14 +3343,14 @@ test "traits <required methods .7>" {
   try doErrorTest(src, 8, [_][]const u8{
     "type 'Foo' does not satisfy the trait constraint(s) of 'Display & DisplayExt{Foo}':",
     "The following method(s) are not implemented:",
-    "fmt", " : ", "fn (): str",
-    "show", " : ", "fn (): str",
+    "fmt", " : ", "fn (): Str",
+    "show", " : ", "fn (): Str",
   });
 }
 
 test "traits <required methods .8>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\ trait Display
   \\  pub def fmt(): String;
   \\ end
@@ -3370,13 +3370,13 @@ test "traits <required methods .8>" {
   try doErrorTest(src, 5, [_][]const u8{
     "type 'Foo' does not satisfy the trait constraint(s) of 'Display & DisplayExt{Foo}':",
     "The following method(s) are not implemented:",
-    "fmt", " : ", "fn (): str",
+    "fmt", " : ", "fn (): Str",
   });
 }
 
 test "traits <required methods .9>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\ trait Display
   \\  pub def fmt(): String;
   \\ end
@@ -3396,13 +3396,13 @@ test "traits <required methods .9>" {
   try doErrorTest(src, 5, [_][]const u8{
     "type 'Foo' does not satisfy the trait constraint(s) of 'Display & DisplayExt{Foo}':",
     "The following method(s) are not implemented:",
-    "show", " : ", "fn (): str",
+    "show", " : ", "fn (): Str",
   });
 }
 
 test "traits <required methods .10>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\ trait Display
   \\  pub def fmt(): String;
   \\ end
@@ -3432,13 +3432,13 @@ test "traits <required methods .10>" {
 
 test "traits <required methods .11>" {
   const src =
-  \\ class Range: Iter{num}
+  \\ class Range: Iter{Num}
   \\    curr = 0
-  \\    start: num
-  \\    stop: Maybe{num}
-  \\    step: Maybe{num}
+  \\    start: Num
+  \\    stop: Maybe{Num}
+  \\    step: Maybe{Num}
   \\
-  \\    def init(start: num, stop: Maybe{num}, step: Maybe{num})
+  \\    def init(start: Num, stop: Maybe{Num}, step: Maybe{Num})
   \\      self.start = start
   \\      self.stop = stop
   \\      self.step = step
@@ -3459,20 +3459,20 @@ test "traits <required methods .11>" {
   \\ let range = Range(1, Just(12), Just(2))
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Expected method 'fn (): Iterator{num}' but found 'fn (): Range'",
+    "Expected method 'fn (): Iterator{Num}' but found 'fn (): Range'",
     "pub def iter()",
   });
 }
 
 test "traits <required methods .12>" {
   const src =
-  \\ class Range: Iter{num} | Iterator{num}
+  \\ class Range: Iter{Num} | Iterator{Num}
   \\    curr = 0
-  \\    start: num
-  \\    stop: Maybe{num}
-  \\    step: Maybe{num}
+  \\    start: Num
+  \\    stop: Maybe{Num}
+  \\    step: Maybe{Num}
   \\
-  \\    def init(start: num, stop: Maybe{num}, step: Maybe{num})
+  \\    def init(start: Num, stop: Maybe{Num}, step: Maybe{Num})
   \\      self.start = start
   \\      self.stop = stop
   \\      self.step = step
@@ -3493,16 +3493,16 @@ test "traits <required methods .12>" {
   \\ let range = Range(1, Just(12), Just(2))
   ;
   try doErrorTest(src, 6, [_][]const u8{
-    "type 'Range' does not satisfy the trait constraint(s) of 'Iter{num} & Iterator{num}'",
-    "class Range: Iter{num} | Iterator{num}",
+    "type 'Range' does not satisfy the trait constraint(s) of 'Iter{Num} & Iterator{Num}'",
+    "class Range: Iter{Num} | Iterator{Num}",
     "The following method(s) are not implemented",
-    "next", " : ", "fn (): Just(num) | None",
+    "next", " : ", "fn (): Just(Num) | None",
   });
 }
 
 test "traits <visibility .1>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\ trait Display
   \\  pub def fmt(): String;
   \\ end
@@ -3523,7 +3523,7 @@ test "traits <visibility .1>" {
 
 test "traits <visibility .2>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\
   \\ trait Clone{T}
   \\  def clone(): T;
@@ -3533,12 +3533,12 @@ test "traits <visibility .2>" {
   \\  pub def shift(x: T): T;
   \\ end
   \\
-  \\ class Stuff: Shifts{num} | Clone{Stuff}
+  \\ class Stuff: Shifts{Num} | Clone{Stuff}
   \\    x = 12
   \\  pub def clone()
   \\    return Stuff()
   \\  end
-  \\  pub def shift(shr: num)
+  \\  pub def shift(shr: Num)
   \\    return self.x >> shr
   \\  end
   \\ end
@@ -3555,7 +3555,7 @@ test "traits <visibility .2>" {
 
 test "traits <contravariance .1>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\ trait Display
   \\  pub def fmt(): String;
   \\ end
@@ -3576,7 +3576,7 @@ test "traits <contravariance .1>" {
 
 test "traits <contravariance .2>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\ trait Display
   \\  pub def fmt(): String;
   \\ end
@@ -3597,7 +3597,7 @@ test "traits <contravariance .2>" {
 
 test "traits <duplicate methods spec>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\ trait Display
   \\  pub def fmt(): String;
   \\  pub def fmt(): String;
@@ -3622,13 +3622,13 @@ test "traits <duplicate methods spec>" {
 
 test "traits <duplicate methods trait-chain .1>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\ trait Display
   \\  pub def fmt(): String;
   \\ end
   \\
   \\ trait Clone
-  \\  pub def fmt(): num;
+  \\  pub def fmt(): Num;
   \\ end
   \\
   \\ class Foo: Clone | Display
@@ -3645,7 +3645,7 @@ test "traits <duplicate methods trait-chain .1>" {
   ;
   try doErrorTest(src, 4, [_][]const u8{
     "conflicting trait method 'fmt'",
-    "pub def fmt(): num;",
+    "pub def fmt(): Num;",
     "Method already specified here:",
     "pub def fmt(): String;"
   });
@@ -3653,7 +3653,7 @@ test "traits <duplicate methods trait-chain .1>" {
 
 test "traits <function-bounds>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\ trait Display
   \\  pub def fmt(): String;
   \\ end
@@ -3683,7 +3683,7 @@ test "traits <function-bounds>" {
 
 test "traits <generic-function-bounds .1>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\
   \\ trait Display
   \\  pub def fmt(): String;
@@ -3693,7 +3693,7 @@ test "traits <generic-function-bounds .1>" {
   \\  pub def clone(): Clone;
   \\ end
   \\
-  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): Str
   \\  where
   \\    B: Display + Clone,
   \\    C: Display + Clone,
@@ -3732,7 +3732,7 @@ test "traits <generic-function-bounds .1>" {
 
 test "traits <generic-function-bounds .2>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\
   \\ trait Display
   \\  pub def fmt(): String;
@@ -3742,7 +3742,7 @@ test "traits <generic-function-bounds .2>" {
   \\  pub def clone(): Clone;
   \\ end
   \\
-  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): Str
   \\  where
   \\    B: Display + Clone,
   \\    C: Display + Clone,
@@ -3772,7 +3772,7 @@ test "traits <generic-function-bounds .2>" {
 
 test "traits <generic-function-bounds .3>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\
   \\ trait Display
   \\  pub def fmt(): String;
@@ -3782,7 +3782,7 @@ test "traits <generic-function-bounds .3>" {
   \\  pub def clone(): Clone;
   \\ end
   \\
-  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): Str
   \\  where
   \\    B: Display + Clone,
   \\    C: Display + Clone,
@@ -3821,7 +3821,7 @@ test "traits <generic-function-bounds .3>" {
 
 test "traits <generic-function-bounds .4>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\
   \\ trait Display
   \\  pub def fmt(): String;
@@ -3831,7 +3831,7 @@ test "traits <generic-function-bounds .4>" {
   \\  pub def clone(): Clone;
   \\ end
   \\
-  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): Str
   \\  where
   \\    B: Display + Clone,
   \\    C: Display + Clone,
@@ -3871,7 +3871,7 @@ test "traits <generic-function-bounds .4>" {
 
 test "traits <generic-function-bounds .5>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\
   \\ trait Display
   \\  pub def fmt(): String;
@@ -3881,7 +3881,7 @@ test "traits <generic-function-bounds .5>" {
   \\  pub def clone(): Clone;
   \\ end
   \\
-  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): Str
   \\  where
   \\    B: Display + Clone,
   \\    C: Display + Clone,
@@ -3923,7 +3923,7 @@ test "traits <generic-function-bounds .5>" {
 
 test "traits <generic-function-bounds .6>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\
   \\ trait Display
   \\  pub def fmt(): String;
@@ -3933,7 +3933,7 @@ test "traits <generic-function-bounds .6>" {
   \\  pub def clone(): Clone;
   \\ end
   \\
-  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): Str
   \\  where
   \\    B: Display + Clone,
   \\    C: Display + Clone,
@@ -3970,7 +3970,7 @@ test "traits <generic-function-bounds .6>" {
 
 test "traits <generic-function-bounds .7>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\
   \\ trait Display
   \\  pub def fmt(): String;
@@ -3980,7 +3980,7 @@ test "traits <generic-function-bounds .7>" {
   \\  pub def clone(): Clone;
   \\ end
   \\
-  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): Str
   \\  where
   \\    B: Display + Clone,
   \\    C: Display + Clone,
@@ -4017,7 +4017,7 @@ test "traits <generic-function-bounds .7>" {
 
 test "traits <generic without type params .1>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\
   \\ trait Clone{K}
   \\  def clone(): K;
@@ -4027,9 +4027,9 @@ test "traits <generic without type params .1>" {
   \\  pub def shift(x: T): T;
   \\ end
   \\
-  \\ class Stuff: Shifts{num} | Clone
+  \\ class Stuff: Shifts{Num} | Clone
   \\    x = 12
-  \\  pub def shift(shr: num)
+  \\  pub def shift(shr: Num)
   \\    return self.x >> shr
   \\  end
   \\ end
@@ -4044,7 +4044,7 @@ test "traits <generic without type params .1>" {
 
 test "traits <generic without type params .2>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\
   \\ trait Clone{T}
   \\  def clone(): T;
@@ -4054,9 +4054,9 @@ test "traits <generic without type params .2>" {
   \\  pub def shift(x: T): T;
   \\ end
   \\
-  \\ class Stuff: Shifts{num} | Clone
+  \\ class Stuff: Shifts{Num} | Clone
   \\    x = 12
-  \\  pub def shift(shr: num)
+  \\  pub def shift(shr: Num)
   \\    return self.x >> shr
   \\  end
   \\ end
@@ -4071,7 +4071,7 @@ test "traits <generic without type params .2>" {
 
 test "traits <generic missing traits>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\
   \\ trait Display
   \\  pub def fmt(): String;
@@ -4081,7 +4081,7 @@ test "traits <generic missing traits>" {
   \\  pub def clone(): T;
   \\ end
   \\
-  \\ def format{A: Display, B, C}(a: A, b: B, c: C): str
+  \\ def format{A: Display, B, C}(a: A, b: B, c: C): Str
   \\  where
   \\    B: Display + Clone{B},
   \\    C: Display + Clone{C},
@@ -4120,7 +4120,7 @@ test "traits <generic missing traits>" {
 
 test "traits <match patterns>" {
   const src =
-  \\ alias String = str
+  \\ alias String = Str
   \\
   \\ trait Display
   \\  pub def fmt(): String;
@@ -4155,7 +4155,7 @@ test "traits <match patterns>" {
 test "traits <where bounds>" {
   const src =
   \\ trait Speaks
-  \\  def speak(): str;
+  \\  def speak(): Str;
   \\ end
   \\
   \\ trait Barks{T}
@@ -4172,7 +4172,7 @@ test "traits <where bounds>" {
     "type 'Foo' does not satisfy the trait constraint(s) of 'Speaks'",
     "class Foo: Barks{Foo}",
     "The following method(s) are not implemented:",
-    "speak", " : ", "fn (): str",
+    "speak", " : ", "fn (): Str",
   });
 }
 
@@ -4191,7 +4191,7 @@ test "traits <where without generics>" {
 test "traits <generics & resolution .1>" {
   const src =
   \\ trait Speaks
-  \\  pub def speak(): str;
+  \\  pub def speak(): Str;
   \\ end
   \\
   \\ trait Barks{T}
@@ -4203,26 +4203,26 @@ test "traits <generics & resolution .1>" {
 
   \\ end
   \\
-  \\ Foo{num}()
+  \\ Foo{Num}()
   ;
   try doErrorTest(src, 6, [_][]const u8{
-    "type 'Foo{num}' does not satisfy the trait constraint(s) of 'Speaks'",
+    "type 'Foo{Num}' does not satisfy the trait constraint(s) of 'Speaks'",
     "class Foo{T}: Speaks | Barks{Foo{T}}",
     "The following method(s) are not implemented:",
-    "speak", " : ", "fn (): str",
+    "speak", " : ", "fn (): Str",
   });
 }
 
 test "traits <generics & resolution .2>" {
   const src =
   \\ trait Speaks
-  \\  pub def speak(): str;
+  \\  pub def speak(): Str;
   \\ end
   \\
   \\ trait Barks{T}
   \\   where
   \\      T: Speaks
-  \\  pub def bark(): str;
+  \\  pub def bark(): Str;
   \\ end
   \\
   \\ class Foo{T}: Barks{Foo{T}} | Speaks
@@ -4231,25 +4231,25 @@ test "traits <generics & resolution .2>" {
   \\  end
   \\ end
   \\
-  \\ Foo{num}()
+  \\ Foo{Num}()
   ;
   try doErrorTest(src, 6, [_][]const u8{
-    "type 'Foo{num}' does not satisfy the trait constraint(s) of 'Barks{Foo{num}} & Speaks'",
+    "type 'Foo{Num}' does not satisfy the trait constraint(s) of 'Barks{Foo{Num}} & Speaks'",
     "class Foo{T}: Barks{Foo{T}} | Speaks",
     "The following method(s) are not implemented:",
-    "bark", " : ", "fn (): str",
+    "bark", " : ", "fn (): Str",
   });
 }
 
 test "traits <init>" {
   const src =
   \\ trait Oops
-  \\  def init(): str;
+  \\  def init(): Str;
   \\ end
   ;
   try doErrorTest(src, 2, [_][]const u8{
     "A trait may not define or specify the method 'init'",
-    "def init(): str;",
+    "def init(): Str;",
   });
 }
 
@@ -4268,13 +4268,13 @@ test "classes <generic-init>" {
 test "classes <generic-method>" {
   const src =
   \\ class Oops{T}
-  \\  def bad{T, U}(): str 5 end
+  \\  def bad{T, U}(): Str 5 end
   \\ end
   ;
   try doErrorTest(src, 5, [_][]const u8{
     "Warning: generic methods are experimental and should not be used unless absolutely necessary.",
     "Duplicate generic type variable 'T'",
-    "def bad{T, U}(): str 5 end",
+    "def bad{T, U}(): Str 5 end",
     "Type variable also specified here:",
     "class Oops{T}",
   });
@@ -4322,12 +4322,12 @@ test "builtin @ <type, alias, function, class, trait>" {
   \\  return "oops"
   \\ end
   \\ class @Bad
-  \\  pub def @nooo(): str
+  \\  pub def @nooo(): Str
   \\    return "yep"
   \\  end
   \\ end
   \\ trait @NotGood
-  \\  pub def @yeah(): str;
+  \\  pub def @yeah(): Str;
   \\ end
   ;
   try doErrorTest(src, 10, [_][]const u8{
@@ -4367,7 +4367,7 @@ test "discard vardecl" {
 test "parser recovery" {
   const src =
   \\ trait Speaks
-  \\  def speak(): str;
+  \\  def speak(): Str;
   \\ end
   \\
   \\ trait Barks
@@ -4387,15 +4387,15 @@ test "parameter resolution" {
   \\ def iter{U}(itr: Iterator{U})
   \\ end
   \\
-  \\ class Foo: Iterator{num} | Iter{num}
+  \\ class Foo: Iterator{Num} | Iter{Num}
   \\  state = 0
-  \\  data: List{num}
+  \\  data: List{Num}
   \\
-  \\  def init(d: List{num})
+  \\  def init(d: List{Num})
   \\    self.data = d
   \\  end
   \\
-  \\  pub def fun(x: Iterator{str})
+  \\  pub def fun(x: Iterator{Str})
   \\    _ = x
   \\  end
   \\
@@ -4413,12 +4413,12 @@ test "parameter resolution" {
   \\ end
   \\
   \\ let f = Foo([1, 2, 3, 4])
-  \\ iter{str}(f)
+  \\ iter{Str}(f)
   \\ f.fun(f)
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Argument type mismatch. Expected type 'Iterator{str}' but found 'Foo'",
-    "Argument type mismatch. Expected type 'Iterator{str}' but found 'Foo'",
+    "Argument type mismatch. Expected type 'Iterator{Str}' but found 'Foo'",
+    "Argument type mismatch. Expected type 'Iterator{Str}' but found 'Foo'",
   });
 }
 
@@ -4427,12 +4427,12 @@ test "duplicate declaration .1" {
   \\ class Foo
   \\ end
   \\
-  \\ class Foo:Iter{str}
+  \\ class Foo:Iter{Str}
   \\ end
   ;
   try doErrorTest(src, 4, [_][]const u8{
     "illegal duplicate declaration (class)",
-    "class Foo:Iter{str}",
+    "class Foo:Iter{Str}",
     "'Foo' is also declared here",
     "class Foo",
   });
@@ -4516,13 +4516,13 @@ test "duplicate declaration .5 + error recovery" {
 
 test "builtin-functions-override" {
   const src =
-  \\ def exit(x: num)
+  \\ def exit(x: Num)
   \\  return x - 2
   \\ end
   \\
   \\ assert(exit(10) == 8, 'okay')
   \\
-  \\ def panic(x: num)
+  \\ def panic(x: Num)
   \\  return x - 2
   \\ end
   \\
@@ -4534,7 +4534,7 @@ test "builtin-functions-override" {
   \\ end
   \\ assert(!!check)
   \\
-  \\ def print(x*: any)
+  \\ def print(x*: Any)
   \\  return x
   \\ end
   \\ check(print('fox', 'fry', 1, 2, 3)[0] == 'fox', 'should be "fox"')
@@ -4543,18 +4543,18 @@ test "builtin-functions-override" {
     "illegal duplicate declaration (function)",
     "def assert{T}(t: T)",
     "'assert' is also declared here:",
-    "def assert(arg: bool, msg: str): void",
+    "def assert(arg: Bool, msg: Str): Unit",
     "illegal duplicate declaration (function)",
-    "def print(x*: any)",
+    "def print(x*: Any)",
     "'print' is also declared here:",
-    "def print(args*: any)",
+    "def print(args*: Any)",
   });
 }
 
 test "definite field assignment .1" {
   const src =
   \\ class Foo
-  \\  x: num
+  \\  x: Num
   \\
   \\  def init()
   \\    self.x = self.x
@@ -4573,7 +4573,7 @@ test "definite field assignment .1" {
 test "definite field assignment .2" {
   const src =
   \\ class Foo
-  \\  x: num
+  \\  x: Num
   \\
   \\  def init()
   \\    self.x = match 5
@@ -4595,7 +4595,7 @@ test "definite field assignment .2" {
 test "class in init method .1" {
   const src =
   \\ class Foo
-  \\  x: num
+  \\  x: Num
   \\
   \\  def init()
   \\    class Fooby
@@ -4633,7 +4633,7 @@ test "class in init method .2" {
 test "function in init method .1" {
   const src =
   \\ class Foo
-  \\  x: num
+  \\  x: Num
   \\
   \\  def init()
   \\    def Fooby
@@ -4652,14 +4652,14 @@ test "function in init method .1" {
 test "function in init method .2" {
   const src =
   \\ class Fish
-  \\  pub x: str
-  \\  pub y: num
-  \\  j: List{num}
+  \\  pub x: Str
+  \\  pub y: Num
+  \\  j: List{Num}
   \\
   \\  def init()
   \\    self.x = (def () => self.x)()
   \\    self.y = 0
-  \\    self.j = [] as List{num}
+  \\    self.j = [] as List{Num}
   \\  end
   \\
   \\  def fox()
@@ -4680,7 +4680,7 @@ test "for loop <scopes>" {
   \\ import std.iter 
   \\ let i = 'a'
   \\ let j = 'b'
-  \\ let l = [] as List{fn(): num}
+  \\ let l = [] as List{fn(): Num}
   \\ for i, j in iter.range(1, Just(12), None) do
   \\  _ = l.append(def () => j)
   \\ end
@@ -4691,7 +4691,7 @@ test "for loop <scopes>" {
   \\ assert(i == 'a' and j == 'b', 'should be same')
   ;
   try doErrorTest(src, 2, [_][]const u8{
-    "Cannot index 'List{num}' type with type 'str'",
+    "Cannot index 'List{Num}' type with type 'Str'",
     "_ = assert(fun() == expected[i], 'should be same')",
   });
 }
@@ -4700,14 +4700,14 @@ test "generic call parameter mismatch .1" {
   const src =
   \\ class Fox{T}
   \\   pub x: List{T}
-  \\   def init(x*: T): void
+  \\   def init(x*: T): Unit
   \\     self.x = x
   \\   end
   \\   pub def pulse()
   \\     return self
   \\   end
   \\   pub def getGen()
-  \\     alias T = Tuple{str}
+  \\     alias T = Tuple{Str}
   \\     def fun(p: T)
   \\       return p[0]
   \\     end
@@ -4717,7 +4717,7 @@ test "generic call parameter mismatch .1" {
   \\ let j = Fox{'mia'}(9)
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Argument type mismatch. Expected type 'mia' but found 'num'",
+    "Argument type mismatch. Expected type 'mia' but found 'Num'",
   });
 }
 
@@ -4725,14 +4725,14 @@ test "generic call parameter mismatch .2" {
   const src =
   \\ class Fox{T}
   \\   pub x: List{T}
-  \\   def init(x*: T): void
+  \\   def init(x*: T): Unit
   \\     self.x = x
   \\   end
   \\   pub def pulse()
   \\     return self
   \\   end
   \\   pub def getGen()
-  \\     alias T = Tuple{str}
+  \\     alias T = Tuple{Str}
   \\     def fun(p: T)
   \\       return p[0]
   \\     end
@@ -4742,7 +4742,7 @@ test "generic call parameter mismatch .2" {
   \\ let j = Fox{'mia'}('miah')
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Argument type mismatch. Expected type 'mia' but found 'str'",
+    "Argument type mismatch. Expected type 'mia' but found 'Str'",
   });
 }
 
@@ -4750,7 +4750,7 @@ test "generic call parameter mismatch .3" {
   const src =
   \\ class Fox{T}
   \\    x: List{T}
-  \\    def init(x*: T): void
+  \\    def init(x*: T): Unit
   \\      self.x = x
   \\    end
   \\    def pulse()
@@ -4763,7 +4763,7 @@ test "generic call parameter mismatch .3" {
   \\      return fun
   \\    end
   \\ end
-  \\ let x = Fox{num}() # tests empty variadic args
+  \\ let x = Fox{Num}() # tests empty variadic args
   \\ x.getGen()([1, 2]) |> println
   ;
   try doErrorTest(src, 1, [_][]const u8{
@@ -4778,7 +4778,7 @@ test "const variables" {
   \\ j = i
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Cannot mutate constant type 'str'",
+    "Cannot mutate constant type 'Str'",
   });
 }
 
@@ -4809,8 +4809,8 @@ test "module privacy" {
 test "trait operators <ordering .1>" {
   const src =
   \\ class Weight: Ord{Weight}
-  \\   val: num = 0
-  \\   def init(val: num)
+  \\   val: Num = 0
+  \\   def init(val: Num)
   \\     self.val = val
   \\   end
   \\   
@@ -4831,8 +4831,8 @@ test "trait operators <ordering .1>" {
 test "trait operators <ordering .1b>" {
   const src =
   \\ class Weight: Ord{Weight}
-  \\   val: num = 0
-  \\   def init(val: num)
+  \\   val: Num = 0
+  \\   def init(val: Num)
   \\     self.val = val
   \\   end
   \\   
@@ -4846,15 +4846,15 @@ test "trait operators <ordering .1b>" {
   try doErrorTest(src, 5, [_][]const u8{
     "type 'Weight' does not satisfy the trait constraint(s) of 'Ord{Weight}'",
     "The following method(s) are not implemented:",
-    "eq", " : ", "fn (Weight): bool",
+    "eq", " : ", "fn (Weight): Bool",
   });
 }
 
 test "trait operators <ordering .2>" {
   const src =
   \\ class Weight
-  \\   val: num = 0
-  \\   def init(val: num)
+  \\   val: Num = 0
+  \\   def init(val: Num)
   \\     self.val = val
   \\   end
   \\ end
@@ -4864,15 +4864,15 @@ test "trait operators <ordering .2>" {
   \\ w1 > w2
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' > 'num' but found 'Weight' > 'Weight'",
+    "Expected type 'Num' > 'Num' but found 'Weight' > 'Weight'",
   });
 }
 
 test "trait operators <ordering .3>" {
   const src =
   \\ class Weight
-  \\   val: num = 0
-  \\   def init(val: num)
+  \\   val: Num = 0
+  \\   def init(val: Num)
   \\     self.val = val
   \\   end
   \\
@@ -4896,10 +4896,10 @@ test "trait operators <ordering .3>" {
   \\ Weight(12) <= Weight(10)
   ;
   try doErrorTest(src, 4, [_][]const u8{
-    "Expected type 'num' > 'num' but found 'Weight instance' > 'Weight instance'",
-    "Expected type 'num' >= 'num' but found 'Weight instance' >= 'Weight instance'",
-    "Expected type 'num' < 'num' but found 'Weight instance' < 'Weight instance'",
-    "Expected type 'num' <= 'num' but found 'Weight instance' <= 'Weight instance'",
+    "Expected type 'Num' > 'Num' but found 'Weight instance' > 'Weight instance'",
+    "Expected type 'Num' >= 'Num' but found 'Weight instance' >= 'Weight instance'",
+    "Expected type 'Num' < 'Num' but found 'Weight instance' < 'Weight instance'",
+    "Expected type 'Num' <= 'Num' but found 'Weight instance' <= 'Weight instance'",
   });
 }
 
@@ -4909,6 +4909,6 @@ test "string iterator" {
   \\ @iter(string.String('foo')) + 5
   ;
   try doErrorTest(src, 1, [_][]const u8{
-    "Expected type 'num' + 'num' but found 'Iterator{str}' + 'num'",
+    "Expected type 'Num' + 'Num' but found 'Iterator{Str}' + 'Num'",
   });
 }

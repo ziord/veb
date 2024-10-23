@@ -11,28 +11,28 @@ for i, j in fc.sc.range(1, Just(12), Just(3))
   println(i, j)
 end
 
-def fun(a: fx.Foo, b: fx.Foo): fx.Cmp{num, str}
+def fun(a: fx.Foo, b: fx.Foo): fx.Cmp{Num, Str}
   println(a, b)
   return fx.Car('o_o'.len())
 end
 
 fun(x, fx.A) |> println
 
-let j: fx.Cmp{num, str} = fx.Plane('yes')
+let j: fx.Cmp{Num, Str} = fx.Plane('yes')
 println(j)
 j = fx.Car(12)
 println(j)
 
-type Funk = A(str) | B(num)
+type Funk = A(Str) | B(Num)
 let k: A = A('ok')
 println(k)
 
-class MyFold : fx.Foldable{num, str}
-  pub def fold_right(x: str)
+class MyFold : fx.Foldable{Num, Str}
+  pub def fold_right(x: Str)
     return x <> '^_^' <> x
   end
 
-  pub def fold_left(x: num)
+  pub def fold_left(x: Num)
     return x << 1
   end
 end

@@ -3,7 +3,7 @@ pub type Mode =
   | Write
   | Plus
 
-pub alias Fd = num
+pub alias Fd = Num
 
 pub type OpenError = 
   | FileNotFound
@@ -67,13 +67,13 @@ pub alias RenameError = OpenError
 
 type State = Opened | Closed
 
-extern def open_file(path: str, mode: Mode): Result{Fd, OpenError} ;
+extern def open_file(path: Str, mode: Mode): Result{Fd, OpenError} ;
 
-extern def read_file(fd: Fd): Result{str, ReadError} ;
+extern def read_file(fd: Fd): Result{Str, ReadError} ;
 
-extern def write_file(fd: Fd, s: str): Result{num, WriteError} ;
+extern def write_file(fd: Fd, s: Str): Result{Num, WriteError} ;
 
-extern def close_file(fd: Fd): void ;
+extern def close_file(fd: Fd): Unit ;
 
 extern def get_stderr(): Fd ;
 
@@ -81,27 +81,27 @@ extern def get_stdout(): Fd ;
 
 extern def get_stdin(): Fd ;
 
-pub extern def mkdir(path: str): Result{void, OpenError} ;
+pub extern def mkdir(path: Str): Result{Unit, OpenError} ;
 
-pub extern def rmdir(path: str): Result{void, DeleteError} ;
+pub extern def rmdir(path: Str): Result{Unit, DeleteError} ;
 
-pub extern def rmfile(path: str): Result{void, DeleteError} ;
+pub extern def rmfile(path: Str): Result{Unit, DeleteError} ;
 
-pub extern def ls(path: str): Result{List{str}, OpenError} ;
+pub extern def ls(path: Str): Result{List{Str}, OpenError} ;
 
-pub extern def rename(old: str, new: str): Result{void, RenameError} ;
+pub extern def rename(old: Str, new: Str): Result{Unit, RenameError} ;
 
-pub def open(path: str, mode: Mode)
+pub def open(path: Str, mode: Mode)
   const fd = try open_file(path, mode)
   return Ok(File(fd, path))
 end
 
 pub class File
   fd: Fd
-  pt: str
+  pt: Str
   st: State = Opened
 
-  def init(fd: Fd, path: str)
+  def init(fd: Fd, path: Str)
     self.fd = fd
     self.pt = path
   end
@@ -110,7 +110,7 @@ pub class File
     return self.pt
   end
 
-  pub def close(): void
+  pub def close(): Unit
     if self.st == State.Closed
       return
     end
@@ -118,21 +118,21 @@ pub class File
     self.st = State.Closed
   end
 
-  pub def read(): Result{str, ReadError}
+  pub def read(): Result{Str, ReadError}
     if self.st == State.Closed
       return (
         Error(NotOpenForReading as ReadError)
-        as Result{str, ReadError}
+        as Result{Str, ReadError}
       )
     end
     return read_file(self.fd)
   end
 
-  pub def write(s: str): Result{num, WriteError}
+  pub def write(s: Str): Result{Num, WriteError}
     return write_file(self.fd, s)
   end
 
-  pub def write_lines(lines: List{str}): Result{num, WriteError}
+  pub def write_lines(lines: List{Str}): Result{Num, WriteError}
     let bytes = 0
     for line in lines
       bytes += try write_file(self.fd, line)

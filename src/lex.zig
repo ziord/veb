@@ -44,7 +44,7 @@ pub const Keywords = std.StaticStringMap(TokenType).initComptime(.{
   .{"continue", .TkContinue},
   .{ks.OkVar, .TkOk},
   .{ks.SelfVar, .TkSelf},
-  .{ks.VoidVar, .TkVoid},
+  .{ks.UnitVar, .TkUnit},
   .{ks.NeverVar, .TkNever},
   .{ks.TrueVar, .TkTrue},
   .{ks.FalseVar, .TkFalse},
@@ -131,7 +131,7 @@ pub const TokenType = enum (u8) {
   TkCase,           // case
   TkFrom,           // from
   TkTrue,           // true
-  TkVoid,           // void
+  TkUnit,           // unit
   TkSelf,           // self
   TkWith,           // with
   TkClass,          // class
@@ -284,7 +284,7 @@ pub const TokenType = enum (u8) {
       .TkNone => ks.NoneVar,
       .TkList => ks.ListVar,
       .TkSelf => ks.SelfVar,
-      .TkVoid => ks.VoidVar,
+      .TkUnit => ks.UnitVar,
       .TkFalse => ks.FalseVar,
       .TkTuple => ks.TupleVar,
       .TkNever => ks.NeverVar,

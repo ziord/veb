@@ -1,16 +1,16 @@
-extern def hash_string(s: str): num ;
+extern def hash_string(s: Str): Num ;
 
 pub class String:
   | Add{String, String}
-  | Mul{num, String}
-  | Iter{str}
+  | Mul{Num, String}
+  | Iter{Str}
   | Eq{String}
   | Debug
   | Hash
 
-  chars: str
+  chars: Str
 
-  def init(chars: str)
+  def init(chars: Str)
     self.chars = chars
   end
 
@@ -34,7 +34,7 @@ pub class String:
     return String(self.chars <> other.chars)
   end
 
-  pub def mul(count: num)
+  pub def mul(count: Num)
     let chars = self.chars
     let result = chars
     while count > 1
@@ -45,11 +45,11 @@ pub class String:
   end
 end
 
-pub class StringIterator: Iterator{str}
-  cursor: num
-  chars: str
+pub class StringIterator: Iterator{Str}
+  cursor: Num
+  chars: Str
 
-  def init(chars: str)
+  def init(chars: Str)
     self.chars = chars
     self.cursor = 0
   end
@@ -64,6 +64,6 @@ pub class StringIterator: Iterator{str}
   end
 end
 
-pub def new(chars: str)
+pub def new(chars: Str)
   return String(chars)
 end

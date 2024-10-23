@@ -1,11 +1,11 @@
-pub builtin def @exit(code: num): never ;
+pub builtin def @exit(code: Num): Never ;
 
-pub builtin def @panic(msg: any): never ;
+pub builtin def @panic(msg: Any): Never ;
 
-pub builtin def @string(val: any): str ;
+pub builtin def @string(val: Any): Str ;
 
-pub builtin def assert(arg: bool, msg: str): void ;
+pub builtin def assert(arg: Bool, msg: Str): Unit ;
 
-pub builtin def print(args*: any): void ;
+pub builtin def print(args*: Any): Unit ;
 
-pub builtin def println(args*: any): void ;
+pub builtin def println(args*: Any): Unit ;

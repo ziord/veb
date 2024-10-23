@@ -14,8 +14,8 @@ pub def show_foo(f: Foo)
 end
 
 pub class Fish
-  pub x: num
-  def init(x: num)
+  pub x: Num
+  def init(x: Num)
     self.x = x
   end
 

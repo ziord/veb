@@ -14,7 +14,7 @@ b.Fish(f.x).swim()
 for i, j in std.iter.range(1, Just(5), None)
     println(i, j)
 end
-let a: b.Tree{num} = b.Node(12, b.Empty, b.Empty)
+let a: b.Tree{Num} = b.Node(12, b.Empty, b.Empty)
 println(a)
 
 std.iter.zip([1, 2, 3, 4].iter(), ['a', 'b', 'c'].iter()) |> println

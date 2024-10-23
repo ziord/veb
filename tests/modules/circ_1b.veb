@@ -1,6 +1,6 @@
 import circ_1a as a
 
-pub def okay(y: num)
+pub def okay(y: Num)
     return a.aha@(y << 1)
 end
 

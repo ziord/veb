@@ -273,7 +273,7 @@ pub const TypeChecker = struct {
     var tyBool: Type = Type.init(.{.Concrete = bol});
     var tyNil: Type = Type.init(.{.Concrete = nil});
     var tyAny: Type = Type.newConcrete(.TyAny);
-    var tyVoid: Type = Type.newConcrete(.TyVoid);
+    var tyVoid: Type = Type.newConcrete(.TyUnit);
     var tyNever: Type = Type.newConcrete(.TyNever);
     var TyTy: Type = Type.init(.{.Top = tyty});
   };
@@ -353,7 +353,7 @@ pub const TypeChecker = struct {
       .matchmeta = MatchMeta.init(allocator),
       .missing_tmtds = ds.ArrayList(TraitInfo).init(allocator),
       .str_ty = undefined,
-      .void_ty = Type.newVoid().box(allocator),
+      .void_ty = Type.newUnit().box(allocator),
       .tvar_ty = getTVarType(ks.GeneratedTypeVar, allocator),
       .mvar_ty = getTVarType(ks.UnderscoreVar, allocator),
       .never_ty = Type.newNever(allocator),
@@ -3418,7 +3418,7 @@ pub const TypeChecker = struct {
   }
 
   fn validateClsCallArguments(self: *Self, node: *tir.CallNode, fun_ty: *Type, token: Token) !void {
-    if (!fun_ty.function().data.ret.isVoidTy()) {
+    if (!fun_ty.function().data.ret.isUnitTy()) {
       return self.error_(
         true, token, "Expected 'void' return type in `init` method but found '{s}'",
         .{self.getTypename(fun_ty.function().data.ret)}
@@ -3952,7 +3952,7 @@ pub const TypeChecker = struct {
   fn inferFunReturnType(self: *Self, node: *Node, graph: *FlowGraph, fun_ty: *Type) !*Type {
     const al = self.al;
     var prev_flo_nodes = graph.exit().getPrevNeighbours().filter(FlowNode.FilterPredicate.isNotDeadNode, al);
-    var has_void_ty = false;
+    var has_unit_ty = false;
     var has_rec_ty = false;
     var has_non_void_ty = false;
     var has_never_ty = false;
@@ -3971,8 +3971,8 @@ pub const TypeChecker = struct {
           if (last.getType()) |ty| {
             if (ty.isRecursive()) {
               has_rec_ty = true;
-            } else if (ty.isVoidTy()) {
-              has_void_ty = true;
+            } else if (ty.isUnitTy()) {
+              has_unit_ty = true;
             } else if (ty.isNeverTy()) {
               has_never_ty = true;
             } else {
@@ -3984,7 +3984,7 @@ pub const TypeChecker = struct {
           if (ty.isNeverTy()) {
             has_never_ty = true;
           } else if (last.isCondition() or last.isMCondition()) {
-            has_void_ty = !(
+            has_unit_ty = !(
               if (last.isCondition()) last.NdCondition.has_never_typ_in_false_path
               else last.NdMCondition.tst.NdCondition.has_never_typ_in_false_path
             );
@@ -3995,7 +3995,7 @@ pub const TypeChecker = struct {
           for (prevs.items()) |ng| {
             if (ng.node.get().bb.getLast()) |lst| {
               if (lst.isCondition() or lst.isMCondition()) {
-                 has_void_ty = !(
+                 has_unit_ty = !(
                   if (lst.isCondition()) lst.NdCondition.has_never_typ_in_false_path
                   else lst.NdMCondition.tst.NdCondition.has_never_typ_in_false_path
                 );
@@ -4007,19 +4007,19 @@ pub const TypeChecker = struct {
           continue;
         }
       }
-      has_void_ty = true;
+      has_unit_ty = true;
     }
     var add_never_ty = false;
     // if it looks like a never type function, set rec & never
     if (looksLikeNeverType(&prev_flo_nodes, fun_ty)) {
       add_never_ty = true;
       has_rec_ty = true;
-      has_void_ty = false;
+      has_unit_ty = false;
     }
     // if we find the function has type noreturn, and there's no return node in the function,
     // simply turn off has_void_ty:
     if (has_never_ty and !has_return_node) {
-      has_void_ty = false;
+      has_unit_ty = false;
     }
     // When inferring a function's return type:
     // - if we find a recursive type, and a non-void type, use the non-void type as the function's return type
@@ -4032,7 +4032,7 @@ pub const TypeChecker = struct {
       if (ngh.node.get().bb.getLast()) |last| {
         if (!last.isRet()) continue;
         var typ = last.getType() orelse void_ty;
-        if (!has_void_ty and typ.isVoidTy()) {
+        if (!has_unit_ty and typ.isUnitTy()) {
           continue;
         }
         if (has_rec_ty) {
@@ -4040,7 +4040,7 @@ pub const TypeChecker = struct {
             if (typ.isRecursive()) {
               continue;
             }
-          } else if (has_void_ty or typ.isRecursive()) {
+          } else if (has_unit_ty or typ.isRecursive()) {
             typ = nvr_ty;
           }
         }
@@ -4049,7 +4049,7 @@ pub const TypeChecker = struct {
     }
     if (add_never_ty) uni.set(nvr_ty, al);
     if (has_never_ty) uni.set(&UnitTypes.tyNever, al);
-    if (has_void_ty) uni.set(void_ty, al);
+    if (has_unit_ty) uni.set(void_ty, al);
     var inf_ret_ty = if (uni.variants.isNotEmpty()) uni.toType(al) else void_ty.*;
     if (node.NdBasicFun.data.ret) |ret_ty| {
       for (prev_flo_nodes.items()) |ngh| {
@@ -4067,7 +4067,7 @@ pub const TypeChecker = struct {
                 );
               }
             }
-          } else if (!node.NdBasicFun.data.modifier.isBuiltin() and !ret_ty.isLikeVoid() and !ret_ty.isLikeNever()) {
+          } else if (!node.NdBasicFun.data.modifier.isBuiltin() and !ret_ty.isLikeUnit() and !ret_ty.isLikeNever()) {
             // control reaches exit from this node (`nd`), although this node
             // doesn't return anything hence (void), but return type isn't void
             return self.errorFrom(
@@ -4561,7 +4561,7 @@ pub const TypeChecker = struct {
     if (!cond_ty.isBoolTy() and !(cond_ty.isUnion() and cond_ty.isBoolUnionTy())) {
       return self.errorFrom(
         true, debug,
-        "Expected condition expression to be of type 'bool' but found '{s}'",
+        "Expected condition expression to be of type 'Bool' but found '{s}'",
         .{self.getTypename(cond_ty)}
       );
     }

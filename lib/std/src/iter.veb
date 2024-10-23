@@ -1,10 +1,10 @@
-pub class range: Iter{num} | Iterator{num}
-  curr: num
-  start: num
-  step: num
-  stop: Maybe{num}
+pub class range: Iter{Num} | Iterator{Num}
+  curr: Num
+  start: Num
+  step: Num
+  stop: Maybe{Num}
 
-  def init(start: num, stop: Maybe{num}, step: Maybe{num})
+  def init(start: Num, stop: Maybe{Num}, step: Maybe{Num})
     self.start = start
     self.curr = start
     self.stop = stop
@@ -39,7 +39,7 @@ end
 
 pub def zip{T, U}(x: Iterator{T}, y: Iterator{U}): List{Tuple{T, U}}
   let res = [] as List{Tuple{T, U}}
-  while true
+  while True
     match (x.next(), y.next())
       case (Just(a), Just(b)) => res.append((a, b))
       case _ => break

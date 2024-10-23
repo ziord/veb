@@ -1,6 +1,6 @@
 import circ_2a
 
-pub def okay(y: num)
+pub def okay(y: Num)
     return circ_2a.aha@(y << 1)
 end
 

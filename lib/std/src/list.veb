@@ -1,4 +1,4 @@
-pub def join(l: List{str}, s: str): str
+pub def join(l: List{Str}, s: Str): Str
   if l.len() == 0
     return ""
   elif l.len() == 1
@@ -14,7 +14,7 @@ pub def join(l: List{str}, s: str): str
   return r <> s <> l[-1]
 end
 
-pub def count{T}(l: List{T}, s: T): num
+pub def count{T}(l: List{T}, s: T): Num
   let r = 0
   for e in l
     if e == s
@@ -24,7 +24,7 @@ pub def count{T}(l: List{T}, s: T): num
   return r
 end
 
-pub def find{T}(l: List{T}, s: T): Maybe{num}
+pub def find{T}(l: List{T}, s: T): Maybe{Num}
   for i, e in l
     if e == s
       return Just(i)
@@ -33,17 +33,17 @@ pub def find{T}(l: List{T}, s: T): Maybe{num}
   return None
 end
 
-pub def remove{T}(l: List{T}, s: T): bool
+pub def remove{T}(l: List{T}, s: T): Bool
   for i, e in l
     if e == s
       return l.remove(i)
     end
   end
-  return false
+  return False
 end
 
 
-pub def count_with{T}(l: List{T}, check: fn(T): bool): num
+pub def count_with{T}(l: List{T}, check: fn(T): Bool): Num
   let r = 0
   for e in l
     if check(e)
@@ -53,7 +53,7 @@ pub def count_with{T}(l: List{T}, check: fn(T): bool): num
   return r
 end
 
-pub def find_with{T}(l: List{T}, check: fn(T): bool): Maybe{num}
+pub def find_with{T}(l: List{T}, check: fn(T): Bool): Maybe{Num}
   for i, e in l
     if check(e)
       return Just(i)
@@ -62,11 +62,11 @@ pub def find_with{T}(l: List{T}, check: fn(T): bool): Maybe{num}
   return None
 end
 
-pub def remove_with{T}(l: List{T}, check: fn(T): bool): bool
+pub def remove_with{T}(l: List{T}, check: fn(T): Bool): Bool
   for i, e in l
     if check(e)
       return l.remove(i)
     end
   end
-  return false
+  return False
 end

@@ -202,7 +202,7 @@ pub const Parser = struct {
     .{.bp = .None, .prefix = null, .infix = null},                      // TkCase
     .{.bp = .None, .prefix = null, .infix = null},                      // TkFrom
     .{.bp = .None, .prefix = Self.boolean, .infix = null},              // TkTrue
-    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkVoid
+    .{.bp = .None, .prefix = Self.typing, .infix = null},               // TkUnit
     .{.bp = .None, .prefix = Self.selfExpr, .infix = null},             // TkSelf
     .{.bp = .None, .prefix = null, .infix = null},                      // TkWith
     .{.bp = .None, .prefix = null, .infix = null},                      // TkClass
@@ -1260,12 +1260,12 @@ pub const Parser = struct {
         try self.consume(.TkRBracket);
       },
       // Concrete
-      .TkBool, .TkNum, .TkStr, .TkVoid, .TkNever, .TkAny, => |ty| {
+      .TkBool, .TkNum, .TkStr, .TkUnit, .TkNever, .TkAny, => |ty| {
           const tkind: TypeKind = switch (ty) {
           .TkBool => .TyBool,
           .TkNum => .TyNumber,
           .TkStr => .TyString,
-          .TkVoid => .TyVoid,
+          .TkUnit => .TyUnit,
           .TkNever => .TyNever,
           .TkAny => .TyAny,
           else => unreachable,
@@ -1718,7 +1718,7 @@ pub const Parser = struct {
     const params = try self.funParams(&variadic);
     const ret = (
       if (self.check(.TkColon)) try self.returnSig()
-      else if (trait_fun and self.check(.TkSemic)) Type.newVoid().box(self.allocator)
+      else if (trait_fun and self.check(.TkSemic)) Type.newUnit().box(self.allocator)
       else null
     );
     const semic = self.current_tok;

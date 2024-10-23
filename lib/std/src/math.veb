@@ -38,46 +38,46 @@ pub const rad_per_deg = 0.017453292519943295769236907684886127134428718885417254
 ## 180.0/pi
 pub const deg_per_rad = 57.295779513082320876798154814105170332405472466564321549160243861
 
-pub extern def ceil(n: num): num ;
+pub extern def ceil(n: Num): Num ;
 
-pub extern def floor(n: num): num ;
+pub extern def floor(n: Num): Num ;
 
-pub extern def cos(n: num): num ;
+pub extern def cos(n: Num): Num ;
 
-pub extern def sin(n: num): num ;
+pub extern def sin(n: Num): Num ;
 
-pub extern def tan(n: num): num ;
+pub extern def tan(n: Num): Num ;
 
-pub extern def acos(n: num): num ;
+pub extern def acos(n: Num): Num ;
 
-pub extern def asin(n: num): num ;
+pub extern def asin(n: Num): Num ;
 
-pub extern def atan(n: num): num ;
+pub extern def atan(n: Num): Num ;
 
-pub extern def cosh(n: num): num ;
+pub extern def cosh(n: Num): Num ;
 
-pub extern def sinh(n: num): num ;
+pub extern def sinh(n: Num): Num ;
 
-pub extern def tanh(n: num): num ;
+pub extern def tanh(n: Num): Num ;
 
-pub extern def acosh(n: num): num ;
+pub extern def acosh(n: Num): Num ;
 
-pub extern def asinh(n: num): num ;
+pub extern def asinh(n: Num): Num ;
 
-pub extern def atanh(n: num): num ;
+pub extern def atanh(n: Num): Num ;
 
-pub extern def sqrt(n: num): num ;
+pub extern def sqrt(n: Num): Num ;
 
-pub extern def deg_to_radians(n: num): num ;
+pub extern def deg_to_radians(n: Num): Num ;
 
-pub extern def rad_to_degrees(n: num): num ;
+pub extern def rad_to_degrees(n: Num): Num ;
 
-pub extern def pow(x: num, y: num): num ;
+pub extern def pow(x: Num, y: Num): Num ;
 
-pub extern def log(x: num, base: num): num ;
+pub extern def log(x: Num, base: Num): Num ;
 
-pub extern def min(x: num, y: num): num ;
+pub extern def min(x: Num, y: Num): Num ;
 
-pub extern def max(x: num, y: num): num ;
+pub extern def max(x: Num, y: Num): Num ;
 
-pub extern def round(n: num, digits: num): num ;
+pub extern def round(n: Num, digits: Num): Num ;

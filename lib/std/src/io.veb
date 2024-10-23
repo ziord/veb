@@ -11,7 +11,7 @@ pub def debug{T: Debug}(args*: T)
   file.stderr.write('\n')
 end
 
-pub def eprint(args*: any)
+pub def eprint(args*: Any)
   let last = args.len() - 1
   for i, arg in args
     file.stderr.write(@string(arg))
@@ -21,7 +21,7 @@ pub def eprint(args*: any)
   end
 end
 
-pub def eprintln(args*: any)
+pub def eprintln(args*: Any)
   let last = args.len() - 1
   for i, arg in args
     file.stderr.write(@string(arg))
@@ -32,7 +32,7 @@ pub def eprintln(args*: any)
   file.stderr.write('\n')
 end
 
-pub def input(message: str)
+pub def input(message: Str)
   file.stdout.write(message)
   return file.stdin.read()
 end

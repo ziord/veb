@@ -1,27 +1,27 @@
 import std.list
 
-extern def get_sep: str ;
+extern def get_sep: Str ;
 
-pub extern def basename(p: str): str ;
+pub extern def basename(p: Str): Str ;
 
-pub extern def dirname(p: str): str ;
+pub extern def dirname(p: Str): Str ;
 
-pub extern def extension(p: str): str ;
+pub extern def extension(p: Str): Str ;
 
-pub extern def exists(p: str): bool ;
+pub extern def exists(p: Str): Bool ;
 
-pub extern def realpath(p: str): str ;
+pub extern def realpath(p: Str): Str ;
 
-pub extern def is_dir(p: str): bool ;
+pub extern def is_dir(p: Str): Bool ;
 
-pub extern def is_file(p: str): bool ;
+pub extern def is_file(p: Str): Bool ;
 
 pub const sep = get_sep()
 
-pub def join(p*: str): str
+pub def join(p*: Str): Str
   return list.join(p, sep)
 end
 
-pub def split(p: str): List{str}
+pub def split(p: Str): List{Str}
   return p.split(sep)
 end

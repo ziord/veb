@@ -15,7 +15,7 @@ pub def print_tree{a}(tree: Tree{a})
   end
 end
 
-pub def show(x*: any)
+pub def show(x*: Any)
   for val in x
     print(val)
     print(" ")

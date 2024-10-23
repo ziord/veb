@@ -852,7 +852,7 @@ pub fn printValue(val: Value) void {
   if (isNumber(val)) {
     util.print("{d}", .{asNumber(val)});
   } else if (isBool(val)) {
-    util.print("{}", .{asBool(val)});
+    util.print("{s}", .{if (asBool(val)) ks.TrueVar else ks.FalseVar});
   } else if (isNil(val)) {
     util.print(ks.NoneVar, .{});
   } else if (isObj(val)) {

@@ -1,6 +1,6 @@
 pub type Foo = A | B
 pub type Cmp{T, U} = Car(T) | Plane(U)
-pub alias Q = Cmp{num, str}
+pub alias Q = Cmp{Num, Str}
 
 pub trait Foldable{T, U}
   pub def fold_right(x: U): U;

@@ -5,13 +5,13 @@ const doParsingTest = lib.doParsingTest;
 test "recursive types" {
   const src =
   \\ # simple recursive
-  \\ type K = A(str) | B(bool) | C(num)
+  \\ type K = A(Str) | B(Bool) | C(Num)
   \\ alias V = Map{K, V}
   \\ alias V2 = Map{V, V2}
   \\ let p = (1, (2,), 3, (1, 2, [3]))
   \\ let x = {
-  \\   { A('abc') as K: { A('abc') as K: C(123) as K, B(true): C(0xff), A('obs'): A('fin') } } as V :
-  \\   { C(0.123) as K: { A('abc') as K: C(123) as K, B(true): C(0xff), A('obs'): A('fin') } }
+  \\   { A('abc') as K: { A('abc') as K: C(123) as K, B(True): C(0xff), A('obs'): A('fin') } } as V :
+  \\   { C(0.123) as K: { A('abc') as K: C(123) as K, B(True): C(0xff), A('obs'): A('fin') } }
   \\ }
   \\ print(x)
   ;
@@ -21,7 +21,7 @@ test "recursive types" {
 test "functions.<recursive>" {
   const src =
   \\ # mutually recursive
-  \\ def mutA(x: num)
+  \\ def mutA(x: Num)
   \\  if x > 2
   \\    return mutB(x)
   \\  else
@@ -29,7 +29,7 @@ test "functions.<recursive>" {
   \\  end
   \\ end
   \\
-  \\ def mutB(y: num)
+  \\ def mutB(y: Num)
   \\  if y > 2
   \\    return mutA(y)
   \\  else
@@ -38,7 +38,7 @@ test "functions.<recursive>" {
   \\ end
   \\ mutA(10) + mutB(7)
   \\
-  \\ alias J =  Tuple{num, str}
+  \\ alias J =  Tuple{Num, Str}
   \\ def fox{A, B}(x: A, y: B)
   \\  let p: J = (13, '4')
   \\  return fox(x, y)
@@ -48,9 +48,9 @@ test "functions.<recursive>" {
   try doStaticTest(src);
 }
 
-test "functions.<never>" {
+test "functions.<Never>" {
   const src =
-  \\ def foo(): never
+  \\ def foo(): Never
   \\  foo()
   \\ end
   \\ let j = foo()
@@ -58,41 +58,41 @@ test "functions.<never>" {
   try doStaticTest(src);
 }
 
-test "functions.<never .2>" {
+test "functions.<Never .2>" {
   const src =
   \\ def foo()
   \\  @exit(1)
   \\ end
-  \\ let j:never = foo()
+  \\ let j:Never = foo()
   ;
   try doStaticTest(src);
 }
 
-test "functions.<void>" {
+test "functions.<Unit>" {
   const src =
   \\ def foo()
   \\  print('yay')
   \\ end
-  \\ let j:void = foo()
+  \\ let j:Unit = foo()
   ;
   try doStaticTest(src);
 }
 
-test "functions-12-user-defined-never" {
+test "functions-12-user-defined-Never" {
   const src =
-  \\ alias fails = never
+  \\ alias fails = Never
   \\ def rec(): fails
   \\  return rec()
   \\ end
   \\
-  \\ def fun(x: num)
+  \\ def fun(x: Num)
   \\  if x > 5
   \\    return S('ok')
   \\  else
   \\    return N(x - 3)
   \\  end
   \\ end
-  \\ type NS = N(num) | S(str)
+  \\ type NS = N(Num) | S(Str)
   \\ let j = fun(5)
   \\ if j is S
   \\  _ = [j]
@@ -109,9 +109,9 @@ test "functions-12-user-defined-never" {
 test "simple-classes-1" {
   const src =
   \\ class Fox
-  \\    pub x: num
+  \\    pub x: Num
   \\    pub u = 12
-  \\    def init(): void
+  \\    def init(): Unit
   \\      self.x = 0
   \\    end
   \\    pub def pulse()
@@ -152,7 +152,7 @@ test "generic-classes-2" {
   const src =
   \\ class Fox{T}
   \\    pub x: List{T}
-  \\    def init(x*: T): void
+  \\    def init(x*: T): Unit
   \\      self.x = x
   \\    end
   \\    pub def pulse()
@@ -160,7 +160,7 @@ test "generic-classes-2" {
   \\    end
   \\
   \\    pub def getGen()
-  \\      alias T = Tuple{str}
+  \\      alias T = Tuple{Str}
   \\      def fun(p: T)
   \\        return p[0]
   \\      end
@@ -168,7 +168,7 @@ test "generic-classes-2" {
   \\    end
   \\ end
   \\ let x = Fox(6, 7, 8)
-  \\ let t: Fox{num} = x
+  \\ let t: Fox{Num} = x
   \\ t.pulse().x[0] + 12
   \\ t.pulse().getGen()(('starters',))
   \\ t.pulse().pulse().x.len()
@@ -190,16 +190,16 @@ test "generic-classes-2" {
 
 test "maximal munch parsing style" {
   const src =
-  \\ let t: num? =
+  \\ let t: Num? =
   \\  Just(5)
   \\ t.? |> println
   \\ type Foo = 
   \\  | A
   \\  | B
-  \\  | C(num)
-  \\ type Foo = | A | B | C(num)
+  \\  | C(Num)
+  \\ type Foo = | A | B | C(Num)
   \\ do println('yep') end
-  \\ def foo(a: num): str println(yeah) let j = 5 return j end
+  \\ def foo(a: Num): Str println(yeah) let j = 5 return j end
   \\ let p = def => 5
   \\ p()
   \\ match fox with
@@ -208,17 +208,17 @@ test "maximal munch parsing style" {
   \\ match fox with case 1 => do println('yeye') end end
   \\ if foo let k = 10 else let j = 12 end
   \\ while foo do j = 12 p = [1, 2, 4][j] let t = 12 end
-  \\ class T: Foo def init(a: num): str let j = 12 end end
-  \\ class U{X, Y}: Foo where X: P + K{V}, Y: P + Q, def init(a: num): str let j = 12 end end
+  \\ class T: Foo def init(a: Num): Str let j = 12 end end
+  \\ class U{X, Y}: Foo where X: P + K{V}, Y: P + Q, def init(a: Num): Str let j = 12 end end
   \\ trait V{X, Y} 
   \\    where 
   \\      X: P + K{V},
   \\      Y: P + Q,
-  \\    def inits(a: num): str
+  \\    def inits(a: Num): Str
   \\      let j = 12
   \\    end
   \\  end
-  \\ def foo(a: num): str
+  \\ def foo(a: Num): Str
   \\  return 12
   \\    |> foo
   \\    |> bar

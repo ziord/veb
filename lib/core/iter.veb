@@ -1,7 +1,7 @@
 pub trait Iterator{U}
   pub def next: Maybe{U} ;
 
-  pub def count(): num
+  pub def count(): Num
     let len = 0
     while self.next() != None
       len += 1
@@ -11,7 +11,7 @@ pub trait Iterator{U}
 
   pub def zip{V}(other: Iterator{V}): List{Tuple{U, V}}
     let res = [] as List{Tuple{U, V}}
-    while true
+    while True
       match (self.next(), other.next())
         case (Just(a), Just(b)) => res.append((a, b))
         case _ => break
@@ -22,7 +22,7 @@ pub trait Iterator{U}
 
   pub def map{T}(fun: fn(U): T): List{T}
     let res = [] as List{T}
-    while true
+    while True
       match self.next()
         case Just(a) => res.append(fun(a))
         case _ => break
@@ -31,9 +31,9 @@ pub trait Iterator{U}
     return res
   end
 
-  pub def filter(fun: fn(U): bool): List{U}
+  pub def filter(fun: fn(U): Bool): List{U}
     let res = [] as List{U}
-    while true
+    while True
       match self.next()
         case Just(a) => if fun(a) res.append(a) end
         case _ => break
@@ -50,7 +50,7 @@ pub trait Iterator{U}
         case None => @panic('reduce of empty iterable with no initial value')
       end
     end
-    while true
+    while True
       match self.next()
         case Just(t) => acc = func(acc, t)
         case None => break

@@ -29,10 +29,10 @@ pub const s_per_hour = s_per_min * 60
 pub const s_per_day = s_per_hour * 24
 pub const s_per_week = s_per_day * 7
 
-pub extern def sleep(secs: num): void ;
+pub extern def sleep(secs: Num): Unit ;
 
-pub extern def millis: num ;
+pub extern def millis: Num ;
 
-pub extern def nanos: num ;
+pub extern def nanos: Num ;
 
-pub extern def now: num ;
+pub extern def now: Num ;

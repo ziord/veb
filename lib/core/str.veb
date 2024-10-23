@@ -1,43 +1,43 @@
-pub builtin class str
-  pub def len: num ;
+pub builtin class Str
+  pub def len: Num ;
 
-  pub def concat(other: str): str ;
+  pub def concat(other: Str): Str ;
 
-  pub def slice(start: num, stop: num): str ;
+  pub def slice(start: Num, stop: Num): Str ;
 
-  pub def at(index: num): str ;
+  pub def at(index: Num): Str ;
 
-  pub def starts_with(substr: str): bool ;
+  pub def starts_with(substr: Str): Bool ;
 
-  pub def ends_with(substr: str): bool ;
+  pub def ends_with(substr: Str): Bool ;
 
-  pub def find(substr: str): Maybe{num} ;
+  pub def find(substr: Str): Maybe{Num} ;
 
-  pub def split(sep: str): List{str} ;
+  pub def split(sep: Str): List{Str} ;
 
-  pub def strip(substr: str): str ;
+  pub def strip(substr: Str): Str ;
 
-  pub def lstrip(substr: str): str ;
+  pub def lstrip(substr: Str): Str ;
 
-  pub def rstrip(substr: str): str ;
+  pub def rstrip(substr: Str): Str ;
 
-  pub def is_alpha: bool ;
+  pub def is_alpha: Bool ;
 
-  pub def is_digit: bool ;
+  pub def is_digit: Bool ;
 
-  pub def is_alnum: bool ;
+  pub def is_alnum: Bool ;
 
-  pub def is_ascii: bool ;
+  pub def is_ascii: Bool ;
 
-  pub def is_lower: bool ;
+  pub def is_lower: Bool ;
 
-  pub def is_upper: bool ;
+  pub def is_upper: Bool ;
 
-  pub def lower: str ;
+  pub def lower: Str ;
 
-  pub def upper: str ;
+  pub def upper: Str ;
 
-  pub def count(substr: str): num ;
+  pub def count(substr: Str): Num ;
 
-  pub def contains(substr: str): bool ;
+  pub def contains(substr: Str): Bool ;
 end

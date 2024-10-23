@@ -1,6 +1,6 @@
 import fj as t
 
-let tree: t.Tree{num} = t.Node(
+let tree: t.Tree{Num} = t.Node(
    1,
    t.Node (
      2,
@@ -17,19 +17,19 @@ let tree: t.Tree{num} = t.Node(
 t.print_tree(tree)
 t.show(1, 2, 3, 4, 5)
 
-let j = [] as List{num}
+let j = [] as List{Num}
 j.append(12)
 j.append(13)
 j.append(14)
 println(j)
-let k = j.iter().filter(def (n: num) => n % 2 == 0)
-println(k, k.iter().map(def (n: num) => @string(n)))
+let k = j.iter().filter(def (n: Num) => n % 2 == 0)
+println(k, k.iter().map(def (n: Num) => @string(n)))
 
-let r = j.iter().reduce(def (x: num, y: num) => x + y, None)
+let r = j.iter().reduce(def (x: Num, y: Num) => x + y, None)
 r |> println
 r == 39 |> assert(*, 'should be 39')
 
 let j = ['f', 'i', 'n', 'd', 'e', 'r']
-let conc = j.iter().reduce(def (x: str, y: str) => x <> y, Just(''))
+let conc = j.iter().reduce(def (x: Str, y: Str) => x <> y, Just(''))
 conc |> println
 conc == 'finder' |> assert(*, 'should be finder')

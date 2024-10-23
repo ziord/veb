@@ -1,41 +1,41 @@
 import constlib
 
-def assert_(v: any)
+def assert_(v: Any)
   println(v)
   assert(!!v, 'should be true')
 end
 
 match constlib.Thing.A(5)
   case constlib.Thing.A(5) => assert_('A')
-  case constlib.Thing.B('yh') => assert_(false)
-  case constlib.B(_) => assert_(false)
-  case constlib.A(_) => assert_(false)
+  case constlib.Thing.B('yh') => assert_(False)
+  case constlib.B(_) => assert_(False)
+  case constlib.A(_) => assert_(False)
 end
 
 match constlib.Thing.B('yes')
-  case constlib.Thing.A(5) => assert_(false)
+  case constlib.Thing.A(5) => assert_(False)
   case constlib.Thing.B('yes') => assert_('B')
-  case constlib.Thing.B(_) => assert_(false)
-  case constlib.Thing.A(_) => assert_(false)
+  case constlib.Thing.B(_) => assert_(False)
+  case constlib.Thing.A(_) => assert_(False)
 end
 
 match constlib.B('yes') as constlib.Thing
-  case constlib.A(5) => assert_(false)
+  case constlib.A(5) => assert_(False)
   case constlib.B('yes') => assert_('B')
-  case constlib.Thing.B(_) => assert_(false)
-  case constlib.Thing.A(_) => assert_(false)
+  case constlib.Thing.B(_) => assert_(False)
+  case constlib.Thing.A(_) => assert_(False)
 end
 
 match constlib.A(5) as constlib.Thing
   case constlib.Thing.A(5) => assert_('A')
-  case constlib.Thing.B('yh') => assert_(false)
-  case constlib.Thing.B(_) => assert_(false)
-  case constlib.Thing.A(_) => assert_(false)
+  case constlib.Thing.B('yh') => assert_(False)
+  case constlib.Thing.B(_) => assert_(False)
+  case constlib.Thing.A(_) => assert_(False)
 end
 
 match constlib.MyClass()
   case constlib.MyClass(x, y, z) => do
     # println(x, y, z)
-    assert(x == 12 and y == 'oops' and z == false, 'should all be true')
+    assert(x == 12 and y == 'oops' and z == False, 'should all be true')
   end
 end

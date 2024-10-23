@@ -9,7 +9,7 @@ A delightful, statically typed programming language for writing reliable softwar
 #### Functions
 ```ruby
 # function to compute the nth fibonacci number
-def fib(n: num)
+def fib(n: Num)
   return match n
     case 0 | 1 => n
     case _ => fib(n - 1) + fib(n - 2)
@@ -38,7 +38,7 @@ def display{a}(tree: Tree{a})
   end
 end
 
-let tree: Tree{num} = Node(
+let tree = Node(
    1,
    Node (
      2,
@@ -50,7 +50,7 @@ let tree: Tree{num} = Node(
      Node (6, Empty, Empty),
      Node (7, Empty, Empty)
    )
-)
+) as Tree{Num}
 display(tree)
 ```
 **Exhaustiveness**
@@ -79,14 +79,14 @@ TypeError: inexhaustive pattern match.
 #### Higher-order Functions
 ```ruby
 # functional reduce
-def reduce(l: List{num}, func: fn(num, num):num, init: num)
+def reduce(l: List{Num}, func: fn(Num, Num):Num, init: Num)
   return match l
     case [] => init
     case [h, ..t] => func(reduce(t, func, init), h)
   end
 end
 const x = [1, 2, 3, 4, 5, 6, 7]
-const add = def (a: num, b: num) => a + b
+const add = def (a: Num, b: Num) => a + b
 const result = reduce(x, add, 0) 
 result |> println
 result == 28 |> assert(*, 'should be 28')

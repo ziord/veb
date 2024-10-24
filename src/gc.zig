@@ -191,6 +191,8 @@ fn markRoots(self: *Self) void {
   self.markStringMap(&self.vm.globals);
   // mark cached name roots
   self.markCachedNames();
+  // mark argv
+  self.markValue(self.vm.argv);
 }
 
 fn blackenObject(self: *Self, obj: *Obj) void {

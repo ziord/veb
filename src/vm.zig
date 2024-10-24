@@ -30,6 +30,7 @@ pub const VM = struct {
   objects: ?*vl.Obj,
   classes: BuiltinCls,
   names: CachedNames,
+  argv: Value,
   mem: Mem,
   gc: GC,
   vsw: ValueStringWriter,
@@ -82,7 +83,7 @@ pub const VM = struct {
     }
   };
 
-  pub fn init(allocator: *VebAllocator) Self {
+  pub fn init(allocator: *VebAllocator, argv: [][]const u8) Self {
     const al = allocator.getAllocator();
     var vm = Self {
       .fiber = undefined,
@@ -97,9 +98,15 @@ pub const VM = struct {
       .names = CachedNames.new(),
       .temp_roots = vl.Vec(Value).init(),
       .vsw = ValueStringWriter.init(),
+      .argv = undefined,
     };
     vm.gc.skip_collection = true;
     native.addAll(&vm);
+    var args = vl.createList(&vm, argv.len);
+    for (argv, 0..) |arg, i| {
+      args.items[i] = vl.createStringV(&vm, &vm.strings, arg, false);
+    }
+    vm.argv = vl.objVal(args);
     return vm;
   }
 

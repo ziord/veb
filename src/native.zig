@@ -52,7 +52,7 @@ inline fn getArg(vm: *VM, pos: u32) Value {
 /// > barebones builtin functions
 /// ******************************
 
-/// assert(cond: bool, msg: str): void | noreturn
+/// assert(cond: Bool, msg: Str): Unit
 pub fn fnAssert(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   if (vl.valueFalsy(getArg(vm, args))) {
@@ -63,7 +63,7 @@ pub fn fnAssert(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return VOID_VAL;
 }
 
-/// exit(code: num): noreturn
+/// exit(code: Num): Never
 pub fn fnExit(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const code = vl.asIntNumber(u8, getArg(vm, args));
@@ -71,7 +71,7 @@ pub fn fnExit(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   std.posix.exit(code);
 }
 
-/// panic{T}(msg: T): noreturn
+/// panic{T}(msg: T): Never
 pub fn fnPanic(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var msg = vl.asString(vl.valueToString(getArg(vm, args), vm));
@@ -80,7 +80,7 @@ pub fn fnPanic(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   std.posix.exit(1);
 }
 
-/// print(args*: any): void
+/// print(args*: Any): Unit
 pub fn fnPrint(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var tup = vl.asList(getArg(vm, args));
@@ -93,13 +93,13 @@ pub fn fnPrint(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return VOID_VAL;
 }
 
-/// @string(val: any): str
+/// @string(val: Any): Str
 pub fn fnString(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.valueToString(getArg(vm, args), vm);
 }
 
-/// println(args*: any): void
+/// println(args*: Any): Unit
 pub fn fnPrintln(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var tup = vl.asList(getArg(vm, args));
@@ -119,13 +119,13 @@ pub fn fnPrintln(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
 
 //******** str ********//
 
-// len(): num
+// len(): Num
 fn stringLen(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberIntVal(vl.asString(getArg(vm, args)).len);
 }
 
-// concat(other: str): str
+// concat(other: Str): Str
 fn stringConcat(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args));
@@ -133,7 +133,7 @@ fn stringConcat(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.createStringV(vm, &vm.strings, conc, true);
 }
 
-// slice(begin: num, end: num): str
+// slice(begin: Num, end: Num): Str
 fn stringSlice(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args));
@@ -147,7 +147,7 @@ fn stringSlice(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return newStringV(vm, str.slice(@intCast(begin), @intCast(end)));
 }
 
-// at(index: num): str
+// at(index: Num): Str
 fn stringAt(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args));
@@ -159,7 +159,7 @@ fn stringAt(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return newStringV(vm, &[_]u8{str.string()[@intCast(index)]});
 }
 
-// starts_with(substr: str): bool
+// starts_with(substr: Str): Bool
 fn stringStartsWith(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args)).string();
@@ -167,7 +167,7 @@ fn stringStartsWith(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.boolVal(std.mem.startsWith(u8, str, sub));
 }
 
-// ends_with(substr: str): bool
+// ends_with(substr: Str): Bool
 fn stringEndsWith(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args)).string();
@@ -175,7 +175,7 @@ fn stringEndsWith(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.boolVal(std.mem.endsWith(u8, str, sub));
 }
 
-// find(substr: str): Maybe{num}
+// find(substr: Str): Maybe{Num}
 fn stringFind(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args)).string();
@@ -186,7 +186,7 @@ fn stringFind(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return NONE_VAL;
 }
 
-// split(sep: str): List{str}
+// split(sep: Str): List{Str}
 fn stringSplit(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args)).string();
@@ -214,7 +214,7 @@ fn stringSplit(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   }
 }
 
-// strip(substr: str): str
+// strip(substr: Str): Str
 fn stringStrip(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var str = vl.asString(getArg(vm, args)).string();
@@ -231,7 +231,7 @@ fn stringStrip(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return newStringV(vm, str);
 }
 
-// lstrip(substr: str): str
+// lstrip(substr: Str): Str
 fn stringLstrip(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var str = vl.asString(getArg(vm, args)).string();
@@ -245,7 +245,7 @@ fn stringLstrip(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return newStringV(vm, str);
 }
 
-// rstrip(substr: str): str
+// rstrip(substr: Str): Str
 fn stringRstrip(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var str = vl.asString(getArg(vm, args)).string();
@@ -259,7 +259,7 @@ fn stringRstrip(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return newStringV(vm, str);
 }
 
-// is_alpha(): bool
+// is_alpha(): Bool
 fn stringIsAlpha(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args)).string();
@@ -271,7 +271,7 @@ fn stringIsAlpha(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return TRUE_VAL;
 }
 
-// is_digit(): bool
+// is_digit(): Bool
 fn stringIsDigit(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args)).string();
@@ -283,7 +283,7 @@ fn stringIsDigit(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return TRUE_VAL;
 }
 
-// is_alnum(): bool
+// is_alnum(): Bool
 fn stringIsAlnum(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args)).string();
@@ -295,7 +295,7 @@ fn stringIsAlnum(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return TRUE_VAL;
 }
 
-// is_ascii(): bool
+// is_ascii(): Bool
 fn stringIsAscii(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args)).string();
@@ -307,7 +307,7 @@ fn stringIsAscii(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return TRUE_VAL;
 }
 
-// is_lower(): bool
+// is_lower(): Bool
 fn stringIsLower(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args)).string();
@@ -319,7 +319,7 @@ fn stringIsLower(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return TRUE_VAL;
 }
 
-// is_upper(): bool
+// is_upper(): Bool
 fn stringIsUpper(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args)).string();
@@ -331,7 +331,7 @@ fn stringIsUpper(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return TRUE_VAL;
 }
 
-// lower(): str
+// lower(): Str
 fn stringLower(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args)).string();
@@ -340,7 +340,7 @@ fn stringLower(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.createStringV(vm, &vm.strings, ret, true);
 }
 
-// upper(): str
+// upper(): Str
 fn stringUpper(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args)).string();
@@ -349,7 +349,7 @@ fn stringUpper(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.createStringV(vm, &vm.strings, ret, true);
 }
 
-// count(substr: str): num
+// count(substr: Str): Num
 fn stringCount(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args)).string();
@@ -357,7 +357,7 @@ fn stringCount(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.numberIntVal(std.mem.count(u8, str, sub));
 }
 
-// contains(substr: str): bool
+// contains(substr: Str): Bool
 fn stringContains(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const str = vl.asString(getArg(vm, args)).string();
@@ -395,14 +395,14 @@ fn createStringClass(vm: *VM) *vl.ObjClass {
 
 //******** list ********//
 
-// append(item: T): void
+// append(item: T): Unit
 fn listAppend(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   vl.asList(getArg(vm, args)).append(vm, getArg(vm, args + 1));
   return VOID_VAL;
 }
 
-// len(): num
+// len(): Num
 fn listLen(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberIntVal((vl.asList(getArg(vm, args)).len));
@@ -420,7 +420,7 @@ fn listPop(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.justVal(vm, val);
 }
 
-// get(index: num): Maybe{T}
+// get(index: Num): Maybe{T}
 fn listGet(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const list = vl.asList(getArg(vm, args));
@@ -431,7 +431,7 @@ fn listGet(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.justVal(vm, list.items[@intCast(idx)]);
 }
 
-// slice(start: num, end: num): List{T}
+// slice(start: Num, end: Num): List{T}
 fn listSlice(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const list = vl.asList(getArg(vm, args));
@@ -449,7 +449,7 @@ fn listSlice(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.objVal(res);
 }
 
-// clear(): void
+// clear(): Unit
 fn listClear(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   vl.asList(getArg(vm, args)).clear(vm);
@@ -462,14 +462,14 @@ fn listCopy(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.asList(getArg(vm, args)).copy(vm);
 }
 
-// extend(list: List{T}): void
+// extend(list: List{T}): Unit
 fn listExtend(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   vl.asList(getArg(vm, args)).extend(vl.asList(getArg(vm, args+1)), vm);
   return VOID_VAL;
 }
 
-// remove(index: num): bool
+// remove(index: Num): Bool
 fn listRemove(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const list = vl.asList(getArg(vm, args));
@@ -480,7 +480,7 @@ fn listRemove(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return list.remove(@intCast(idx));
 }
 
-// reverse(): void
+// reverse(): Unit
 fn listReverse(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const list = vl.asList(getArg(vm, args));
@@ -513,7 +513,7 @@ fn createListClass(vm: *VM) *vl.ObjClass {
 
 //******** tuple ********//
 
-// len(): num
+// len(): Num
 fn tupleLen(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberIntVal(vl.asTuple(getArg(vm, args)).len);
@@ -536,13 +536,13 @@ fn createTupleClass(vm: *VM) *vl.ObjClass {
 
 //******** map ********//
 
-// len(): num
+// len(): Num
 fn mapLen(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberIntVal(vl.asMap(getArg(vm, args)).meta.len);
 }
 
-// set(key: K, value: V): bool
+// set(key: K, value: V): Bool
 fn mapSet(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var map = vl.asMap(getArg(vm, args));
@@ -559,14 +559,14 @@ fn mapGet(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return NONE_VAL;
 }
 
-// delete(key: K): bool
+// delete(key: K): Bool
 fn mapDelete(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const val = vl.asMap(getArg(vm, args)).meta.delete(getArg(vm, args + 1), vm);
   return vl.boolVal(val);
 }
 
-// remove(key: K): bool
+// remove(key: K): Bool
 fn mapRemove(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const val = vl.asMap(getArg(vm, args)).meta.remove(getArg(vm, args + 1), vm);
@@ -619,7 +619,7 @@ fn mapEntries(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.objVal(list);
 }
 
-// clear(): void
+// clear(): Unit
 fn mapClear(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   vl.asMap(getArg(vm, args)).meta.clear(vm);
@@ -671,121 +671,121 @@ fn createErrorClass(vm: *VM) *vl.ObjClass {
 //*********Externs**********//
 
 //******** [math] *********//
-// ceil(n: num): num
+// ceil(n: Num): Num
 fn mathCeil(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.ceil(vl.asNumber(getArg(vm, args))));
 }
 
-// floor(n: num): num
+// floor(n: Num): Num
 fn mathFloor(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.floor(vl.asNumber(getArg(vm, args))));
 }
 
-// cos(n: num): num
+// cos(n: Num): Num
 fn mathCos(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.cos(vl.asNumber(getArg(vm, args))));
 }
 
-// sin(n: num): num
+// sin(n: Num): Num
 fn mathSin(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.sin(vl.asNumber(getArg(vm, args))));
 }
 
-// tan(n: num): num
+// tan(n: Num): Num
 fn mathTan(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.tan(vl.asNumber(getArg(vm, args))));
 }
 
-// acos(n: num): num
+// acos(n: Num): Num
 fn mathAcos(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.acos(vl.asNumber(getArg(vm, args))));
 }
 
-// asin(n: num): num
+// asin(n: Num): Num
 fn mathAsin(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.asin(vl.asNumber(getArg(vm, args))));
 }
 
-// atan(n: num): num
+// atan(n: Num): Num
 fn mathAtan(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.atan(vl.asNumber(getArg(vm, args))));
 }
 
-// cosh(n: num): num
+// cosh(n: Num): Num
 fn mathCosh(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.cosh(vl.asNumber(getArg(vm, args))));
 }
 
-// sinh(n: num): num
+// sinh(n: Num): Num
 fn mathSinh(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.sinh(vl.asNumber(getArg(vm, args))));
 }
 
-// tanh(n: num): num
+// tanh(n: Num): Num
 fn mathTanh(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.tanh(vl.asNumber(getArg(vm, args))));
 }
 
-// acosh(n: num): num
+// acosh(n: Num): Num
 fn mathAcosh(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.acosh(vl.asNumber(getArg(vm, args))));
 }
 
-// asinh(n: num): num
+// asinh(n: Num): Num
 fn mathAsinh(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.asinh(vl.asNumber(getArg(vm, args))));
 }
 
-// atanh(n: num): num
+// atanh(n: Num): Num
 fn mathAtanh(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.atanh(vl.asNumber(getArg(vm, args))));
 }
 
-// sqrt(n: num): num
+// sqrt(n: Num): Num
 fn mathSqrt(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.sqrt(vl.asNumber(getArg(vm, args))));
 }
 
-// deg_to_radians(n: num): num
+// deg_to_radians(n: Num): Num
 fn mathDegtoradians(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.degreesToRadians(vl.asNumber(getArg(vm, args))));
 }
 
-// rad_to_degrees(n: num): num
+// rad_to_degrees(n: Num): Num
 fn mathRadtodegrees(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.radiansToDegrees(vl.asNumber(getArg(vm, args))));
 }
 
-// pow(x: num, y: num): num
+// pow(x: Num, y: Num): Num
 fn mathPow(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.pow(f64, vl.asNumber(getArg(vm, args)), vl.asNumber(getArg(vm, args + 1))));
 }
 
-// log(x: num, base: num): num
+// log(x: Num, base: Num): Num
 fn mathLog(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberVal(std.math.log(f64, vl.asNumber(getArg(vm, args)), vl.asNumber(getArg(vm, args + 1))));
 }
 
-// min(x: num, y: num): num
+// min(x: Num, y: Num): Num
 fn mathMin(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const x = vl.asNumber(getArg(vm, args));
@@ -793,7 +793,7 @@ fn mathMin(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.numberVal(if (x < y) x else y);
 }
 
-// max(x: num, y: num): num
+// max(x: Num, y: Num): Num
 fn mathMax(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const x = vl.asNumber(getArg(vm, args));
@@ -801,10 +801,10 @@ fn mathMax(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.numberVal(if (x > y) x else y);
 }
 
-fn roundNumber(num: f64, digits: i64) f64 {
-  if (digits == 0) return @round(num);
+fn roundNumber(Num: f64, digits: i64) f64 {
+  if (digits == 0) return @round(Num);
   const multiplier: f64 = @floatFromInt(std.math.pow(i64, 10, digits));
-  var tmp = num * multiplier;
+  var tmp = Num * multiplier;
   if (tmp >= 0) {
     tmp = @floor(tmp + 0.5);
   } else {
@@ -813,7 +813,7 @@ fn roundNumber(num: f64, digits: i64) f64 {
   return tmp / multiplier;
 }
 
-// round(n: num, digits: num)
+// round(n: Num, digits: Num)
 fn mathRound(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const digit = vl.asIntNumber(i64, getArg(vm, args + 1));
@@ -970,7 +970,7 @@ fn readFileHandle(file: std.fs.File, al: std.mem.Allocator) ![]const u8 {
   }
 }
 
-// open_file(path: str, mode: Mode): Result{Fd, OpenError}
+// open_file(path: Str, mode: Mode): Result{Fd, OpenError}
 fn fsFileOpen(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const path = vl.asString(getArg(vm, args)).string();
@@ -988,7 +988,7 @@ fn fsFileOpen(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.okVal(vm, vl.numberIntVal(fd.handle));
 }
 
-// read_file(fd: Fd): Result{num, ReadError}
+// read_file(fd: Fd): Result{Num, ReadError}
 fn fsFileRead(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const fd = vl.asIntNumber(std.fs.File.Handle, getArg(vm, args));
@@ -1003,7 +1003,7 @@ fn fsFileRead(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.okVal(vm, vl.objVal(str));
 }
 
-// write_file(fd: Fd, s: str): Result{num, WriteError}
+// write_file(fd: Fd, s: Str): Result{Num, WriteError}
 fn fsFileWrite(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var file: std.fs.File = .{.handle = vl.asIntNumber(std.fs.File.Handle, getArg(vm, args))};
@@ -1013,14 +1013,14 @@ fn fsFileWrite(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.okVal(vm, vl.numberIntVal(size));
 }
 
-// close_file(fd: Fd): void
+// close_file(fd: Fd): Unit
 fn fsFileClose(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   std.fs.File.close(.{.handle = vl.asIntNumber(std.fs.File.Handle, getArg(vm, args))});
   return VOID_VAL;
 }
 
-// mkdir(path: str): Result{void, OpenError}
+// mkdir(path: str): Result{Unit, OpenError}
 fn fsFileMakeDir(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const path = vl.asString(getArg(vm, args)).string();
@@ -1030,7 +1030,7 @@ fn fsFileMakeDir(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.okVal(vm, VOID_VAL);
 }
 
-// rmdir(path: str): Result{void, DeleteError}
+// rmdir(path: str): Result{Unit, DeleteError}
 fn fsFileRemoveDir(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const path = vl.asString(getArg(vm, args)).string();
@@ -1040,7 +1040,7 @@ fn fsFileRemoveDir(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.okVal(vm, VOID_VAL);
 }
 
-// rmfile(path: str): Result{void, DeleteError}
+// rmfile(path: str): Result{Unit, DeleteError}
 fn fsFileRemoveFile(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const path = vl.asString(getArg(vm, args)).string();
@@ -1050,7 +1050,7 @@ fn fsFileRemoveFile(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.okVal(vm, VOID_VAL);
 }
 
-// rename(curr: str, new: str): Result{void, RenameError}
+// rename(curr: str, new: str): Result{Unit, RenameError}
 fn fsFileRename(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const old = vl.asString(getArg(vm, args)).string();
@@ -1085,7 +1085,7 @@ fn fsFileGetStdIn(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.numberIntVal(stdin.handle);
 }
 
-// list_dir(path: str): Result{List{str}, OpenError}
+// list_dir(path: Str): Result{List{Str}, OpenError}
 fn fsFileListDir(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const path = vl.asString(getArg(vm, args)).string();
@@ -1126,14 +1126,14 @@ fn addFsFileExterns(vm: *VM) void {
 }
 
 //******** [time] *********//
-// sleep(secs: num): void
+// sleep(secs: Num): Unit
 fn timeSleep(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   std.time.sleep(@intFromFloat(vl.asNumber(getArg(vm, args)) * std.time.ns_per_s));
   return VOID_VAL;
 }
 
-// millis(): num
+// millis(): Num
 fn timeMillis(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   _ = vm;
@@ -1141,7 +1141,7 @@ fn timeMillis(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.numberIntVal(std.time.milliTimestamp());
 }
 
-// nanos(): num
+// nanos(): Num
 fn timeNanos(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   _ = vm;
@@ -1149,7 +1149,7 @@ fn timeNanos(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.numberIntVal(std.time.nanoTimestamp());
 }
 
-// now(): num
+// now(): Num
 fn timeNow(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   _ = vm;
@@ -1166,20 +1166,20 @@ fn addTimeExterns(vm: *VM) void {
 
 //******** [fs.path] *********//
 
-// get_sep(): str
+// get_sep(): Str
 fn pathGetSep(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   _ = args;
   return newStringV(vm, &[_]u8{std.fs.path.sep});
 }
 
-// basename(p: str): str
+// basename(p: Str): Str
 fn pathBasename(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return newStringV(vm, std.fs.path.basename(vl.asString(getArg(vm, args)).string()));
 }
 
-// dirname(p: str): str
+// dirname(p: Str): Str
 fn pathDirname(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return newStringV(
@@ -1188,13 +1188,13 @@ fn pathDirname(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   );
 }
 
-// extension(p: str): str
+// extension(p: Str): Str
 fn pathExtension(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return newStringV(vm, std.fs.path.extension(vl.asString(getArg(vm, args)).string()));
 }
 
-// exists(p: str): bool
+// exists(p: Str): Bool
 fn pathExists(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const p = vl.asString(getArg(vm, args)).string();
@@ -1205,7 +1205,7 @@ fn pathExists(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return TRUE_VAL;
 }
 
-// realpath(p: str): str
+// realpath(p: Str): Str
 fn pathRealpath(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const p = std.fs.realpathAlloc(vm.mem.allocator, vl.asString(getArg(vm, args)).string())
@@ -1213,7 +1213,7 @@ fn pathRealpath(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.createStringV(vm, &vm.strings, p, true);
 }
 
-// is_dir(p: str): bool
+// is_dir(p: Str): Bool
 fn pathIsDir(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   var dir = std.fs.cwd().openDir(vl.asString(getArg(vm, args)).string(), .{})
@@ -1222,7 +1222,7 @@ fn pathIsDir(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return TRUE_VAL;
 }
 
-// is_file(p: str): bool
+// is_file(p: Str): Bool
 fn pathIsFile(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   const file = std.fs.cwd().openFile(vl.asString(getArg(vm, args)).string(), .{})
@@ -1244,7 +1244,7 @@ fn addPathExterns(vm: *VM) void {
 
 //******** [os] *********//
 
-// getcwd(): Result{str, str}
+// getcwd(): Result{Str, Str}
 fn osGetcwd(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   _ = args;
@@ -1261,7 +1261,7 @@ fn osGetcwd(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return vl.okVal(vm, val);
 }
 
-// getenv(key: str): Maybe{str}
+// getenv(key: Str): Maybe{Str}
 fn osGetenv(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   if (std.posix.getenv(vl.asString(getArg(vm, args)).string())) |val| {
@@ -1273,7 +1273,7 @@ fn osGetenv(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   return NONE_VAL;
 }
 
-// chdir(path: str): Result{void, str}
+// chdir(path: Str): Result{Unit, Str}
 fn osChdir(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   std.posix.chdir(vl.asString(getArg(vm, args)).string()) catch |e| {
@@ -1292,7 +1292,7 @@ fn addOsExterns(vm: *VM) void {
 }
 
 //******** [string] *********//
-// hash_string(s: str): num
+// hash_string(s: Str): Num
 fn stringHashString(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
   _ = argc;
   return vl.numberIntVal(vl.asString(getArg(vm, args)).hash);
@@ -1300,6 +1300,18 @@ fn stringHashString(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
 
 fn addStringExterns(vm: *VM) void {
   addExternFn(vm, "hash_string", 1, stringHashString);
+}
+
+//******** [sys] *********//
+// get_args(): List{Str}
+fn sysGetArgs(vm: *VM, argc: u32, args: u32) callconv(.C) Value {
+  _ = argc;
+  _ = args;
+  return vm.argv;
+}
+
+fn addSysExterns(vm: *VM) void {
+  addExternFn(vm, "get_args", 0, sysGetArgs);
 }
 
 pub const ExternPos = struct {
@@ -1314,6 +1326,7 @@ pub const ExternMapping = std.StaticStringMap(ExternPos).initComptime(.{
   .{"path.veb", .{.start = 38, .end = 46}},
   .{"os.veb", .{.start = 46, .end = 49}},
   .{"string.veb", .{.start = 49, .end = 50}},
+  .{"sys.veb", .{.start = 50, .end = 51}},
 });
 
 pub fn addBuiltins(vm: *VM) void {
@@ -1343,6 +1356,7 @@ pub fn addExterns(vm: *VM) void {
   addPathExterns(vm);
   addOsExterns(vm);
   addStringExterns(vm);
+  addSysExterns(vm);
 }
 
 pub fn addNames(vm: *VM) void {

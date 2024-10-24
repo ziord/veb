@@ -26,7 +26,7 @@ pub fn doRuntimeTest(src: []const u8) !void {
   const node = try parser.parse(true);
   var tych = cli.check.TypeChecker.init(al, &parser.diag, parser.namegen);
   try tych.typecheck(node, true);
-  var cpu = cli.vm.VM.init(&cna);
+  var cpu = cli.vm.VM.init(&cna, &[_][]const u8{});
   defer cpu.shutdown();
   cpu.initGC();
   var fun = cli.value.createScriptFn(&cpu, 0);
@@ -62,7 +62,7 @@ pub fn doStaticTest(src: []const u8) !void {
   const node = try parser.parse(true);
   var tych = cli.check.TypeChecker.init(al, &parser.diag, parser.namegen);
   try tych.typecheck(node, true);
-  var cpu = cli.vm.VM.init(&cna);
+  var cpu = cli.vm.VM.init(&cna, &[_][]const u8{});
   defer cpu.deinit();
   cpu.initGC();
   var fun = cli.value.createScriptFn(&cpu, 0);

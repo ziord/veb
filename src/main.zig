@@ -36,15 +36,6 @@ inline fn displayVersion() void {
   print(util.getVersion() ++ "\n", .{});
 }
 
-fn displayErrorAndUsage(cmd: ?[]const u8) void {
-  if (cmd) |_cmd| {
-    print("Invalid command: '{s}'\n", .{_cmd});
-  } else {
-    print("Invalid command.\n", .{});
-  }
-  displayUsage();
-}
-
 fn cmdNew(name: []const u8, al: Allocator) void {
   cli.createNewProject(name, al) catch {
     cli.fatalError("Unable to create project '{s}'.", .{name});
@@ -68,24 +59,22 @@ fn cmdCheck(file: ?[]const u8, al: Allocator, cna: *VebAllocator) !void {
   print("All Ok.\n", .{});
 }
 
-fn cmdRun(file: ?[]const u8, al: Allocator, cna: *VebAllocator) !void {
+fn cmdRun(file: ?[]const u8, al: Allocator, argv: [][]const u8, cna: *VebAllocator) !void {
   const lib_path = try cli.findLibPath(al);
   if (file) |filename| {
-    cli.run(filename, lib_path, null, cna) catch {};
+    cli.run(filename, lib_path, null, argv, cna) catch {};
   } else {
     const cwd = cli.getCWD(al);
     const filename = try cli.findMainPath(al, cwd);
-    cli.run(filename, lib_path, cwd, cna) catch {};
+    cli.run(filename, lib_path, cwd, argv, cna) catch {};
   }
 }
 
 fn cmdTest(al: Allocator) void {
-  // _ = lib_path;
   _ = al;
 }
 
 fn cmdRepl(al: Allocator) void {
-  // _ = lib_path;
   _ = al;
 }
 
@@ -128,23 +117,22 @@ pub fn main() !void {
       cmdRepl(al);
       return;
     } else if (std.mem.eql(u8, "run", arg)) {
-      try cmdRun(null, al, &cna);
+      try cmdRun(null, al, args[2..], &cna);
       return;
     } else if (std.mem.eql(u8, "check", arg)) {
       try cmdCheck(null, al, &cna);
       return;
     }
-  } else if (args.len == 3) {
+  } else {
     if (std.mem.eql(u8, "new", arg)) {
       cmdNew(args[2], al);
       return;
     } else if (std.mem.eql(u8, "run", arg)) {
-      try cmdRun(args[2], al, &cna);
+      try cmdRun(args[2], al, args[2..], &cna);
       return;
     } else if (std.mem.eql(u8, "check", arg)) {
       try cmdCheck(args[2], al, &cna);
       return;
     }
   }
-  displayErrorAndUsage(if (args.len > 3) args[3] else if (args.len > 2) args[2] else args[1]);
 }

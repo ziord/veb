@@ -119,7 +119,7 @@ pub fn typecheck(filename: []const u8, lib_path: []const u8, cwd: ?[]const u8, c
   try tych.typecheck(ir, true);
 }
 
-pub fn run(filename: []const u8, lib_path: []const u8, cwd: ?[]const u8, cna: *VebAllocator) !void {
+pub fn run(filename: []const u8, lib_path: []const u8, cwd: ?[]const u8, argv: [][]const u8, cna: *VebAllocator) !void {
   const al = cna.getArenaAllocator();
   try loadCore(lib_path, al);
   var src = try util.readFile(filename, al);
@@ -127,7 +127,7 @@ pub fn run(filename: []const u8, lib_path: []const u8, cwd: ?[]const u8, cna: *V
   const ir = try ps.parse(true);
   var tych = check.TypeChecker.init(al, &ps.diag, ps.namegen);
   try tych.typecheck(ir, true);
-  var cpu = vm.VM.init(cna);
+  var cpu = vm.VM.init(cna, argv);
   defer cpu.shutdown();
   cpu.initGC();
   var fun = value.createScriptFn(&cpu, 0);
